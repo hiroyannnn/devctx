@@ -1,0 +1,80 @@
+package cmd
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/hiroyannnn/devctx/storage"
+	"github.com/spf13/cobra"
+)
+
+type SessionEndInput struct {
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	Cwd            string `json:"cwd"`
+	Reason         string `json:"reason"` // "exit", "timeout", etc.
+}
+
+var touchCmd = &cobra.Command{
+	Use:   "touch [name]",
+	Short: "Update last-seen timestamp for a context",
+	Long: `Update the last-seen timestamp for a context.
+If called from a Claude Code hook, reads session info from stdin.
+If called with a name, updates that specific context.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := storage.New()
+		if err != nil {
+			return err
+		}
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
+		}
+
+		var name string
+
+		// Check if stdin has data (called from hook)
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			// Reading from pipe (hook mode)
+			var input SessionEndInput
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
+					return fmt.Errorf("failed to parse hook input: %w", err)
+				}
+				// Find by session ID
+				ctx := store.FindBySessionID(input.SessionID)
+				if ctx != nil {
+					name = ctx.Name
+				}
+			}
+		}
+
+		// If name provided as argument, use that
+		if len(args) > 0 {
+			name = args[0]
+		}
+
+		if name == "" {
+			return fmt.Errorf("no context specified and no session ID found")
+		}
+
+		ctx := store.FindByName(name)
+		if ctx == nil {
+			return fmt.Errorf("context [%s] not found", name)
+		}
+
+		ctx.LastSeen = time.Now()
+
+		if err := s.SaveStore(store); err != nil {
+			return err
+		}
+
+		fmt.Printf("Updated [%s] last-seen to %s\n", name, ctx.LastSeen.Format(time.RFC3339))
+		return nil
+	},
+}
