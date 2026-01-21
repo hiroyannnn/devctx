@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -130,29 +131,28 @@ func installHooksToSettings() error {
 		hooks = make(map[string]interface{})
 	}
 
-	hooks["SessionStart"] = []map[string]interface{}{
-		{
-			"matcher": "startup",
-			"hooks": []map[string]interface{}{
-				{
-					"type":    "command",
-					"command": devctxPath + " register",
-				},
+	// Merge SessionStart hooks
+	sessionStartHook := map[string]interface{}{
+		"matcher": "startup",
+		"hooks": []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": devctxPath + " register",
 			},
 		},
 	}
+	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"], sessionStartHook, devctxPath+" register")
 
-	hooks["SessionEnd"] = []map[string]interface{}{
-		{
-			"matcher": "",
-			"hooks": []map[string]interface{}{
-				{
-					"type":    "command",
-					"command": devctxPath + " touch",
-				},
+	// Merge SessionEnd hooks
+	sessionEndHook := map[string]interface{}{
+		"hooks": []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": devctxPath + " touch",
 			},
 		},
 	}
+	hooks["SessionEnd"] = mergeHookConfigs(hooks["SessionEnd"], sessionEndHook, devctxPath+" touch")
 
 	settings["hooks"] = hooks
 
@@ -169,4 +169,39 @@ func installHooksToSettings() error {
 	fmt.Printf("✓ Hooks installed to %s\n", settingsPath)
 	fmt.Println("Note: You may need to run /hooks in Claude Code to review and approve the changes.")
 	return nil
+}
+
+// mergeHookConfigs merges a new hook config into existing configs.
+// If a hook with the same command already exists, it won't be duplicated.
+func mergeHookConfigs(existing interface{}, newConfig map[string]interface{}, commandToCheck string) []interface{} {
+	var configs []interface{}
+
+	// Convert existing to slice if present
+	if existing != nil {
+		if existingSlice, ok := existing.([]interface{}); ok {
+			configs = existingSlice
+		}
+	}
+
+	// Check if devctx hook already exists
+	for _, config := range configs {
+		if configMap, ok := config.(map[string]interface{}); ok {
+			if hooksArr, ok := configMap["hooks"].([]interface{}); ok {
+				for _, hook := range hooksArr {
+					if hookMap, ok := hook.(map[string]interface{}); ok {
+						if cmd, ok := hookMap["command"].(string); ok {
+							if strings.Contains(cmd, "devctx") {
+								// Already has devctx hook, return as is
+								return configs
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Append new config
+	configs = append(configs, newConfig)
+	return configs
 }
