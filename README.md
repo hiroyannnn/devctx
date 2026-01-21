@@ -1,75 +1,48 @@
 # devctx
 
-Claude Code セッションと git worktree をカンバン形式で管理するCLIツール
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/github/v/release/hiroyannnn/devctx?include_prereleases)](https://github.com/hiroyannnn/devctx/releases)
+
+Claude Code セッションと git worktree をカンバン形式で管理する CLI ツール
+
+## 機能
+
+- **カンバンビュー** - セッションの状態を一覧で把握
+- **自動セッション追跡** - Claude Code hooks による自動登録
+- **ステータス管理** - in-progress / review / blocked / done
+- **チェックリスト** - ステータス移行時の確認項目
+- **シェル統合** - ワンコマンドでコンテキスト切り替え
 
 ## インストール
 
 ```bash
-# ビルド
+go install github.com/hiroyannnn/devctx@latest
+```
+
+または、ソースからビルド:
+
+```bash
+git clone https://github.com/hiroyannnn/devctx.git
 cd devctx
-go mod tidy
 go build -o devctx .
-
-# PATHに追加（例）
-sudo mv devctx /usr/local/bin/
-# または
-mv devctx ~/.local/bin/
+mv devctx ~/.local/bin/  # または /usr/local/bin/
 ```
 
-## セットアップ
-
-### 1. Claude Code hooks の設定
+## クイックスタート
 
 ```bash
-# 設定内容を確認
-devctx hooks
-
-# 自動インストール
+# Claude Code hooks を設定
 devctx hooks --install
-```
 
-インストール後、Claude Code で `/hooks` を実行して変更を承認する必要があります。
-
-### 2. シェル統合（オプション）
-
-`.bashrc` または `.zshrc` に追加：
-
-```bash
+# シェル統合を有効化（.bashrc / .zshrc に追加）
 eval "$(devctx shell-init)"
-```
 
-これにより以下のショートカットが使えるようになります：
-- `dx` - コンテキスト一覧表示
-- `dx <name>` - コンテキストを再開（cd + claude --resume）
-- `dxl` - 一覧表示
-- `dxm <name> <status>` - ステータス変更
-
-## 使い方
-
-### 基本コマンド
-
-```bash
-# カンバン形式で一覧表示
+# カンバン表示
 devctx list
-
-# 手動でコンテキストを登録（通常はhookで自動登録）
-devctx register my-feature
-
-# コンテキストを再開
-devctx resume my-feature
-# 出力されたコマンドを実行するか、シェル統合を使用
-
-# ステータスを変更（チェックリスト付き）
-devctx move my-feature review
-
-# 完了としてアーカイブ
-devctx archive my-feature
-
-# コンテキストを削除
-devctx remove my-feature
 ```
 
-### カンバン表示例
+## カンバン表示例
 
 ```
 🚀 In Progress
@@ -90,6 +63,33 @@ devctx remove my-feature
 │   ☐ /create-pr                               │
 ╰──────────────────────────────────────────────╯
 ```
+
+## コマンド
+
+| コマンド | 説明 |
+|---------|------|
+| `devctx list` | カンバン形式で一覧表示 |
+| `devctx register <name>` | コンテキストを登録（通常は hook で自動） |
+| `devctx resume <name>` | コンテキストを再開 |
+| `devctx move <name> <status>` | ステータスを変更 |
+| `devctx archive <name>` | 完了としてアーカイブ |
+| `devctx touch <name>` | 最終アクセス時刻を更新 |
+| `devctx hooks [--install]` | Claude Code hooks を設定 |
+| `devctx shell-init` | シェル統合スクリプトを出力 |
+
+## シェル統合
+
+`.bashrc` または `.zshrc` に追加:
+
+```bash
+eval "$(devctx shell-init)"
+```
+
+ショートカット:
+- `dx` - コンテキスト一覧表示
+- `dx <name>` - コンテキストを再開（cd + claude --resume）
+- `dxl` - 一覧表示
+- `dxm <name> <status>` - ステータス変更
 
 ## 設定
 
@@ -114,7 +114,7 @@ statuses:
 
 ### チェックリストのカスタマイズ
 
-ステータス移行時に確認したいスラッシュコマンドを `checklist` に追加：
+ステータス移行時に確認したい項目を `checklist` に追加:
 
 ```yaml
 statuses:
@@ -147,7 +147,7 @@ contexts:
 
 ## Claude Code カスタムコマンド（オプション）
 
-Claude 側からステータス変更するためのカスタムコマンドを作成できます：
+Claude 側からステータス変更するためのカスタムコマンドを作成できます:
 
 `.claude/commands/devctx-done.md`:
 ```markdown
@@ -165,7 +165,7 @@ devctx move $(basename $(pwd)) done
 
 1. `devctx hooks` で設定内容を確認
 2. Claude Code で `/hooks` を実行して承認
-3. `devctx` コマンドがPATHにあることを確認
+3. `devctx` コマンドが PATH にあることを確認
 
 ### セッションが自動登録されない
 
@@ -177,3 +177,7 @@ devctx move $(basename $(pwd)) done
 シェルの制約上、サブプロセスから親シェルのディレクトリは変更できません。
 シェル統合 (`eval "$(devctx shell-init)"`) を使用するか、
 表示されたコマンドを手動で実行してください。
+
+## License
+
+MIT
