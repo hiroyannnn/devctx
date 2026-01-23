@@ -109,6 +109,8 @@ devctx list
 
 | Command | Description |
 |---------|-------------|
+| `devctx discover` | Find existing Claude Code sessions |
+| `devctx discover --import` | Import discovered sessions |
 | `devctx status` | Show live status of all contexts |
 | `devctx status --watch` | Continuously monitor status |
 | `devctx search <query>` | Search through session history |
@@ -132,6 +134,7 @@ Shortcuts:
 - `dxt` - Open TUI dashboard
 - `dxp` - Show live status
 - `dxf <query>` - Search session history
+- `dxd` - Discover existing sessions
 
 ## Configuration
 

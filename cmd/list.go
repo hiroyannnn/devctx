@@ -89,8 +89,59 @@ var listCmd = &cobra.Command{
 		}
 
 		if len(store.Contexts) == 0 {
-			fmt.Println(dimStyle.Render("No contexts registered. Use 'devctx register' to add one."))
-			return nil
+			// Auto-discover existing sessions
+			sessions, err := discoverSessions(store)
+			if err != nil || len(sessions) == 0 {
+				fmt.Println(dimStyle.Render("No Claude Code sessions found."))
+				fmt.Println(dimStyle.Render("Start a Claude Code session and it will appear here."))
+				return nil
+			}
+
+			// Auto-import recent sessions (last 30 days)
+			fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
+			fmt.Println()
+
+			imported := 0
+			cutoff := time.Now().AddDate(0, 0, -30)
+			for _, sess := range sessions {
+				if sess.LastModified.Before(cutoff) {
+					continue
+				}
+				if sess.IsRegistered {
+					continue
+				}
+
+				name := generateNameFromPath(sess.ProjectPath, sess.SessionID)
+				if store.FindByName(name) != nil {
+					name = name + "-" + sess.SessionID[:6]
+				}
+
+				branch := ""
+				if sess.ProjectPath != "" {
+					branch = getGitBranch(sess.ProjectPath)
+				}
+
+				ctx := model.Context{
+					Name:           name,
+					Worktree:       sess.ProjectPath,
+					Branch:         branch,
+					SessionID:      sess.SessionID,
+					TranscriptPath: sess.TranscriptPath,
+					Status:         model.StatusInProgress,
+					CreatedAt:      sess.LastModified,
+					LastSeen:       sess.LastModified,
+					Checklist:      make(map[string]bool),
+				}
+
+				store.Add(ctx)
+				imported++
+			}
+
+			if imported > 0 {
+				if err := s.SaveStore(store); err != nil {
+					return err
+				}
+			}
 		}
 
 		printKanban(store)

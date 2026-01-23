@@ -109,6 +109,8 @@ devctx list
 
 | コマンド | 説明 |
 |---------|------|
+| `devctx discover` | 既存の Claude Code セッションを発見 |
+| `devctx discover --import` | 発見したセッションをインポート |
 | `devctx status` | 全コンテキストのライブ状態を表示 |
 | `devctx status --watch` | 監視モード（継続的に更新） |
 | `devctx search <query>` | セッション履歴を検索 |
@@ -132,6 +134,7 @@ eval "$(devctx shell-init)"
 - `dxt` - TUI ダッシュボード
 - `dxp` - ライブステータス表示
 - `dxf <query>` - 履歴検索
+- `dxd` - 既存セッションを発見
 
 ## 設定
 
