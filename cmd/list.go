@@ -3,10 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hiroyannnn/devctx/model"
@@ -204,10 +207,10 @@ func statusIcon(status model.Status) string {
 }
 
 func printKanban(store *model.Store, offset int) {
-	printKanbanWithSize(store, offset, 0, 0)
+	printKanbanWithSize(store, offset, "", 0, 0)
 }
 
-func printKanbanWithSize(store *model.Store, offset int, width int, height int) string {
+func printKanbanWithSize(store *model.Store, offset int, selectedName string, width int, height int) string {
 	lanes := []struct {
 		status      model.Status
 		title       string
@@ -297,7 +300,14 @@ func printKanbanWithSize(store *model.Store, offset int, width int, height int) 
 					break
 				}
 				card := formatCard(contexts[i])
-				col.WriteString(lane.cardStyle.Render(card))
+				// Highlight selected card
+				cardStyle := lane.cardStyle
+				if contexts[i].Name == selectedName {
+					cardStyle = cardStyle.Copy().
+						BorderForeground(lipgloss.Color("14")).
+						BorderStyle(lipgloss.ThickBorder())
+				}
+				col.WriteString(cardStyle.Render(card))
 				col.WriteString("\n")
 				displayed++
 			}
@@ -391,25 +401,29 @@ func formatRelativeTime(t time.Time) string {
 
 // Bubble Tea model for interactive kanban view
 type kanbanModel struct {
-	storage *storage.Storage
-	store   *model.Store
-	offset  int
-	width   int
-	height  int
-	maxItem int
+	storage  *storage.Storage
+	store    *model.Store
+	cursor   int    // Selected item index
+	offset   int    // Scroll offset for display
+	width    int
+	height   int
+	maxItem  int
+	message  string // Status message
+	contexts []model.Context
 }
 
 type tickMsg time.Time
 
 func newKanbanModel(s *storage.Storage) kanbanModel {
 	store, _ := s.LoadStore()
-	// Count total items in In Progress (main lane)
-	maxItem := len(store.ByStatus(model.StatusInProgress))
+	contexts := store.Active()
 	return kanbanModel{
-		storage: s,
-		store:   store,
-		offset:  0,
-		maxItem: maxItem,
+		storage:  s,
+		store:    store,
+		cursor:   0,
+		offset:   0,
+		maxItem:  len(contexts),
+		contexts: contexts,
 	}
 }
 
@@ -421,6 +435,27 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+func (m kanbanModel) selectedContext() *model.Context {
+	if m.cursor >= 0 && m.cursor < len(m.contexts) {
+		return &m.contexts[m.cursor]
+	}
+	return nil
+}
+
+func (m kanbanModel) getResumeCommand() string {
+	ctx := m.selectedContext()
+	if ctx == nil {
+		return ""
+	}
+	cmd := fmt.Sprintf("cd '%s'", ctx.Worktree)
+	if ctx.SessionID != "" {
+		cmd += fmt.Sprintf(" && claude --resume '%s'", ctx.SessionID)
+	} else {
+		cmd += " && claude"
+	}
+	return cmd
 }
 
 func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -435,31 +470,81 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		store, err := m.storage.LoadStore()
 		if err == nil {
 			m.store = store
-			m.maxItem = len(store.ByStatus(model.StatusInProgress))
+			m.contexts = store.Active()
+			m.maxItem = len(m.contexts)
+			if m.cursor >= m.maxItem {
+				m.cursor = m.maxItem - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
 		}
+		m.message = ""
 		return m, tickCmd()
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
+
 		case "j", "down":
-			if m.offset < m.maxItem-1 {
-				m.offset++
+			if m.cursor < m.maxItem-1 {
+				m.cursor++
+				// Adjust offset to keep cursor visible
+				maxVisible := m.calcMaxVisible()
+				if m.cursor >= m.offset+maxVisible {
+					m.offset = m.cursor - maxVisible + 1
+				}
 			}
 			return m, nil
+
 		case "k", "up":
-			if m.offset > 0 {
-				m.offset--
+			if m.cursor > 0 {
+				m.cursor--
+				// Adjust offset to keep cursor visible
+				if m.cursor < m.offset {
+					m.offset = m.cursor
+				}
 			}
 			return m, nil
+
 		case "g", "home":
+			m.cursor = 0
 			m.offset = 0
 			return m, nil
+
 		case "G", "end":
-			m.offset = m.maxItem - 1
-			if m.offset < 0 {
-				m.offset = 0
+			m.cursor = m.maxItem - 1
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			maxVisible := m.calcMaxVisible()
+			if m.cursor >= maxVisible {
+				m.offset = m.cursor - maxVisible + 1
+			}
+			return m, nil
+
+		case "enter", "c":
+			// Copy resume command to clipboard
+			cmd := m.getResumeCommand()
+			if cmd != "" {
+				if err := clipboard.WriteAll(cmd); err == nil {
+					m.message = "📋 Copied to clipboard!"
+				} else {
+					m.message = "❌ Failed to copy"
+				}
+			}
+			return m, nil
+
+		case "o":
+			// Open in new terminal
+			ctx := m.selectedContext()
+			if ctx != nil {
+				if err := openInNewTerminal(ctx.Worktree, ctx.SessionID); err == nil {
+					m.message = "🚀 Opened in new terminal!"
+				} else {
+					m.message = "❌ Failed to open: " + err.Error()
+				}
 			}
 			return m, nil
 		}
@@ -468,12 +553,94 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m kanbanModel) calcMaxVisible() int {
+	if m.height > 0 {
+		return (m.height - 6) / 6
+	}
+	return 5
+}
+
 func (m kanbanModel) View() string {
+	// Header with help
+	help := "↑↓:move  enter/c:copy  o:open  q:quit"
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
-		Render(fmt.Sprintf("devctx - %s | ↑↓/jk:scroll q:quit", time.Now().Format("15:04:05")))
+		Render(fmt.Sprintf("devctx - %s | %s", time.Now().Format("15:04:05"), help))
 
-	kanban := printKanbanWithSize(m.store, m.offset, m.width, m.height-2)
+	// Selected context info
+	var selectedInfo string
+	if ctx := m.selectedContext(); ctx != nil {
+		selectedStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("14")).
+			Bold(true)
+		selectedInfo = "\n" + selectedStyle.Render(fmt.Sprintf("▶ %s", ctx.Name))
+		if ctx.Branch != "" {
+			selectedInfo += dimStyle.Render(fmt.Sprintf(" (%s)", ctx.Branch))
+		}
+	}
 
-	return header + kanban
+	// Status message
+	var msgLine string
+	if m.message != "" {
+		msgStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10"))
+		msgLine = "\n" + msgStyle.Render(m.message)
+	}
+
+	selectedName := ""
+	if ctx := m.selectedContext(); ctx != nil {
+		selectedName = ctx.Name
+	}
+	kanban := printKanbanWithSize(m.store, m.offset, selectedName, m.width, m.height-4)
+
+	return header + selectedInfo + msgLine + kanban
+}
+
+func openInNewTerminal(worktree, sessionID string) error {
+	var cmd string
+	if sessionID != "" {
+		cmd = fmt.Sprintf("cd '%s' && claude --resume '%s'", worktree, sessionID)
+	} else {
+		cmd = fmt.Sprintf("cd '%s' && claude", worktree)
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS - try iTerm2 first, then Terminal.app
+		script := fmt.Sprintf(`
+			tell application "System Events"
+				if exists (processes where name is "iTerm2") then
+					tell application "iTerm"
+						create window with default profile command "/bin/zsh -c '%s'"
+					end tell
+				else
+					tell application "Terminal"
+						do script "%s"
+						activate
+					end tell
+				end if
+			end tell
+		`, strings.ReplaceAll(cmd, "'", "'\"'\"'"), strings.ReplaceAll(cmd, "\"", "\\\""))
+		return exec.Command("osascript", "-e", script).Start()
+
+	case "linux":
+		// Try common terminal emulators
+		terminals := []struct {
+			name string
+			args []string
+		}{
+			{"gnome-terminal", []string{"--", "bash", "-c", cmd + "; exec bash"}},
+			{"konsole", []string{"-e", "bash", "-c", cmd + "; exec bash"}},
+			{"xterm", []string{"-e", "bash", "-c", cmd + "; exec bash"}},
+		}
+		for _, t := range terminals {
+			if _, err := exec.LookPath(t.name); err == nil {
+				return exec.Command(t.name, t.args...).Start()
+			}
+		}
+		return fmt.Errorf("no terminal emulator found")
+
+	default:
+		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
 }
