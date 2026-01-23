@@ -21,6 +21,10 @@ type Context struct {
 	CreatedAt      time.Time         `yaml:"created_at"`
 	LastSeen       time.Time         `yaml:"last_seen"`
 	Checklist      map[string]bool   `yaml:"checklist,omitempty"`
+	Note           string            `yaml:"note,omitempty"`
+	TotalTime      time.Duration     `yaml:"total_time,omitempty"`
+	IssueURL       string            `yaml:"issue_url,omitempty"`
+	PRURL          string            `yaml:"pr_url,omitempty"`
 }
 
 type Config struct {

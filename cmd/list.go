@@ -54,6 +54,8 @@ var (
 			Foreground(lipgloss.Color("14"))
 )
 
+var listFzf bool
+
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Display contexts in kanban view",
@@ -76,6 +78,16 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
+		// fzf mode for interactive selection
+		if listFzf {
+			for _, ctx := range store.Active() {
+				status := statusIcon(ctx.Status)
+				lastSeen := formatRelativeTime(ctx.LastSeen)
+				fmt.Printf("%s\t%s\t%s\t%s\n", ctx.Name, status, ctx.Branch, lastSeen)
+			}
+			return nil
+		}
+
 		if len(store.Contexts) == 0 {
 			fmt.Println(dimStyle.Render("No contexts registered. Use 'devctx register' to add one."))
 			return nil
@@ -84,6 +96,21 @@ var listCmd = &cobra.Command{
 		printKanban(store)
 		return nil
 	},
+}
+
+func statusIcon(status model.Status) string {
+	switch status {
+	case model.StatusInProgress:
+		return "🚀"
+	case model.StatusReview:
+		return "👀"
+	case model.StatusBlocked:
+		return "🚧"
+	case model.StatusDone:
+		return "✅"
+	default:
+		return "📋"
+	}
 }
 
 func printKanban(store *model.Store) {
@@ -141,7 +168,31 @@ func formatCard(ctx model.Context) string {
 		sessionShort = sessionShort[:8] + "..."
 	}
 	lastSeen := formatRelativeTime(ctx.LastSeen)
-	b.WriteString(dimStyle.Render(fmt.Sprintf("  🤖 %s  ⏱ %s", sessionShort, lastSeen)))
+	timeInfo := fmt.Sprintf("  🤖 %s  ⏱ %s", sessionShort, lastSeen)
+	if ctx.TotalTime > 0 {
+		timeInfo += fmt.Sprintf("  ⌛ %s", formatDuration(ctx.TotalTime))
+	}
+	b.WriteString(dimStyle.Render(timeInfo))
+
+	// Note if any
+	if ctx.Note != "" {
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  📝 %s", ctx.Note)))
+	}
+
+	// Issue/PR links if any
+	if ctx.IssueURL != "" || ctx.PRURL != "" {
+		b.WriteString("\n")
+		if ctx.IssueURL != "" {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  🔗 %s", ctx.IssueURL)))
+		}
+		if ctx.PRURL != "" {
+			if ctx.IssueURL != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  🔀 %s", ctx.PRURL)))
+		}
+	}
 
 	// Checklist if any
 	if len(ctx.Checklist) > 0 {

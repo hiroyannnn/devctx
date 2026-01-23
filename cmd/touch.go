@@ -68,13 +68,36 @@ If called with a name, updates that specific context.`,
 			return fmt.Errorf("context [%s] not found", name)
 		}
 
-		ctx.LastSeen = time.Now()
+		now := time.Now()
+
+		// Calculate session time and add to total
+		// Only count if last seen was within the last hour (active session)
+		if !ctx.LastSeen.IsZero() {
+			elapsed := now.Sub(ctx.LastSeen)
+			if elapsed > 0 && elapsed < time.Hour {
+				ctx.TotalTime += elapsed
+			}
+		}
+
+		ctx.LastSeen = now
 
 		if err := s.SaveStore(store); err != nil {
 			return err
 		}
 
-		fmt.Printf("Updated [%s] last-seen to %s\n", name, ctx.LastSeen.Format(time.RFC3339))
+		fmt.Printf("Updated [%s] last-seen to %s (total: %s)\n", name, ctx.LastSeen.Format(time.RFC3339), formatDuration(ctx.TotalTime))
 		return nil
 	},
+}
+
+func formatDuration(d time.Duration) string {
+	if d == 0 {
+		return "0m"
+	}
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+	if hours > 0 {
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
