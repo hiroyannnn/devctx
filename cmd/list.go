@@ -99,13 +99,20 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
+		// Load config for retention days
+		config, _ := s.LoadConfig()
+		retentionDays := 1
+		if config != nil && config.DoneRetentionDays > 0 {
+			retentionDays = config.DoneRetentionDays
+		}
+
 		// Names-only mode for shell completion
 		if listNamesOnly {
 			store, err := s.LoadStore()
 			if err != nil {
 				return err
 			}
-			for _, ctx := range store.Active() {
+			for _, ctx := range store.ActiveWithRetention(retentionDays) {
 				fmt.Println(ctx.Name)
 			}
 			return nil
@@ -117,7 +124,7 @@ var listCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			for _, ctx := range store.Active() {
+			for _, ctx := range store.ActiveWithRetention(retentionDays) {
 				status := statusIcon(ctx.Status)
 				lastSeen := formatRelativeTime(ctx.LastSeen)
 				fmt.Printf("%s\t%s\t%s\t%s\n", ctx.Name, status, ctx.Branch, lastSeen)
@@ -401,29 +408,40 @@ func formatRelativeTime(t time.Time) string {
 
 // Bubble Tea model for interactive kanban view
 type kanbanModel struct {
-	storage  *storage.Storage
-	store    *model.Store
-	cursor   int    // Selected item index
-	offset   int    // Scroll offset for display
-	width    int
-	height   int
-	maxItem  int
-	message  string // Status message
-	contexts []model.Context
+	storage           *storage.Storage
+	store             *model.Store
+	config            *model.Config
+	cursor            int    // Selected item index
+	offset            int    // Scroll offset for display
+	width             int
+	height            int
+	maxItem           int
+	message           string // Status message
+	contexts          []model.Context
+	doneRetentionDays int
 }
 
 type tickMsg time.Time
 
 func newKanbanModel(s *storage.Storage) kanbanModel {
 	store, _ := s.LoadStore()
-	contexts := store.Active()
+	config, _ := s.LoadConfig()
+
+	retentionDays := 1 // default
+	if config != nil && config.DoneRetentionDays > 0 {
+		retentionDays = config.DoneRetentionDays
+	}
+
+	contexts := store.ActiveWithRetention(retentionDays)
 	return kanbanModel{
-		storage:  s,
-		store:    store,
-		cursor:   0,
-		offset:   0,
-		maxItem:  len(contexts),
-		contexts: contexts,
+		storage:           s,
+		store:             store,
+		config:            config,
+		cursor:            0,
+		offset:            0,
+		maxItem:           len(contexts),
+		contexts:          contexts,
+		doneRetentionDays: retentionDays,
 	}
 }
 
@@ -470,7 +488,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		store, err := m.storage.LoadStore()
 		if err == nil {
 			m.store = store
-			m.contexts = store.Active()
+			m.contexts = store.ActiveWithRetention(m.doneRetentionDays)
 			m.maxItem = len(m.contexts)
 			if m.cursor >= m.maxItem {
 				m.cursor = m.maxItem - 1
@@ -566,7 +584,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ctx != nil {
 				m.store.Remove(ctx.Name)
 				if err := m.storage.SaveStore(m.store); err == nil {
-					m.contexts = m.store.Active()
+					m.contexts = m.store.ActiveWithRetention(m.doneRetentionDays)
 					m.maxItem = len(m.contexts)
 					if m.cursor >= m.maxItem {
 						m.cursor = m.maxItem - 1
@@ -594,8 +612,9 @@ func (m *kanbanModel) moveSelectedTo(status model.Status, msg string) (tea.Model
 	storeCtx := m.store.FindByName(ctx.Name)
 	if storeCtx != nil {
 		storeCtx.Status = status
+		storeCtx.LastSeen = time.Now() // Update LastSeen when status changes
 		if err := m.storage.SaveStore(m.store); err == nil {
-			m.contexts = m.store.Active()
+			m.contexts = m.store.ActiveWithRetention(m.doneRetentionDays)
 			m.maxItem = len(m.contexts)
 			if m.cursor >= m.maxItem {
 				m.cursor = m.maxItem - 1

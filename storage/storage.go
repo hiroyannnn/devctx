@@ -84,6 +84,7 @@ func (s *Storage) SaveConfig(config *model.Config) error {
 
 func defaultConfig() *model.Config {
 	return &model.Config{
+		DoneRetentionDays: 1, // Show done items for 1 day by default
 		Statuses: []model.StatusConfig{
 			{
 				Name: model.StatusInProgress,

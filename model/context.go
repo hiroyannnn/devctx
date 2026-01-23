@@ -28,7 +28,8 @@ type Context struct {
 }
 
 type Config struct {
-	Statuses []StatusConfig `yaml:"statuses"`
+	Statuses          []StatusConfig `yaml:"statuses"`
+	DoneRetentionDays int            `yaml:"done_retention_days,omitempty"`
 }
 
 type StatusConfig struct {
@@ -70,9 +71,18 @@ func (s *Store) FindByWorktree(worktree string) *Context {
 }
 
 func (s *Store) Active() []Context {
+	return s.ActiveWithRetention(0)
+}
+
+func (s *Store) ActiveWithRetention(doneRetentionDays int) []Context {
 	var active []Context
+	cutoff := time.Now().AddDate(0, 0, -doneRetentionDays)
+
 	for _, c := range s.Contexts {
 		if c.Status != StatusDone {
+			active = append(active, c)
+		} else if doneRetentionDays > 0 && c.LastSeen.After(cutoff) {
+			// Include recently completed items
 			active = append(active, c)
 		}
 	}
