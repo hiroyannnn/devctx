@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 const columnWidth = 32
@@ -235,6 +237,19 @@ func printKanban(store *model.Store) {
 		{model.StatusDone, "✅ Done", doneHeader, doneStyle},
 	}
 
+	// Get terminal height and calculate max cards
+	maxCards := 5 // default
+	if _, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && h > 0 {
+		// Each card is ~6 lines, header is 3 lines, leave 3 for margins
+		availableLines := h - 6
+		if availableLines > 0 {
+			maxCards = availableLines / 6
+			if maxCards < 1 {
+				maxCards = 1
+			}
+		}
+	}
+
 	// Build each lane column
 	var columns []string
 	for _, lane := range lanes {
@@ -262,10 +277,21 @@ func printKanban(store *model.Store) {
 			col.WriteString(emptyStyle.Render("(empty)"))
 			col.WriteString("\n")
 		} else {
+			displayed := 0
 			for _, ctx := range contexts {
+				if displayed >= maxCards {
+					remaining := len(contexts) - displayed
+					moreStyle := lipgloss.NewStyle().
+						Foreground(lipgloss.Color("8")).
+						Italic(true)
+					col.WriteString(moreStyle.Render(fmt.Sprintf("  +%d more...", remaining)))
+					col.WriteString("\n")
+					break
+				}
 				card := formatCard(ctx)
 				col.WriteString(lane.cardStyle.Render(card))
 				col.WriteString("\n")
+				displayed++
 			}
 		}
 
