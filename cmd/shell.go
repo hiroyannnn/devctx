@@ -88,6 +88,10 @@ dxf() {
     devctx search "$@"
 }
 
+dxd() {
+    devctx discover "$@"
+}
+
 # Completion for dx command
 _dx_completions() {
     local contexts
