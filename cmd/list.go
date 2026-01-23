@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -121,42 +122,22 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
-		// Watch mode or single display
-		for {
-			store, err := s.LoadStore()
-			if err != nil {
-				return err
-			}
+		// Auto-discover and import on first run
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
+		}
 
-			if len(store.Contexts) == 0 {
-				// Auto-discover existing sessions
-				sessions, err := discoverSessions(store)
-				if err != nil || len(sessions) == 0 {
-					if listWatch {
-						fmt.Print("\033[H\033[2J") // Clear screen
-						fmt.Println(dimStyle.Render("No Claude Code sessions found."))
-						fmt.Println(dimStyle.Render("Waiting for sessions... (Ctrl+C to exit)"))
-						time.Sleep(2 * time.Second)
-						continue
-					}
-					fmt.Println(dimStyle.Render("No Claude Code sessions found."))
-					fmt.Println(dimStyle.Render("Start a Claude Code session and it will appear here."))
-					return nil
-				}
-
-				// Auto-import recent sessions (last 30 days)
-				if !listWatch {
-					fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
-					fmt.Println()
-				}
+		if len(store.Contexts) == 0 {
+			sessions, err := discoverSessions(store)
+			if err == nil && len(sessions) > 0 {
+				fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
+				fmt.Println()
 
 				imported := 0
 				cutoff := time.Now().AddDate(0, 0, -30)
 				for _, sess := range sessions {
-					if sess.LastModified.Before(cutoff) {
-						continue
-					}
-					if sess.IsRegistered {
+					if sess.LastModified.Before(cutoff) || sess.IsRegistered {
 						continue
 					}
 
@@ -192,20 +173,18 @@ var listCmd = &cobra.Command{
 					}
 				}
 			}
-
-			if listWatch {
-				fmt.Print("\033[H\033[2J") // Clear screen
-				fmt.Printf("devctx - %s (Ctrl+C to exit)\n", time.Now().Format("15:04:05"))
-			}
-
-			printKanban(store)
-
-			if !listWatch {
-				return nil
-			}
-
-			time.Sleep(2 * time.Second)
 		}
+
+		// Watch mode with interactive scrolling
+		if listWatch {
+			p := tea.NewProgram(newKanbanModel(s), tea.WithAltScreen())
+			_, err := p.Run()
+			return err
+		}
+
+		// Single display
+		printKanban(store, 0)
+		return nil
 	},
 }
 
@@ -224,7 +203,11 @@ func statusIcon(status model.Status) string {
 	}
 }
 
-func printKanban(store *model.Store) {
+func printKanban(store *model.Store, offset int) {
+	printKanbanWithSize(store, offset, 0, 0)
+}
+
+func printKanbanWithSize(store *model.Store, offset int, width int, height int) string {
 	lanes := []struct {
 		status      model.Status
 		title       string
@@ -239,7 +222,13 @@ func printKanban(store *model.Store) {
 
 	// Get terminal height and calculate max cards
 	maxCards := 5 // default
-	if _, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil && h > 0 {
+	h := height
+	if h == 0 {
+		if _, termH, err := term.GetSize(int(os.Stdout.Fd())); err == nil && termH > 0 {
+			h = termH
+		}
+	}
+	if h > 0 {
 		// Each card is ~6 lines, header is 3 lines, leave 3 for margins
 		availableLines := h - 6
 		if availableLines > 0 {
@@ -262,13 +251,14 @@ func printKanban(store *model.Store) {
 
 		var col strings.Builder
 
-		// Header
-		col.WriteString(lane.headerStyle.Render(lane.title))
+		// Header with count
+		title := fmt.Sprintf("%s (%d)", lane.title, len(contexts))
+		col.WriteString(lane.headerStyle.Render(title))
 		col.WriteString("\n")
 		col.WriteString(strings.Repeat("─", columnWidth))
 		col.WriteString("\n")
 
-		// Cards
+		// Cards with offset
 		if len(contexts) == 0 {
 			emptyStyle := lipgloss.NewStyle().
 				Width(columnWidth - 2).
@@ -277,18 +267,36 @@ func printKanban(store *model.Store) {
 			col.WriteString(emptyStyle.Render("(empty)"))
 			col.WriteString("\n")
 		} else {
+			// Apply offset
+			startIdx := offset
+			if startIdx >= len(contexts) {
+				startIdx = len(contexts) - 1
+			}
+			if startIdx < 0 {
+				startIdx = 0
+			}
+
+			// Show "N above" indicator
+			if startIdx > 0 {
+				moreStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("8")).
+					Italic(true)
+				col.WriteString(moreStyle.Render(fmt.Sprintf("  ↑ %d above...", startIdx)))
+				col.WriteString("\n")
+			}
+
 			displayed := 0
-			for _, ctx := range contexts {
+			for i := startIdx; i < len(contexts); i++ {
 				if displayed >= maxCards {
-					remaining := len(contexts) - displayed
+					remaining := len(contexts) - i
 					moreStyle := lipgloss.NewStyle().
 						Foreground(lipgloss.Color("8")).
 						Italic(true)
-					col.WriteString(moreStyle.Render(fmt.Sprintf("  +%d more...", remaining)))
+					col.WriteString(moreStyle.Render(fmt.Sprintf("  ↓ %d more...", remaining)))
 					col.WriteString("\n")
 					break
 				}
-				card := formatCard(ctx)
+				card := formatCard(contexts[i])
 				col.WriteString(lane.cardStyle.Render(card))
 				col.WriteString("\n")
 				displayed++
@@ -299,8 +307,11 @@ func printKanban(store *model.Store) {
 	}
 
 	// Join columns horizontally
-	fmt.Println()
-	fmt.Println(lipgloss.JoinHorizontal(lipgloss.Top, columns...))
+	result := "\n" + lipgloss.JoinHorizontal(lipgloss.Top, columns...)
+	if width == 0 && height == 0 {
+		fmt.Println(result)
+	}
+	return result
 }
 
 func formatCard(ctx model.Context) string {
@@ -376,4 +387,93 @@ func formatRelativeTime(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+// Bubble Tea model for interactive kanban view
+type kanbanModel struct {
+	storage *storage.Storage
+	store   *model.Store
+	offset  int
+	width   int
+	height  int
+	maxItem int
+}
+
+type tickMsg time.Time
+
+func newKanbanModel(s *storage.Storage) kanbanModel {
+	store, _ := s.LoadStore()
+	// Count total items in In Progress (main lane)
+	maxItem := len(store.ByStatus(model.StatusInProgress))
+	return kanbanModel{
+		storage: s,
+		store:   store,
+		offset:  0,
+		maxItem: maxItem,
+	}
+}
+
+func (m kanbanModel) Init() tea.Cmd {
+	return tea.Batch(tickCmd(), tea.EnterAltScreen)
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case tickMsg:
+		// Reload store
+		store, err := m.storage.LoadStore()
+		if err == nil {
+			m.store = store
+			m.maxItem = len(store.ByStatus(model.StatusInProgress))
+		}
+		return m, tickCmd()
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			return m, tea.Quit
+		case "j", "down":
+			if m.offset < m.maxItem-1 {
+				m.offset++
+			}
+			return m, nil
+		case "k", "up":
+			if m.offset > 0 {
+				m.offset--
+			}
+			return m, nil
+		case "g", "home":
+			m.offset = 0
+			return m, nil
+		case "G", "end":
+			m.offset = m.maxItem - 1
+			if m.offset < 0 {
+				m.offset = 0
+			}
+			return m, nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m kanbanModel) View() string {
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		Render(fmt.Sprintf("devctx - %s | ↑↓/jk:scroll q:quit", time.Now().Format("15:04:05")))
+
+	kanban := printKanbanWithSize(m.store, m.offset, m.width, m.height-2)
+
+	return header + kanban
 }
