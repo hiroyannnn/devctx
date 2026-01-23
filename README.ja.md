@@ -128,6 +128,7 @@ eval "$(devctx shell-init)"
 - `dx <name>` - コンテキストを再開（cd + claude --resume）
 - `dx -` - 最後に触ったコンテキストを再開
 - `dxl` - 一覧表示
+- `dxw` - ウォッチモード（インタラクティブカンバン）
 - `dxm <name> <status>` - ステータス変更
 - `dxn <branch>` - 新規 worktree 作成
 - `dxs` - GitHub 情報を同期
@@ -136,11 +137,38 @@ eval "$(devctx shell-init)"
 - `dxf <query>` - 履歴検索
 - `dxd` - 既存セッションを発見
 
+## ウォッチモード
+
+キーボードで操作できるインタラクティブなカンバンビュー:
+
+```bash
+devctx list -w   # または dxw
+```
+
+**ナビゲーション:**
+- `↑`/`↓` または `j`/`k` - カーソル移動
+- `g`/`G` - 先頭/末尾へジャンプ
+
+**アクション:**
+- `Enter` または `c` - 起動コマンドをクリップボードにコピー
+- `o` - 新しいターミナルで開く
+
+**ステータス変更:**
+- `r` - Review へ移動
+- `p` - In Progress へ移動
+- `b` - Blocked へ移動
+- `D` - Done へ移動
+- `x` - コンテキストを削除
+- `q` - 終了
+
 ## 設定
 
 設定ファイル: `~/.config/devctx/config.yaml`
 
 ```yaml
+# 完了したアイテムを N 日間表示（デフォルト: 1）
+done_retention_days: 1
+
 statuses:
   - name: in-progress
     next: [review, blocked, done]

@@ -128,6 +128,7 @@ Shortcuts:
 - `dx <name>` - Resume context (cd + claude --resume)
 - `dx -` - Resume last touched context
 - `dxl` - List contexts
+- `dxw` - Watch mode (interactive kanban)
 - `dxm <name> <status>` - Change status
 - `dxn <branch>` - Create new worktree
 - `dxs` - Sync GitHub info
@@ -136,11 +137,38 @@ Shortcuts:
 - `dxf <query>` - Search session history
 - `dxd` - Discover existing sessions
 
+## Watch Mode
+
+Interactive kanban view with keyboard controls:
+
+```bash
+devctx list -w   # or dxw
+```
+
+**Navigation:**
+- `↑`/`↓` or `j`/`k` - Move cursor
+- `g`/`G` - Jump to top/bottom
+
+**Actions:**
+- `Enter` or `c` - Copy resume command to clipboard
+- `o` - Open in new terminal
+
+**Status Changes:**
+- `r` - Move to Review
+- `p` - Move to In Progress
+- `b` - Move to Blocked
+- `D` - Move to Done
+- `x` - Delete context
+- `q` - Quit
+
 ## Configuration
 
 Config file: `~/.config/devctx/config.yaml`
 
 ```yaml
+# Show completed items for N days (default: 1)
+done_retention_days: 1
+
 statuses:
   - name: in-progress
     next: [review, blocked, done]
