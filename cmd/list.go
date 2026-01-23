@@ -547,9 +547,65 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case "r":
+			return m.moveSelectedTo(model.StatusReview, "👀 Moved to Review")
+
+		case "p":
+			return m.moveSelectedTo(model.StatusInProgress, "🚀 Moved to In Progress")
+
+		case "b":
+			return m.moveSelectedTo(model.StatusBlocked, "🚧 Moved to Blocked")
+
+		case "D":
+			return m.moveSelectedTo(model.StatusDone, "✅ Moved to Done")
+
+		case "x":
+			// Delete/remove context
+			ctx := m.selectedContext()
+			if ctx != nil {
+				m.store.Remove(ctx.Name)
+				if err := m.storage.SaveStore(m.store); err == nil {
+					m.contexts = m.store.Active()
+					m.maxItem = len(m.contexts)
+					if m.cursor >= m.maxItem {
+						m.cursor = m.maxItem - 1
+					}
+					if m.cursor < 0 {
+						m.cursor = 0
+					}
+					m.message = "🗑 Removed: " + ctx.Name
+				}
+			}
+			return m, nil
 		}
 	}
 
+	return m, nil
+}
+
+func (m *kanbanModel) moveSelectedTo(status model.Status, msg string) (tea.Model, tea.Cmd) {
+	ctx := m.selectedContext()
+	if ctx == nil {
+		return m, nil
+	}
+
+	// Find and update in store
+	storeCtx := m.store.FindByName(ctx.Name)
+	if storeCtx != nil {
+		storeCtx.Status = status
+		if err := m.storage.SaveStore(m.store); err == nil {
+			m.contexts = m.store.Active()
+			m.maxItem = len(m.contexts)
+			if m.cursor >= m.maxItem {
+				m.cursor = m.maxItem - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			m.message = msg
+		}
+	}
 	return m, nil
 }
 
@@ -562,7 +618,7 @@ func (m kanbanModel) calcMaxVisible() int {
 
 func (m kanbanModel) View() string {
 	// Header with help
-	help := "↑↓:move  enter/c:copy  o:open  q:quit"
+	help := "↑↓:move c:copy o:open r:review p:progress b:blocked D:done x:delete q:quit"
 	header := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
 		Render(fmt.Sprintf("devctx - %s | %s", time.Now().Format("15:04:05"), help))
