@@ -92,13 +92,13 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
-		if err != nil {
-			return err
-		}
 
 		// Names-only mode for shell completion
 		if listNamesOnly {
+			store, err := s.LoadStore()
+			if err != nil {
+				return err
+			}
 			for _, ctx := range store.Active() {
 				fmt.Println(ctx.Name)
 			}
@@ -107,6 +107,10 @@ var listCmd = &cobra.Command{
 
 		// fzf mode for interactive selection
 		if listFzf {
+			store, err := s.LoadStore()
+			if err != nil {
+				return err
+			}
 			for _, ctx := range store.Active() {
 				status := statusIcon(ctx.Status)
 				lastSeen := formatRelativeTime(ctx.LastSeen)
@@ -115,64 +119,91 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
-		if len(store.Contexts) == 0 {
-			// Auto-discover existing sessions
-			sessions, err := discoverSessions(store)
-			if err != nil || len(sessions) == 0 {
-				fmt.Println(dimStyle.Render("No Claude Code sessions found."))
-				fmt.Println(dimStyle.Render("Start a Claude Code session and it will appear here."))
+		// Watch mode or single display
+		for {
+			store, err := s.LoadStore()
+			if err != nil {
+				return err
+			}
+
+			if len(store.Contexts) == 0 {
+				// Auto-discover existing sessions
+				sessions, err := discoverSessions(store)
+				if err != nil || len(sessions) == 0 {
+					if listWatch {
+						fmt.Print("\033[H\033[2J") // Clear screen
+						fmt.Println(dimStyle.Render("No Claude Code sessions found."))
+						fmt.Println(dimStyle.Render("Waiting for sessions... (Ctrl+C to exit)"))
+						time.Sleep(2 * time.Second)
+						continue
+					}
+					fmt.Println(dimStyle.Render("No Claude Code sessions found."))
+					fmt.Println(dimStyle.Render("Start a Claude Code session and it will appear here."))
+					return nil
+				}
+
+				// Auto-import recent sessions (last 30 days)
+				if !listWatch {
+					fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
+					fmt.Println()
+				}
+
+				imported := 0
+				cutoff := time.Now().AddDate(0, 0, -30)
+				for _, sess := range sessions {
+					if sess.LastModified.Before(cutoff) {
+						continue
+					}
+					if sess.IsRegistered {
+						continue
+					}
+
+					name := generateNameFromPath(sess.ProjectPath, sess.SessionID)
+					if store.FindByName(name) != nil {
+						name = name + "-" + sess.SessionID[:6]
+					}
+
+					branch := ""
+					if sess.ProjectPath != "" {
+						branch = getGitBranch(sess.ProjectPath)
+					}
+
+					ctx := model.Context{
+						Name:           name,
+						Worktree:       sess.ProjectPath,
+						Branch:         branch,
+						SessionID:      sess.SessionID,
+						TranscriptPath: sess.TranscriptPath,
+						Status:         model.StatusInProgress,
+						CreatedAt:      sess.LastModified,
+						LastSeen:       sess.LastModified,
+						Checklist:      make(map[string]bool),
+					}
+
+					store.Add(ctx)
+					imported++
+				}
+
+				if imported > 0 {
+					if err := s.SaveStore(store); err != nil {
+						return err
+					}
+				}
+			}
+
+			if listWatch {
+				fmt.Print("\033[H\033[2J") // Clear screen
+				fmt.Printf("devctx - %s (Ctrl+C to exit)\n", time.Now().Format("15:04:05"))
+			}
+
+			printKanban(store)
+
+			if !listWatch {
 				return nil
 			}
 
-			// Auto-import recent sessions (last 30 days)
-			fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
-			fmt.Println()
-
-			imported := 0
-			cutoff := time.Now().AddDate(0, 0, -30)
-			for _, sess := range sessions {
-				if sess.LastModified.Before(cutoff) {
-					continue
-				}
-				if sess.IsRegistered {
-					continue
-				}
-
-				name := generateNameFromPath(sess.ProjectPath, sess.SessionID)
-				if store.FindByName(name) != nil {
-					name = name + "-" + sess.SessionID[:6]
-				}
-
-				branch := ""
-				if sess.ProjectPath != "" {
-					branch = getGitBranch(sess.ProjectPath)
-				}
-
-				ctx := model.Context{
-					Name:           name,
-					Worktree:       sess.ProjectPath,
-					Branch:         branch,
-					SessionID:      sess.SessionID,
-					TranscriptPath: sess.TranscriptPath,
-					Status:         model.StatusInProgress,
-					CreatedAt:      sess.LastModified,
-					LastSeen:       sess.LastModified,
-					Checklist:      make(map[string]bool),
-				}
-
-				store.Add(ctx)
-				imported++
-			}
-
-			if imported > 0 {
-				if err := s.SaveStore(store); err != nil {
-					return err
-				}
-			}
+			time.Sleep(2 * time.Second)
 		}
-
-		printKanban(store)
-		return nil
 	},
 }
 

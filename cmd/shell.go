@@ -56,6 +56,10 @@ dxl() {
     devctx list "$@"
 }
 
+dxw() {
+    devctx list --watch "$@"
+}
+
 dxm() {
     devctx move "$@"
 }
@@ -106,9 +110,11 @@ complete -F _dx_completions dx
 }
 
 var listNamesOnly bool
+var listWatch bool
 
 func init() {
 	rootCmd.AddCommand(shellInitCmd)
 	listCmd.Flags().BoolVar(&listNamesOnly, "names-only", false, "Output only context names (for completion)")
 	listCmd.Flags().BoolVar(&listFzf, "fzf", false, "Output in fzf-friendly format")
+	listCmd.Flags().BoolVarP(&listWatch, "watch", "w", false, "Continuously refresh the kanban view")
 }
