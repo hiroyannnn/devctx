@@ -12,36 +12,63 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("62")).
-			Padding(0, 1)
+const columnWidth = 32
 
+var (
+	// Lane header styles
+	inProgressHeader = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("10")).
+				Width(columnWidth).
+				Align(lipgloss.Center)
+
+	reviewHeader = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("11")).
+			Width(columnWidth).
+			Align(lipgloss.Center)
+
+	blockedHeader = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("9")).
+			Width(columnWidth).
+			Align(lipgloss.Center)
+
+	doneHeader = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("8")).
+			Width(columnWidth).
+			Align(lipgloss.Center)
+
+	// Card styles
 	inProgressStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("10")).
 			Padding(0, 1).
-			Width(50)
+			Width(columnWidth - 2)
 
 	reviewStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("11")).
 			Padding(0, 1).
-			Width(50)
+			Width(columnWidth - 2)
 
 	blockedStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("9")).
 			Padding(0, 1).
-			Width(50)
+			Width(columnWidth - 2)
 
 	doneStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("8")).
 			Padding(0, 1).
-			Width(50)
+			Width(columnWidth - 2)
+
+	// Column container style
+	columnStyle = lipgloss.NewStyle().
+			Width(columnWidth).
+			MarginRight(2)
 
 	nameStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -165,95 +192,99 @@ func statusIcon(status model.Status) string {
 }
 
 func printKanban(store *model.Store) {
-	statuses := []struct {
-		status model.Status
-		title  string
-		style  lipgloss.Style
+	lanes := []struct {
+		status      model.Status
+		title       string
+		headerStyle lipgloss.Style
+		cardStyle   lipgloss.Style
 	}{
-		{model.StatusInProgress, "🚀 In Progress", inProgressStyle},
-		{model.StatusReview, "👀 Review", reviewStyle},
-		{model.StatusBlocked, "🚧 Blocked", blockedStyle},
-		{model.StatusDone, "✅ Done (Recent)", doneStyle},
+		{model.StatusInProgress, "🚀 In Progress", inProgressHeader, inProgressStyle},
+		{model.StatusReview, "👀 Review", reviewHeader, reviewStyle},
+		{model.StatusBlocked, "🚧 Blocked", blockedHeader, blockedStyle},
+		{model.StatusDone, "✅ Done", doneHeader, doneStyle},
 	}
 
-	for _, s := range statuses {
-		contexts := store.ByStatus(s.status)
-		if len(contexts) == 0 && s.status == model.StatusDone {
-			continue // Skip empty done section
+	// Build each lane column
+	var columns []string
+	for _, lane := range lanes {
+		contexts := store.ByStatus(lane.status)
+
+		// Skip Done column if empty
+		if len(contexts) == 0 && lane.status == model.StatusDone {
+			continue
 		}
 
-		fmt.Println(headerStyle.Render(s.title))
-		fmt.Println()
+		var col strings.Builder
 
+		// Header
+		col.WriteString(lane.headerStyle.Render(lane.title))
+		col.WriteString("\n")
+		col.WriteString(strings.Repeat("─", columnWidth))
+		col.WriteString("\n")
+
+		// Cards
 		if len(contexts) == 0 {
-			fmt.Println(dimStyle.Render("  (empty)"))
+			emptyStyle := lipgloss.NewStyle().
+				Width(columnWidth - 2).
+				Foreground(lipgloss.Color("8")).
+				Align(lipgloss.Center)
+			col.WriteString(emptyStyle.Render("(empty)"))
+			col.WriteString("\n")
 		} else {
 			for _, ctx := range contexts {
 				card := formatCard(ctx)
-				fmt.Println(s.style.Render(card))
+				col.WriteString(lane.cardStyle.Render(card))
+				col.WriteString("\n")
 			}
 		}
-		fmt.Println()
+
+		columns = append(columns, columnStyle.Render(col.String()))
 	}
+
+	// Join columns horizontally
+	fmt.Println()
+	fmt.Println(lipgloss.JoinHorizontal(lipgloss.Top, columns...))
 }
 
 func formatCard(ctx model.Context) string {
 	var b strings.Builder
 
-	// Name
-	b.WriteString(nameStyle.Render(fmt.Sprintf("[%s]", ctx.Name)))
+	// Name (bold)
+	b.WriteString(nameStyle.Render(ctx.Name))
 	b.WriteString("\n")
 
-	// Branch
-	b.WriteString(branchStyle.Render(fmt.Sprintf("  ⎇ %s", ctx.Branch)))
-	b.WriteString("\n")
-
-	// Worktree (shortened)
-	worktree := shortenPath(ctx.Worktree)
-	b.WriteString(dimStyle.Render(fmt.Sprintf("  📁 %s", worktree)))
-	b.WriteString("\n")
-
-	// Session info
-	sessionShort := ctx.SessionID
-	if len(sessionShort) > 8 {
-		sessionShort = sessionShort[:8] + "..."
+	// Branch (truncate if too long)
+	branch := ctx.Branch
+	if len(branch) > 24 {
+		branch = branch[:21] + "..."
 	}
+	b.WriteString(branchStyle.Render("⎇ " + branch))
+
+	// Time info
 	lastSeen := formatRelativeTime(ctx.LastSeen)
-	timeInfo := fmt.Sprintf("  🤖 %s  ⏱ %s", sessionShort, lastSeen)
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("⏱ " + lastSeen))
 	if ctx.TotalTime > 0 {
-		timeInfo += fmt.Sprintf("  ⌛ %s", formatDuration(ctx.TotalTime))
+		b.WriteString(dimStyle.Render(" ⌛" + formatDuration(ctx.TotalTime)))
 	}
-	b.WriteString(dimStyle.Render(timeInfo))
 
-	// Note if any
+	// Note (truncate)
 	if ctx.Note != "" {
+		note := ctx.Note
+		if len(note) > 22 {
+			note = note[:19] + "..."
+		}
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  📝 %s", ctx.Note)))
+		b.WriteString(dimStyle.Render("📝 " + note))
 	}
 
-	// Issue/PR links if any
+	// PR/Issue indicator (just icon, no full URL)
 	if ctx.IssueURL != "" || ctx.PRURL != "" {
 		b.WriteString("\n")
-		if ctx.IssueURL != "" {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  🔗 %s", ctx.IssueURL)))
-		}
 		if ctx.PRURL != "" {
-			if ctx.IssueURL != "" {
-				b.WriteString("\n")
-			}
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  🔀 %s", ctx.PRURL)))
-		}
-	}
-
-	// Checklist if any
-	if len(ctx.Checklist) > 0 {
-		b.WriteString("\n")
-		for item, done := range ctx.Checklist {
-			mark := "☐"
-			if done {
-				mark = "☑"
-			}
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  %s %s", mark, item)))
+			b.WriteString(dimStyle.Render("🔀 PR linked"))
+		} else if ctx.IssueURL != "" {
+			b.WriteString(dimStyle.Render("🔗 Issue linked"))
 		}
 	}
 
