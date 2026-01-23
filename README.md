@@ -4,45 +4,53 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/hiroyannnn/devctx?include_prereleases)](https://github.com/hiroyannnn/devctx/releases)
 
-Claude Code セッションと git worktree をカンバン形式で管理する CLI ツール
+[日本語](README.ja.md)
 
-## 機能
+A CLI tool for managing Claude Code sessions and git worktrees in a kanban-style interface.
 
-- **カンバンビュー** - セッションの状態を一覧で把握
-- **自動セッション追跡** - Claude Code hooks による自動登録
-- **ステータス管理** - in-progress / review / blocked / done
-- **チェックリスト** - ステータス移行時の確認項目
-- **シェル統合** - ワンコマンドでコンテキスト切り替え
+## Features
 
-## インストール
+- **Kanban View** - Visualize session states at a glance
+- **Auto Session Tracking** - Automatic registration via Claude Code hooks
+- **Status Management** - in-progress / review / blocked / done
+- **Checklists** - Confirmation items during status transitions
+- **Shell Integration** - One-command context switching
+- **fzf Integration** - Interactive context selection
+- **TUI Dashboard** - Interactive UI powered by Bubble Tea
+- **Time Tracking** - Accumulated work time per session
+- **Notes** - Add memos to contexts
+- **GitHub Integration** - Auto-detect and link Issues/PRs
+- **Worktree Creation** - Create branch to Claude launch in one command
+
+## Installation
 
 ```bash
 go install github.com/hiroyannnn/devctx@latest
 ```
 
-または、ソースからビルド:
+Or build from source:
 
 ```bash
 git clone https://github.com/hiroyannnn/devctx.git
 cd devctx
 go build -o devctx .
-mv devctx ~/.local/bin/  # または /usr/local/bin/
+mv devctx ~/.local/bin/  # or /usr/local/bin/
 ```
 
-## クイックスタート
+## Quick Start
 
 ```bash
-# Claude Code hooks を設定
+# Set up Claude Code hooks
 devctx hooks --install
 
-# シェル統合を有効化（.bashrc / .zshrc に追加）
+# Enable shell integration (add to .bashrc / .zshrc)
 eval "$(devctx shell-init)"
 
-# カンバン表示
+# Display kanban view
 devctx list
 ```
 
-## カンバン表示例
+## Kanban View Example
 
 ```
 🚀 In Progress
@@ -50,7 +58,8 @@ devctx list
 │ [auth]                                       │
 │   ⎇ feature/auth                             │
 │   📁 ~/code/project/worktrees/auth           │
-│   🤖 abc123...  ⏱ 2h ago                     │
+│   🤖 abc123...  ⏱ 2h ago  ⌛ 4h32m           │
+│   📝 Working on OAuth2 refresh tokens        │
 ╰──────────────────────────────────────────────╯
 
 👀 Review
@@ -59,41 +68,64 @@ devctx list
 │   ⎇ fix/api-error                            │
 │   📁 ~/code/project/worktrees/api-fix        │
 │   🤖 def456...  ⏱ 30m ago                    │
+│   🔀 https://github.com/user/repo/pull/123   │
 │   ☑ /compact                                 │
 │   ☐ /create-pr                               │
 ╰──────────────────────────────────────────────╯
 ```
 
-## コマンド
+## Commands
 
-| コマンド | 説明 |
-|---------|------|
-| `devctx list` | カンバン形式で一覧表示 |
-| `devctx register <name>` | コンテキストを登録（通常は hook で自動） |
-| `devctx resume <name>` | コンテキストを再開 |
-| `devctx move <name> <status>` | ステータスを変更 |
-| `devctx archive <name>` | 完了としてアーカイブ |
-| `devctx touch <name>` | 最終アクセス時刻を更新 |
-| `devctx hooks [--install]` | Claude Code hooks を設定 |
-| `devctx shell-init` | シェル統合スクリプトを出力 |
+### Basic Operations
 
-## シェル統合
+| Command | Description |
+|---------|-------------|
+| `devctx list` | Display contexts in kanban view |
+| `devctx tui` | Open interactive TUI dashboard |
+| `devctx show <name>` | Show context details |
+| `devctx register <name>` | Register a context (usually auto via hook) |
+| `devctx resume <name>` | Resume a context |
+| `devctx move <name> <status>` | Change status |
+| `devctx archive <name>` | Archive as done |
 
-`.bashrc` または `.zshrc` に追加:
+### Creation & Configuration
+
+| Command | Description |
+|---------|-------------|
+| `devctx new <branch>` | Create worktree + cd + claude in one go |
+| `devctx note <name> [msg]` | Add/show a note |
+| `devctx link <name> <url>` | Link GitHub Issue/PR |
+| `devctx hooks [--install]` | Set up Claude Code hooks |
+| `devctx commands [--install]` | Set up Claude slash commands |
+
+### GitHub Integration
+
+| Command | Description |
+|---------|-------------|
+| `devctx sync [name]` | Auto-detect and link PR/Issue |
+| `devctx pr <name>` | Create a PR |
+
+## Shell Integration
+
+Add to `.bashrc` or `.zshrc`:
 
 ```bash
 eval "$(devctx shell-init)"
 ```
 
-ショートカット:
-- `dx` - コンテキスト一覧表示
-- `dx <name>` - コンテキストを再開（cd + claude --resume）
-- `dxl` - 一覧表示
-- `dxm <name> <status>` - ステータス変更
+Shortcuts:
+- `dx` - Select context via fzf and resume (shows list if fzf not available)
+- `dx <name>` - Resume context (cd + claude --resume)
+- `dx -` - Resume last touched context
+- `dxl` - List contexts
+- `dxm <name> <status>` - Change status
+- `dxn <branch>` - Create new worktree
+- `dxs` - Sync GitHub info
+- `dxt` - Open TUI dashboard
 
-## 設定
+## Configuration
 
-設定ファイル: `~/.config/devctx/config.yaml`
+Config file: `~/.config/devctx/config.yaml`
 
 ```yaml
 statuses:
@@ -112,9 +144,9 @@ statuses:
       - /create-pr
 ```
 
-### チェックリストのカスタマイズ
+### Customizing Checklists
 
-ステータス移行時に確認したい項目を `checklist` に追加:
+Add items to confirm during status transitions:
 
 ```yaml
 statuses:
@@ -123,60 +155,42 @@ statuses:
     checklist:
       - /compact
       - /code-simplifier
-      - "PR下書き作成済み?"  # 自由形式のチェック項目も可
+      - "PR draft created?"
 ```
 
-## データ
+## Claude Code Custom Commands
 
-コンテキストデータ: `~/.config/devctx/contexts.yaml`
+Install slash commands for Claude Code:
 
-```yaml
-contexts:
-  - name: auth
-    worktree: /home/user/code/project/worktrees/auth
-    branch: feature/auth
-    session_id: abc123-def456-...
-    transcript_path: ~/.claude/projects/.../abc123.jsonl
-    status: in-progress
-    created_at: 2025-01-20T10:00:00Z
-    last_seen: 2025-01-20T14:30:00Z
-    checklist:
-      /compact: false
-      /create-pr: false
+```bash
+devctx commands --install
 ```
 
-## Claude Code カスタムコマンド（オプション）
+This creates:
+- `/devctx-review` - Move to review status
+- `/devctx-done` - Mark as done
+- `/devctx-blocked` - Mark as blocked
+- `/devctx-note` - Add a note
+- `/devctx-link` - Link Issue/PR
+- `/devctx-status` - Show context status
 
-Claude 側からステータス変更するためのカスタムコマンドを作成できます:
+## Troubleshooting
 
-`.claude/commands/devctx-done.md`:
-```markdown
-このタスクを完了としてマークします。
+### Hooks not working
 
-以下のコマンドを実行してください：
-\`\`\`bash
-devctx move $(basename $(pwd)) done
-\`\`\`
-```
+1. Check settings with `devctx hooks`
+2. Run `/hooks` in Claude Code to approve
+3. Ensure `devctx` is in PATH
 
-## トラブルシューティング
+### Session not auto-registered
 
-### hooks が動作しない
+- Verify `SessionStart` hook is properly configured
+- Test manually with `devctx register`
 
-1. `devctx hooks` で設定内容を確認
-2. Claude Code で `/hooks` を実行して承認
-3. `devctx` コマンドが PATH にあることを確認
+### resume doesn't change directory
 
-### セッションが自動登録されない
-
-- hooks の `SessionStart` が正しく設定されているか確認
-- `devctx register` を手動で実行してテスト
-
-### resume でディレクトリ移動しない
-
-シェルの制約上、サブプロセスから親シェルのディレクトリは変更できません。
-シェル統合 (`eval "$(devctx shell-init)"`) を使用するか、
-表示されたコマンドを手動で実行してください。
+Due to shell constraints, subprocesses cannot change the parent shell's directory.
+Use shell integration (`eval "$(devctx shell-init)"`) or manually execute the displayed commands.
 
 ## License
 
