@@ -80,6 +80,14 @@ dxt() {
     devctx tui "$@"
 }
 
+dxp() {
+    devctx status "$@"
+}
+
+dxf() {
+    devctx search "$@"
+}
+
 # Completion for dx command
 _dx_completions() {
     local contexts
