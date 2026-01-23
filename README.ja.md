@@ -105,6 +105,14 @@ devctx list
 | `devctx sync [name]` | PR/Issue を自動検出してリンク |
 | `devctx pr <name>` | PR を作成 |
 
+### 監視・検索
+
+| コマンド | 説明 |
+|---------|------|
+| `devctx status` | 全コンテキストのライブ状態を表示 |
+| `devctx status --watch` | 監視モード（継続的に更新） |
+| `devctx search <query>` | セッション履歴を検索 |
+
 ## シェル統合
 
 `.bashrc` または `.zshrc` に追加:
@@ -122,6 +130,8 @@ eval "$(devctx shell-init)"
 - `dxn <branch>` - 新規 worktree 作成
 - `dxs` - GitHub 情報を同期
 - `dxt` - TUI ダッシュボード
+- `dxp` - ライブステータス表示
+- `dxf <query>` - 履歴検索
 
 ## 設定
 

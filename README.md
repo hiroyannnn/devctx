@@ -105,6 +105,14 @@ devctx list
 | `devctx sync [name]` | Auto-detect and link PR/Issue |
 | `devctx pr <name>` | Create a PR |
 
+### Monitoring & Search
+
+| Command | Description |
+|---------|-------------|
+| `devctx status` | Show live status of all contexts |
+| `devctx status --watch` | Continuously monitor status |
+| `devctx search <query>` | Search through session history |
+
 ## Shell Integration
 
 Add to `.bashrc` or `.zshrc`:
@@ -122,6 +130,8 @@ Shortcuts:
 - `dxn <branch>` - Create new worktree
 - `dxs` - Sync GitHub info
 - `dxt` - Open TUI dashboard
+- `dxp` - Show live status
+- `dxf <query>` - Search session history
 
 ## Configuration
 
