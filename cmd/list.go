@@ -145,7 +145,7 @@ var listCmd = &cobra.Command{
 				fmt.Println()
 
 				imported := 0
-				cutoff := time.Now().AddDate(0, 0, -30)
+				cutoff := time.Now().AddDate(0, 0, -1)
 				for _, sess := range sessions {
 					if sess.LastModified.Before(cutoff) || sess.IsRegistered {
 						continue
