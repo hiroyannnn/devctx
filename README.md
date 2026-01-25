@@ -172,6 +172,9 @@ Config file: `~/.config/devctx/config.yaml`
 # Show completed items for N days (default: 1)
 done_retention_days: 1
 
+# Disable auto-import of sessions (default: true)
+auto_import: false
+
 statuses:
   - name: in-progress
     next: [review, blocked, done]

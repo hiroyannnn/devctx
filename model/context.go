@@ -31,6 +31,7 @@ type Context struct {
 type Config struct {
 	Statuses          []StatusConfig `yaml:"statuses"`
 	DoneRetentionDays int            `yaml:"done_retention_days,omitempty"`
+	AutoImport        *bool          `yaml:"auto_import,omitempty"` // nil = true (default enabled)
 }
 
 type StatusConfig struct {

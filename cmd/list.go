@@ -138,7 +138,9 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
-		if len(store.Contexts) == 0 {
+		// Auto-import if enabled (default: true)
+		autoImport := config == nil || config.AutoImport == nil || *config.AutoImport
+		if autoImport && len(store.Contexts) == 0 {
 			sessions, err := discoverSessions(store)
 			if err == nil && len(sessions) > 0 {
 				fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))

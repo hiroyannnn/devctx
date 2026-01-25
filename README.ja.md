@@ -172,6 +172,9 @@ devctx list -w   # または dxw
 # 完了したアイテムを N 日間表示（デフォルト: 1）
 done_retention_days: 1
 
+# セッションの自動インポートを無効化（デフォルト: true）
+auto_import: false
+
 statuses:
   - name: in-progress
     next: [review, blocked, done]
