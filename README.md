@@ -56,23 +56,25 @@ devctx list
 🚀 In Progress
 ╭──────────────────────────────────────────────╮
 │ [auth]                                       │
+│   💬 zesty-hopping-falcon                    │
 │   ⎇ feature/auth                             │
-│   📁 ~/code/project/worktrees/auth           │
-│   🤖 abc123...  ⏱ 2h ago  ⌛ 4h32m           │
+│   ⏱ 2h ago  ⌛ 4h32m                         │
 │   📝 Working on OAuth2 refresh tokens        │
 ╰──────────────────────────────────────────────╯
 
 👀 Review
 ╭──────────────────────────────────────────────╮
 │ [api-fix]                                    │
+│   💬 playful-coding-knuth                    │
 │   ⎇ fix/api-error                            │
-│   📁 ~/code/project/worktrees/api-fix        │
-│   🤖 def456...  ⏱ 30m ago                    │
+│   ⏱ 30m ago                                  │
 │   🔀 https://github.com/user/repo/pull/123   │
 │   ☑ /compact                                 │
 │   ☐ /create-pr                               │
 ╰──────────────────────────────────────────────╯
 ```
+
+💬 shows Claude Code's auto-generated session name (slug).
 
 ## Commands
 
@@ -103,6 +105,7 @@ devctx list
 | Command | Description |
 |---------|-------------|
 | `devctx sync [name]` | Auto-detect and link PR/Issue |
+| `devctx sync --all` | Update session names for all contexts |
 | `devctx pr <name>` | Create a PR |
 
 ### Monitoring & Search

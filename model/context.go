@@ -16,6 +16,7 @@ type Context struct {
 	Worktree       string            `yaml:"worktree"`
 	Branch         string            `yaml:"branch"`
 	SessionID      string            `yaml:"session_id"`
+	SessionName    string            `yaml:"session_name,omitempty"` // Claude Code's auto-generated session name (slug)
 	TranscriptPath string            `yaml:"transcript_path,omitempty"`
 	Status         Status            `yaml:"status"`
 	CreatedAt      time.Time         `yaml:"created_at"`

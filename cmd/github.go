@@ -25,13 +25,17 @@ type ghIssue struct {
 	State  string `json:"state"`
 }
 
+var syncAll bool
+
 var syncCmd = &cobra.Command{
 	Use:   "sync [name]",
 	Short: "Sync GitHub Issue/PR information for a context",
 	Long: `Automatically detect and link GitHub PR for the current branch.
 
 If no name is provided, uses the current directory to find the context.
-Uses 'gh' CLI to fetch PR information.`,
+Uses 'gh' CLI to fetch PR information.
+
+Use --all to refresh session names for all contexts from their transcripts.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := storage.New()
 		if err != nil {
@@ -40,6 +44,30 @@ Uses 'gh' CLI to fetch PR information.`,
 		store, err := s.LoadStore()
 		if err != nil {
 			return err
+		}
+
+		// Handle --all flag for session name refresh
+		if syncAll {
+			updated := 0
+			for i := range store.Contexts {
+				ctx := &store.Contexts[i]
+				if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+					if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
+						ctx.SessionName = sessionName
+						fmt.Printf("✓ [%s] %s\n", ctx.Name, sessionName)
+						updated++
+					}
+				}
+			}
+			if updated > 0 {
+				if err := s.SaveStore(store); err != nil {
+					return err
+				}
+				fmt.Printf("\n✓ Updated %d context(s)\n", updated)
+			} else {
+				fmt.Println("No contexts need session name updates")
+			}
+			return nil
 		}
 
 		var name string
@@ -88,6 +116,14 @@ Uses 'gh' CLI to fetch PR information.`,
 				ctx.IssueURL = issue.URL
 				fmt.Printf("✓ Linked Issue #%s: %s\n", issueNum, issue.Title)
 				fmt.Printf("  %s\n", issue.URL)
+			}
+		}
+
+		// Refresh session name from transcript if available
+		if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+			if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
+				ctx.SessionName = sessionName
+				fmt.Printf("✓ Found session name: %s\n", sessionName)
 			}
 		}
 
@@ -251,4 +287,5 @@ func extractIssueFromURL(url string) string {
 func init() {
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(prCmd)
+	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Refresh session names for all contexts")
 }

@@ -56,23 +56,25 @@ devctx list
 🚀 In Progress
 ╭──────────────────────────────────────────────╮
 │ [auth]                                       │
+│   💬 zesty-hopping-falcon                    │
 │   ⎇ feature/auth                             │
-│   📁 ~/code/project/worktrees/auth           │
-│   🤖 abc123...  ⏱ 2h ago  ⌛ 4h32m           │
+│   ⏱ 2h ago  ⌛ 4h32m                         │
 │   📝 OAuth2 実装中、refresh token の処理が残  │
 ╰──────────────────────────────────────────────╯
 
 👀 Review
 ╭──────────────────────────────────────────────╮
 │ [api-fix]                                    │
+│   💬 playful-coding-knuth                    │
 │   ⎇ fix/api-error                            │
-│   📁 ~/code/project/worktrees/api-fix        │
-│   🤖 def456...  ⏱ 30m ago                    │
+│   ⏱ 30m ago                                  │
 │   🔀 https://github.com/user/repo/pull/123   │
 │   ☑ /compact                                 │
 │   ☐ /create-pr                               │
 ╰──────────────────────────────────────────────╯
 ```
+
+💬 はClaude Codeが自動生成したセッション名（slug）を表示します。
 
 ## コマンド
 
@@ -103,6 +105,7 @@ devctx list
 | コマンド | 説明 |
 |---------|------|
 | `devctx sync [name]` | PR/Issue を自動検出してリンク |
+| `devctx sync --all` | 全コンテキストのセッション名を更新 |
 | `devctx pr <name>` | PR を作成 |
 
 ### 監視・検索

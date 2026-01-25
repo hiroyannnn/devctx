@@ -18,6 +18,7 @@ import (
 
 type DiscoveredSession struct {
 	SessionID      string
+	SessionName    string // Claude Code's auto-generated name (slug)
 	TranscriptPath string
 	ProjectPath    string // The actual project directory
 	ProjectHash    string // The hash used in ~/.claude/projects/
@@ -130,6 +131,9 @@ func discoverSessions(store *model.Store) ([]DiscoveredSession, error) {
 			// Try to get project path from transcript
 			projectPath := extractProjectPath(transcriptPath)
 
+			// Try to get session name (slug) from transcript
+			sessionName := extractSessionName(transcriptPath)
+
 			// Check if already registered
 			isRegistered := store.FindBySessionID(sessionID) != nil
 
@@ -138,6 +142,7 @@ func discoverSessions(store *model.Store) ([]DiscoveredSession, error) {
 
 			sessions = append(sessions, DiscoveredSession{
 				SessionID:      sessionID,
+				SessionName:    sessionName,
 				TranscriptPath: transcriptPath,
 				ProjectPath:    projectPath,
 				ProjectHash:    projectHash,
@@ -176,6 +181,33 @@ func extractProjectPath(transcriptPath string) string {
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil {
 			if msg.Cwd != "" {
 				return msg.Cwd
+			}
+		}
+	}
+
+	return ""
+}
+
+func extractSessionName(transcriptPath string) string {
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	// Look for slug in the first few lines
+	lineCount := 0
+	for scanner.Scan() && lineCount < 100 {
+		lineCount++
+		var msg struct {
+			Slug string `json:"slug"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil {
+			if msg.Slug != "" {
+				return msg.Slug
 			}
 		}
 	}
@@ -228,6 +260,11 @@ func displayDiscoveredSessions(sessions []DiscoveredSession) {
 
 		fmt.Printf("%s %s\n", titleStyle.Render(sessionShort), statusTag)
 
+		if sess.SessionName != "" {
+			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Italic(true)
+			fmt.Printf("  💬 %s\n", nameStyle.Render(sess.SessionName))
+		}
+
 		if sess.ProjectPath != "" {
 			fmt.Printf("  📁 %s\n", pathStyle.Render(shortenPath(sess.ProjectPath)))
 		}
@@ -266,6 +303,7 @@ func importSessions(s *storage.Storage, store *model.Store, sessions []Discovere
 			Worktree:       sess.ProjectPath,
 			Branch:         branch,
 			SessionID:      sess.SessionID,
+			SessionName:    sess.SessionName,
 			TranscriptPath: sess.TranscriptPath,
 			Status:         model.StatusInProgress,
 			CreatedAt:      sess.LastModified,
@@ -275,7 +313,11 @@ func importSessions(s *storage.Storage, store *model.Store, sessions []Discovere
 
 		store.Add(ctx)
 		imported++
-		fmt.Printf("✓ Imported [%s] from %s\n", name, shortenPath(sess.ProjectPath))
+		displayName := name
+		if sess.SessionName != "" {
+			displayName = fmt.Sprintf("%s (%s)", name, sess.SessionName)
+		}
+		fmt.Printf("✓ Imported [%s] from %s\n", displayName, shortenPath(sess.ProjectPath))
 	}
 
 	if imported > 0 {

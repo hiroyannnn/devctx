@@ -73,6 +73,12 @@ If called manually, uses current directory and prompts for name.`,
 			if input.SessionID != "" {
 				existing.SessionID = input.SessionID
 				existing.TranscriptPath = input.TranscriptPath
+				// Try to extract session name from transcript
+				if input.TranscriptPath != "" {
+					if sessionName := extractSessionName(input.TranscriptPath); sessionName != "" {
+						existing.SessionName = sessionName
+					}
+				}
 			}
 			existing.LastSeen = time.Now()
 			if branch != "" {
@@ -98,12 +104,19 @@ If called manually, uses current directory and prompts for name.`,
 			name = name + "-" + time.Now().Format("0102")
 		}
 
+		// Extract session name if transcript is available
+		sessionName := ""
+		if input.TranscriptPath != "" {
+			sessionName = extractSessionName(input.TranscriptPath)
+		}
+
 		// Create new context
 		ctx := model.Context{
 			Name:           name,
 			Worktree:       cwd,
 			Branch:         branch,
 			SessionID:      input.SessionID,
+			SessionName:    sessionName,
 			TranscriptPath: input.TranscriptPath,
 			Status:         model.StatusInProgress,
 			CreatedAt:      time.Now(),

@@ -166,6 +166,7 @@ var listCmd = &cobra.Command{
 						Worktree:       sess.ProjectPath,
 						Branch:         branch,
 						SessionID:      sess.SessionID,
+						SessionName:    sess.SessionName,
 						TranscriptPath: sess.TranscriptPath,
 						Status:         model.StatusInProgress,
 						CreatedAt:      sess.LastModified,
@@ -337,6 +338,19 @@ func formatCard(ctx model.Context) string {
 	// Name (bold)
 	b.WriteString(nameStyle.Render(ctx.Name))
 	b.WriteString("\n")
+
+	// Session name (Claude's auto-generated slug)
+	if ctx.SessionName != "" {
+		sessionName := ctx.SessionName
+		if len(sessionName) > 26 {
+			sessionName = sessionName[:23] + "..."
+		}
+		sessionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("13")).
+			Italic(true)
+		b.WriteString(sessionStyle.Render("💬 " + sessionName))
+		b.WriteString("\n")
+	}
 
 	// Branch (truncate if too long)
 	branch := ctx.Branch
