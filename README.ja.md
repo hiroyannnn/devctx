@@ -8,6 +8,8 @@
 
 Claude Code セッションと git worktree をカンバン形式で管理する CLI ツール
 
+![devctx list](assets/list.gif)
+
 ## 機能
 
 - **カンバンビュー** - セッションの状態を一覧で把握
@@ -157,6 +159,8 @@ eval "$(devctx shell-init)"
 ```bash
 devctx list -w   # または dxw
 ```
+
+![devctx watch mode](assets/watch.gif)
 
 **ナビゲーション:**
 - `↑`/`↓` または `j`/`k` - カーソル移動

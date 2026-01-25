@@ -8,6 +8,8 @@
 
 A CLI tool for managing Claude Code sessions and git worktrees in a kanban-style interface.
 
+![devctx list](assets/list.gif)
+
 ## Features
 
 - **Kanban View** - Visualize session states at a glance
@@ -157,6 +159,8 @@ Interactive kanban view with keyboard controls:
 ```bash
 devctx list -w   # or dxw
 ```
+
+![devctx watch mode](assets/watch.gif)
 
 **Navigation:**
 - `↑`/`↓` or `j`/`k` - Move cursor
