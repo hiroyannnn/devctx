@@ -118,6 +118,16 @@ devctx list
 | `devctx status --watch` | Continuously monitor status |
 | `devctx search <query>` | Search through session history |
 
+### Maintenance
+
+| Command | Description |
+|---------|-------------|
+| `devctx stats` | Show statistics |
+| `devctx clean` | Remove old contexts (default: done > 30 days) |
+| `devctx clean --days=7` | Remove contexts older than 7 days |
+| `devctx clean --done=false` | Remove old contexts regardless of status |
+| `devctx clean --dry-run` | Preview what would be removed |
+
 ## Shell Integration
 
 Add to `.bashrc` or `.zshrc`:

@@ -118,6 +118,16 @@ devctx list
 | `devctx status --watch` | 監視モード（継続的に更新） |
 | `devctx search <query>` | セッション履歴を検索 |
 
+### メンテナンス
+
+| コマンド | 説明 |
+|---------|------|
+| `devctx stats` | 統計情報を表示 |
+| `devctx clean` | 古いコンテキストを削除（デフォルト: 30日以上前のdone） |
+| `devctx clean --days=7` | 7日以上前のコンテキストを削除 |
+| `devctx clean --done=false` | ステータス問わず古いコンテキストを削除 |
+| `devctx clean --dry-run` | 削除対象をプレビュー |
+
 ## シェル統合
 
 `.bashrc` または `.zshrc` に追加:
