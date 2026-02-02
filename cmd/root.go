@@ -22,6 +22,13 @@ git worktrees, and development context with a kanban-style interface.`,
 			return
 		}
 
+		// Skip setup prompt when called from hook (stdin is pipe)
+		// This prevents consuming JSON data meant for register/touch commands
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			return
+		}
+
 		// Check if this is first run and hooks aren't installed
 		if !isFirstRunComplete() && !areHooksInstalled() {
 			promptFirstTimeSetup()
