@@ -24,8 +24,8 @@ git worktrees, and development context with a kanban-style interface.`,
 
 		// Skip setup prompt when called from hook (stdin is pipe)
 		// This prevents consuming JSON data meant for register/touch commands
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
+		stat, err := os.Stdin.Stat()
+		if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
 			return
 		}
 
