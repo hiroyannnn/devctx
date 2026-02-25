@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +118,37 @@ func TestHandleAPIRoadmap_WithContexts(t *testing.T) {
 	}
 	if entries[1].PRURL != "https://github.com/example/repo/pull/1" {
 		t.Errorf("entries[1].PRURL = %q, want %q", entries[1].PRURL, "https://github.com/example/repo/pull/1")
+	}
+}
+
+func TestHandleIndex(t *testing.T) {
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: &model.Store{}},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{}},
+			Gh:  &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	server.handleIndex(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "text/html; charset=utf-8")
+	}
+
+	body := w.Body.String()
+	if len(body) == 0 {
+		t.Error("body is empty")
+	}
+	if !strings.Contains(body, "Session Roadmap") {
+		t.Error("body does not contain 'Session Roadmap'")
 	}
 }
 

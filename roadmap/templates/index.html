@@ -142,7 +142,7 @@ h1 {
 
 <script>
 // All data comes from the local devctx API (contexts.yaml).
-// escapeHtml sanitizes all dynamic values before DOM insertion.
+// All dynamic values are inserted via textContent (safe against XSS).
 const PHASES = ['idle', 'implementation', 'committed', 'pushed', 'pr_open', 'done'];
 const PHASE_LABELS = {
   idle: 'Idle',
@@ -156,13 +156,6 @@ const PHASE_LABELS = {
 function phaseIndex(phase) {
   const idx = PHASES.indexOf(phase);
   return idx >= 0 ? idx : 0;
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function createPipeline(currentPhase) {

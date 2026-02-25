@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/hiroyannnn/devctx/model"
+	"github.com/hiroyannnn/devctx/storage"
 )
 
 //go:embed templates/*
@@ -17,13 +18,16 @@ type StoreLoader interface {
 	LoadStore() (*model.Store, error)
 }
 
+// Compile-time check that storage.Storage satisfies StoreLoader.
+var _ StoreLoader = (*storage.Storage)(nil)
+
 // RoadmapEntry is the JSON response structure for each context.
 type RoadmapEntry struct {
 	Name          string       `json:"name"`
 	Branch        string       `json:"branch"`
 	Status        model.Status `json:"status"`
 	Phase         model.Phase  `json:"phase"`
-	InitialPrompt string      `json:"initial_prompt,omitempty"`
+	InitialPrompt string       `json:"initial_prompt,omitempty"`
 	Worktree      string       `json:"worktree"`
 	PRURL         string       `json:"pr_url,omitempty"`
 	IssueURL      string       `json:"issue_url,omitempty"`
