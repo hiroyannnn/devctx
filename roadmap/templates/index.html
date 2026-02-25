@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Roadmap</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 24px;
+}
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+  color: #f0f6fc;
+}
+.meta {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 24px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+}
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.card-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #f0f6fc;
+}
+.card-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+.status-in-progress { background: #1f6feb33; color: #58a6ff; }
+.status-review { background: #8957e533; color: #bc8cff; }
+.status-blocked { background: #da363333; color: #f85149; }
+.status-done { background: #23863533; color: #3fb950; }
+.card-branch {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 8px;
+  font-family: monospace;
+}
+.card-prompt {
+  font-size: 0.85rem;
+  color: #c9d1d9;
+  margin-bottom: 16px;
+  line-height: 1.4;
+  max-height: 3.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pipeline {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+}
+.stage-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #30363d;
+  background: #0d1117;
+  z-index: 1;
+}
+.stage-dot.reached {
+  background: #30363d;
+  border-color: #484f58;
+}
+.stage-dot.current {
+  background: #58a6ff;
+  border-color: #58a6ff;
+  box-shadow: 0 0 8px #58a6ff44;
+}
+.stage-label {
+  font-size: 0.65rem;
+  color: #484f58;
+  margin-top: 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.stage-label.reached { color: #8b949e; }
+.stage-label.current { color: #58a6ff; font-weight: 600; }
+.connector {
+  height: 2px;
+  flex: 0.5;
+  background: #30363d;
+  margin-top: -10px;
+}
+.connector.reached { background: #484f58; }
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: #484f58;
+}
+.card-links a {
+  color: #58a6ff;
+  text-decoration: none;
+  margin-left: 8px;
+}
+.card-links a:hover { text-decoration: underline; }
+.empty {
+  text-align: center;
+  color: #484f58;
+  padding: 48px;
+  font-size: 1.1rem;
+}
+</style>
+</head>
+<body>
+<h1>Session Roadmap</h1>
+<div class="meta" id="meta">Loading...</div>
+<div class="cards" id="cards"></div>
+
+<script>
+// All data comes from the local devctx API (contexts.yaml).
+// escapeHtml sanitizes all dynamic values before DOM insertion.
+const PHASES = ['idle', 'implementation', 'committed', 'pushed', 'pr_open', 'done'];
+const PHASE_LABELS = {
+  idle: 'Idle',
+  implementation: 'Impl',
+  committed: 'Commit',
+  pushed: 'Push',
+  pr_open: 'PR',
+  done: 'Done'
+};
+
+function phaseIndex(phase) {
+  const idx = PHASES.indexOf(phase);
+  return idx >= 0 ? idx : 0;
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function createPipeline(currentPhase) {
+  const container = document.createElement('div');
+  container.className = 'pipeline';
+  const currentIdx = phaseIndex(currentPhase);
+
+  PHASES.forEach(function(phase, i) {
+    if (i > 0) {
+      const conn = document.createElement('div');
+      conn.className = 'connector' + (i <= currentIdx ? ' reached' : '');
+      container.appendChild(conn);
+    }
+    const stage = document.createElement('div');
+    stage.className = 'stage';
+
+    const dot = document.createElement('div');
+    dot.className = 'stage-dot';
+    if (i < currentIdx) dot.classList.add('reached');
+    else if (i === currentIdx) dot.classList.add('current');
+
+    const label = document.createElement('div');
+    label.className = 'stage-label';
+    if (i < currentIdx) label.classList.add('reached');
+    else if (i === currentIdx) label.classList.add('current');
+    label.textContent = PHASE_LABELS[phase];
+
+    stage.appendChild(dot);
+    stage.appendChild(label);
+    container.appendChild(stage);
+  });
+
+  return container;
+}
+
+function createCard(entry) {
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  const name = document.createElement('span');
+  name.className = 'card-name';
+  name.textContent = entry.name;
+  const status = document.createElement('span');
+  status.className = 'card-status status-' + (entry.status || '').replace(/[^a-z-]/g, '');
+  status.textContent = entry.status;
+  header.appendChild(name);
+  header.appendChild(status);
+  card.appendChild(header);
+
+  const branch = document.createElement('div');
+  branch.className = 'card-branch';
+  branch.textContent = entry.branch || 'no branch';
+  card.appendChild(branch);
+
+  if (entry.initial_prompt) {
+    const prompt = document.createElement('div');
+    prompt.className = 'card-prompt';
+    prompt.textContent = entry.initial_prompt;
+    card.appendChild(prompt);
+  }
+
+  card.appendChild(createPipeline(entry.phase));
+
+  const footer = document.createElement('div');
+  footer.className = 'card-footer';
+  const time = document.createElement('span');
+  time.textContent = entry.last_seen;
+  footer.appendChild(time);
+
+  const links = document.createElement('span');
+  links.className = 'card-links';
+  if (entry.pr_url) {
+    const a = document.createElement('a');
+    a.href = entry.pr_url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = 'PR';
+    links.appendChild(a);
+  }
+  if (entry.issue_url) {
+    const a = document.createElement('a');
+    a.href = entry.issue_url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = 'Issue';
+    links.appendChild(a);
+  }
+  footer.appendChild(links);
+  card.appendChild(footer);
+
+  return card;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/roadmap');
+    const entries = await res.json();
+    const cardsEl = document.getElementById('cards');
+    const metaEl = document.getElementById('meta');
+
+    cardsEl.replaceChildren();
+
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No sessions registered. Use "devctx roadmap init" to get started.';
+      cardsEl.appendChild(empty);
+    } else {
+      entries.forEach(function(entry) {
+        cardsEl.appendChild(createCard(entry));
+      });
+    }
+
+    const now = new Date();
+    metaEl.textContent = entries.length + ' session(s) | Updated: ' + now.toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('meta').textContent = 'Error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

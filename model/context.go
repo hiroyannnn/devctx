@@ -11,6 +11,40 @@ const (
 	StatusDone       Status = "done"
 )
 
+type Phase string
+
+const (
+	PhaseIdle           Phase = "idle"
+	PhaseImplementation Phase = "implementation"
+	PhaseCommitted      Phase = "committed"
+	PhasePushed         Phase = "pushed"
+	PhasePROpen         Phase = "pr_open"
+	PhaseDone           Phase = "done"
+)
+
+func AllPhases() []Phase {
+	return []Phase{PhaseIdle, PhaseImplementation, PhaseCommitted, PhasePushed, PhasePROpen, PhaseDone}
+}
+
+func (p Phase) Label() string {
+	switch p {
+	case PhaseIdle:
+		return "Idle"
+	case PhaseImplementation:
+		return "Implementation"
+	case PhaseCommitted:
+		return "Committed"
+	case PhasePushed:
+		return "Pushed"
+	case PhasePROpen:
+		return "PR Open"
+	case PhaseDone:
+		return "Done"
+	default:
+		return string(p)
+	}
+}
+
 type Context struct {
 	Name           string            `yaml:"name"`
 	Worktree       string            `yaml:"worktree"`
@@ -26,6 +60,7 @@ type Context struct {
 	TotalTime      time.Duration     `yaml:"total_time,omitempty"`
 	IssueURL       string            `yaml:"issue_url,omitempty"`
 	PRURL          string            `yaml:"pr_url,omitempty"`
+	InitialPrompt  string            `yaml:"initial_prompt,omitempty"`
 }
 
 type Config struct {
