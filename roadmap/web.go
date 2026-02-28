@@ -4,7 +4,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -42,21 +45,27 @@ type Server struct {
 	StoreLoader StoreLoader
 	Scanner     *Scanner
 	Port        int
+
+	cacheMu      sync.RWMutex
+	cachedResult []byte
+	cacheExpiry  time.Time
 }
+
+const cacheTTL = 5 * time.Second
 
 // NewServer creates a new Server.
 func NewServer(loader StoreLoader, scanner *Scanner, port int) *Server {
 	return &Server{StoreLoader: loader, Scanner: scanner, Port: port}
 }
 
-// ListenAndServe starts the HTTP server.
+// ListenAndServe starts the HTTP server on localhost only.
 func (s *Server) ListenAndServe() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
 	mux.HandleFunc("/", s.handleIndex)
 
-	addr := fmt.Sprintf(":%d", s.Port)
-	fmt.Printf("Session Roadmap: http://localhost%s\n", addr)
+	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
+	fmt.Printf("Session Roadmap: http://%s\n", addr)
 	fmt.Println("Press Ctrl+C to stop")
 	return http.ListenAndServe(addr, mux)
 }
@@ -72,9 +81,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
+	// Return cached result if still valid
+	s.cacheMu.RLock()
+	if s.cachedResult != nil && time.Now().Before(s.cacheExpiry) {
+		data := s.cachedResult
+		s.cacheMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+	s.cacheMu.RUnlock()
+
 	store, err := s.StoreLoader.LoadStore()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("roadmap: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
 		return
 	}
 
@@ -98,6 +119,19 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	data, err := json.Marshal(entries)
+	if err != nil {
+		log.Printf("roadmap: failed to marshal entries: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Cache the result
+	s.cacheMu.Lock()
+	s.cachedResult = data
+	s.cacheExpiry = time.Now().Add(cacheTTL)
+	s.cacheMu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	w.Write(data)
 }
