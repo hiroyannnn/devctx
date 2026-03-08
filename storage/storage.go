@@ -32,6 +32,10 @@ func (s *Storage) configPath() string {
 	return filepath.Join(s.basePath, "config.yaml")
 }
 
+func (s *Storage) insightsPath() string {
+	return filepath.Join(s.basePath, "insights.yaml")
+}
+
 func (s *Storage) LoadStore() (*model.Store, error) {
 	store := &model.Store{}
 	data, err := os.ReadFile(s.contextsPath())
@@ -80,6 +84,29 @@ func (s *Storage) SaveConfig(config *model.Config) error {
 		return err
 	}
 	return os.WriteFile(s.configPath(), data, 0644)
+}
+
+func (s *Storage) LoadInsights() (*model.InsightStore, error) {
+	store := &model.InsightStore{}
+	data, err := os.ReadFile(s.insightsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return store, nil
+		}
+		return nil, err
+	}
+	if err := yaml.Unmarshal(data, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Storage) SaveInsights(store *model.InsightStore) error {
+	data, err := yaml.Marshal(store)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.insightsPath(), data, 0644)
 }
 
 func defaultConfig() *model.Config {

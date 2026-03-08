@@ -69,6 +69,45 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.card-insights {
+  background: #0d111766;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.insight-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.insight-label {
+  color: #8b949e;
+  min-width: 44px;
+  flex-shrink: 0;
+}
+.insight-value {
+  color: #c9d1d9;
+}
+.insight-freshness {
+  font-size: 0.7rem;
+  color: #484f58;
+  text-align: right;
+  margin-top: 4px;
+}
+.attention-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+.attention-active { background: #1f6feb33; color: #58a6ff; }
+.attention-waiting { background: #8957e533; color: #bc8cff; }
+.attention-idle { background: #30363d; color: #8b949e; }
+.attention-blocked { background: #da363333; color: #f85149; }
 .pipeline {
   display: flex;
   gap: 4px;
@@ -158,6 +197,20 @@ function phaseIndex(phase) {
   return idx >= 0 ? idx : 0;
 }
 
+function createInsightRow(label, value) {
+  const row = document.createElement('div');
+  row.className = 'insight-row';
+  const labelEl = document.createElement('span');
+  labelEl.className = 'insight-label';
+  labelEl.textContent = label;
+  const valueEl = document.createElement('span');
+  valueEl.className = 'insight-value';
+  valueEl.textContent = value;
+  row.appendChild(labelEl);
+  row.appendChild(valueEl);
+  return row;
+}
+
 function createPipeline(currentPhase) {
   const container = document.createElement('div');
   container.className = 'pipeline';
@@ -212,7 +265,36 @@ function createCard(entry) {
   branch.textContent = entry.branch || 'no branch';
   card.appendChild(branch);
 
-  if (entry.initial_prompt) {
+  if (entry.goal || entry.current_focus || entry.next_step) {
+    const insights = document.createElement('div');
+    insights.className = 'card-insights';
+
+    if (entry.goal) {
+      const row = createInsightRow('Goal', entry.goal);
+      insights.appendChild(row);
+    }
+    if (entry.current_focus) {
+      const row = createInsightRow('Focus', entry.current_focus);
+      insights.appendChild(row);
+    }
+    if (entry.next_step) {
+      const row = createInsightRow('Next', entry.next_step);
+      insights.appendChild(row);
+    }
+    if (entry.attention_state) {
+      const badge = document.createElement('span');
+      badge.className = 'attention-badge attention-' + entry.attention_state;
+      badge.textContent = entry.attention_state;
+      insights.appendChild(badge);
+    }
+    if (entry.inferred_at) {
+      const fresh = document.createElement('div');
+      fresh.className = 'insight-freshness';
+      fresh.textContent = 'Inferred: ' + entry.inferred_at;
+      insights.appendChild(fresh);
+    }
+    card.appendChild(insights);
+  } else if (entry.initial_prompt) {
     const prompt = document.createElement('div');
     prompt.className = 'card-prompt';
     prompt.textContent = entry.initial_prompt;

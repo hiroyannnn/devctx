@@ -24,27 +24,38 @@ type StoreLoader interface {
 // Compile-time check that storage.Storage satisfies StoreLoader.
 var _ StoreLoader = (*storage.Storage)(nil)
 
+// InsightLoader abstracts insight loading for testing.
+type InsightLoader interface {
+	LoadInsights() (*model.InsightStore, error)
+}
+
 // RoadmapEntry is the JSON response structure for each context.
 type RoadmapEntry struct {
-	Name          string       `json:"name"`
-	Branch        string       `json:"branch"`
-	Status        model.Status `json:"status"`
-	Phase         model.Phase  `json:"phase"`
-	InitialPrompt string       `json:"initial_prompt,omitempty"`
-	Worktree      string       `json:"worktree"`
-	PRURL         string       `json:"pr_url,omitempty"`
-	IssueURL      string       `json:"issue_url,omitempty"`
-	Note          string       `json:"note,omitempty"`
-	SessionName   string       `json:"session_name,omitempty"`
-	CreatedAt     string       `json:"created_at"`
-	LastSeen      string       `json:"last_seen"`
+	Name           string              `json:"name"`
+	Branch         string              `json:"branch"`
+	Status         model.Status        `json:"status"`
+	Phase          model.Phase         `json:"phase"`
+	InitialPrompt  string              `json:"initial_prompt,omitempty"`
+	Worktree       string              `json:"worktree"`
+	PRURL          string              `json:"pr_url,omitempty"`
+	IssueURL       string              `json:"issue_url,omitempty"`
+	Note           string              `json:"note,omitempty"`
+	SessionName    string              `json:"session_name,omitempty"`
+	CreatedAt      string              `json:"created_at"`
+	LastSeen       string              `json:"last_seen"`
+	Goal           string              `json:"goal,omitempty"`
+	CurrentFocus   string              `json:"current_focus,omitempty"`
+	NextStep       string              `json:"next_step,omitempty"`
+	AttentionState model.AttentionState `json:"attention_state,omitempty"`
+	InferredAt     string              `json:"inferred_at,omitempty"`
 }
 
 // Server serves the roadmap web UI.
 type Server struct {
-	StoreLoader StoreLoader
-	Scanner     *Scanner
-	Port        int
+	StoreLoader   StoreLoader
+	InsightLoader InsightLoader
+	Scanner       *Scanner
+	Port          int
 
 	cacheMu      sync.RWMutex
 	cachedResult []byte
@@ -54,8 +65,8 @@ type Server struct {
 const cacheTTL = 5 * time.Second
 
 // NewServer creates a new Server.
-func NewServer(loader StoreLoader, scanner *Scanner, port int) *Server {
-	return &Server{StoreLoader: loader, Scanner: scanner, Port: port}
+func NewServer(loader StoreLoader, insightLoader InsightLoader, scanner *Scanner, port int) *Server {
+	return &Server{StoreLoader: loader, InsightLoader: insightLoader, Scanner: scanner, Port: port}
 }
 
 // ListenAndServe starts the HTTP server on localhost only.
@@ -101,6 +112,12 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 
 	active := store.Active()
 
+	// Load insights (non-fatal if fails)
+	var insights *model.InsightStore
+	if s.InsightLoader != nil {
+		insights, _ = s.InsightLoader.LoadInsights()
+	}
+
 	entries := make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
 		phase := ctx.Phase
@@ -108,7 +125,8 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 		if phase == "" && ctx.Worktree != "" {
 			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
 		}
-		entries = append(entries, RoadmapEntry{
+
+		entry := RoadmapEntry{
 			Name:          ctx.Name,
 			Branch:        ctx.Branch,
 			Status:        ctx.Status,
@@ -121,7 +139,22 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			SessionName:   ctx.SessionName,
 			CreatedAt:     ctx.CreatedAt.Format("2006-01-02 15:04"),
 			LastSeen:      ctx.LastSeen.Format("2006-01-02 15:04"),
-		})
+		}
+
+		// Merge insight data
+		if insights != nil {
+			if insight := insights.Get(ctx.Name); insight != nil {
+				entry.Goal = insight.Goal
+				entry.CurrentFocus = insight.CurrentFocus
+				entry.NextStep = insight.NextStep
+				entry.AttentionState = insight.AttentionState
+				if !insight.InferredAt.IsZero() {
+					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
+				}
+			}
+		}
+
+		entries = append(entries, entry)
 	}
 
 	data, err := json.Marshal(entries)

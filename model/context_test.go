@@ -156,6 +156,63 @@ func TestContextPhaseFields(t *testing.T) {
 	}
 }
 
+func TestInsightStore(t *testing.T) {
+	store := &InsightStore{}
+
+	// Initially empty
+	if got := store.Get("auth"); got != nil {
+		t.Fatalf("Get(auth) = %#v, want nil", got)
+	}
+
+	now := time.Now()
+	insight := SessionInsight{
+		Name:             "auth",
+		Goal:             "OAuth認証を実装する",
+		CurrentFocus:     "tokenリフレッシュのテスト",
+		NextStep:         "エラーハンドリング追加",
+		AttentionState:   AttentionActive,
+		InferredAt:       now,
+		TranscriptOffset: 4096,
+	}
+
+	store.Set(insight)
+
+	got := store.Get("auth")
+	if got == nil {
+		t.Fatal("Get(auth) returned nil after Set")
+	}
+	if got.Goal != "OAuth認証を実装する" {
+		t.Errorf("Goal = %q, want %q", got.Goal, "OAuth認証を実装する")
+	}
+	if got.AttentionState != AttentionActive {
+		t.Errorf("AttentionState = %q, want %q", got.AttentionState, AttentionActive)
+	}
+	if got.TranscriptOffset != 4096 {
+		t.Errorf("TranscriptOffset = %d, want 4096", got.TranscriptOffset)
+	}
+
+	// Update existing
+	insight.Goal = "OAuth2認証を実装する"
+	store.Set(insight)
+	got = store.Get("auth")
+	if got.Goal != "OAuth2認証を実装する" {
+		t.Errorf("Goal after update = %q, want %q", got.Goal, "OAuth2認証を実装する")
+	}
+	if len(store.Insights) != 1 {
+		t.Errorf("Insights len = %d, want 1 (no duplicates)", len(store.Insights))
+	}
+}
+
+func TestAttentionStateConstants(t *testing.T) {
+	states := []AttentionState{AttentionActive, AttentionWaiting, AttentionIdle, AttentionBlocked}
+	expected := []string{"active", "waiting", "idle", "blocked"}
+	for i, s := range states {
+		if string(s) != expected[i] {
+			t.Errorf("state[%d] = %q, want %q", i, s, expected[i])
+		}
+	}
+}
+
 func hasContext(contexts []Context, name string) bool {
 	for _, c := range contexts {
 		if c.Name == name {

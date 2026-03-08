@@ -121,6 +121,79 @@ func TestHandleAPIRoadmap_WithContexts(t *testing.T) {
 	}
 }
 
+type mockInsightLoader struct {
+	store *model.InsightStore
+	err   error
+}
+
+func (m *mockInsightLoader) LoadInsights() (*model.InsightStore, error) {
+	return m.store, m.err
+}
+
+func TestHandleAPIRoadmap_WithInsights(t *testing.T) {
+	now := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:     "auth",
+				Branch:   "feature/auth",
+				Worktree: "/tmp/auth",
+				Status:   model.StatusInProgress,
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+	insights := &model.InsightStore{
+		Insights: []model.SessionInsight{
+			{
+				Name:           "auth",
+				Goal:           "OAuth認証を実装する",
+				CurrentFocus:   "tokenリフレッシュ",
+				NextStep:       "エラーハンドリング追加",
+				AttentionState: model.AttentionActive,
+				InferredAt:     now,
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader:   &mockStoreLoader{store: store},
+		InsightLoader: &mockInsightLoader{store: insights},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{
+				"rev-parse --git-dir": {err: fmt.Errorf("not found")},
+			}},
+			Gh: &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmap(w, req)
+
+	var entries []RoadmapEntry
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+
+	if entries[0].Goal != "OAuth認証を実装する" {
+		t.Errorf("Goal = %q, want %q", entries[0].Goal, "OAuth認証を実装する")
+	}
+	if entries[0].CurrentFocus != "tokenリフレッシュ" {
+		t.Errorf("CurrentFocus = %q", entries[0].CurrentFocus)
+	}
+	if entries[0].NextStep != "エラーハンドリング追加" {
+		t.Errorf("NextStep = %q", entries[0].NextStep)
+	}
+	if entries[0].AttentionState != model.AttentionActive {
+		t.Errorf("AttentionState = %q", entries[0].AttentionState)
+	}
+}
+
 func TestHandleIndex(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{store: &model.Store{}},

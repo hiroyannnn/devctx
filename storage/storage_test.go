@@ -149,3 +149,46 @@ func TestSaveConfigAndLoadConfigRoundTrip(t *testing.T) {
 		t.Fatalf("loaded config mismatch\nwant: %#v\ngot:  %#v", config, loaded)
 	}
 }
+
+func TestLoadInsightsReturnsEmptyWhenMissing(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+
+	store, err := s.LoadInsights()
+	if err != nil {
+		t.Fatalf("LoadInsights() error = %v", err)
+	}
+	if len(store.Insights) != 0 {
+		t.Fatalf("LoadInsights() insights len = %d, want 0", len(store.Insights))
+	}
+}
+
+func TestSaveInsightsAndLoadInsightsRoundTrip(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+
+	store := &model.InsightStore{
+		Insights: []model.SessionInsight{
+			{
+				Name:             "auth",
+				Goal:             "OAuth認証を実装する",
+				CurrentFocus:     "tokenリフレッシュ",
+				NextStep:         "エラーハンドリング追加",
+				AttentionState:   model.AttentionActive,
+				InferredAt:       time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC),
+				TranscriptOffset: 4096,
+			},
+		},
+	}
+
+	if err := s.SaveInsights(store); err != nil {
+		t.Fatalf("SaveInsights() error = %v", err)
+	}
+
+	loaded, err := s.LoadInsights()
+	if err != nil {
+		t.Fatalf("LoadInsights() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(store, loaded) {
+		t.Fatalf("loaded insights mismatch\nwant: %#v\ngot:  %#v", store, loaded)
+	}
+}

@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hiroyannnn/devctx/model"
@@ -236,7 +238,7 @@ The dashboard auto-refreshes every 5 seconds.`,
 		}
 
 		scanner := roadmap.NewScanner()
-		server := roadmap.NewServer(s, scanner, roadmapServePort)
+		server := roadmap.NewServer(s, s, scanner, roadmapServePort)
 		return server.ListenAndServe()
 	},
 }
@@ -248,6 +250,133 @@ func phaseIndex(phase model.Phase) int {
 		}
 	}
 	return 0
+}
+
+// --- roadmap analyze ---
+
+var roadmapAnalyzeAll bool
+
+var roadmapAnalyzeCmd = &cobra.Command{
+	Use:   "analyze [name]",
+	Short: "Analyze sessions using Claude to infer goal, focus, and next steps",
+	Long: `Read the session transcript and use Claude CLI to generate insights:
+goal, current focus, next step, and attention state.
+
+Without arguments, analyzes the context matching the current directory.
+With --all, analyzes all active contexts.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := storage.New()
+		if err != nil {
+			return err
+		}
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
+		}
+		insights, err := s.LoadInsights()
+		if err != nil {
+			return err
+		}
+
+		var targets []*model.Context
+
+		if roadmapAnalyzeAll {
+			for i := range store.Contexts {
+				if store.Contexts[i].Status != model.StatusDone {
+					targets = append(targets, &store.Contexts[i])
+				}
+			}
+		} else if len(args) > 0 {
+			ctx := store.FindByName(args[0])
+			if ctx == nil {
+				return fmt.Errorf("context [%s] not found", args[0])
+			}
+			targets = append(targets, ctx)
+		} else {
+			cwd, _ := os.Getwd()
+			worktreeRoot := getWorktreeRoot(cwd)
+			if worktreeRoot != "" {
+				cwd = worktreeRoot
+			}
+			ctx := store.FindByWorktree(cwd)
+			if ctx == nil {
+				return fmt.Errorf("no context found for current directory\nSpecify a name or use --all")
+			}
+			targets = append(targets, ctx)
+		}
+
+		if len(targets) == 0 {
+			fmt.Println("No active contexts to analyze.")
+			return nil
+		}
+
+		for _, ctx := range targets {
+			fmt.Printf("Analyzing [%s]...\n", ctx.Name)
+
+			if ctx.TranscriptPath == "" {
+				fmt.Printf("  Skipped: no transcript path\n")
+				continue
+			}
+
+			// Read transcript
+			data, err := os.ReadFile(ctx.TranscriptPath)
+			if err != nil {
+				fmt.Printf("  Skipped: cannot read transcript: %v\n", err)
+				continue
+			}
+
+			// Get previous offset for incremental processing
+			existing := insights.Get(ctx.Name)
+			var prevOffset int64
+			if existing != nil {
+				prevOffset = existing.TranscriptOffset
+			}
+
+			transcript, newOffset := roadmap.ReadTranscriptTail(string(data), 50, prevOffset)
+			if transcript == "" {
+				fmt.Printf("  Skipped: no new transcript content\n")
+				continue
+			}
+
+			// Build prompt and call Claude CLI
+			prompt := roadmap.BuildAnalyzePrompt(ctx, transcript)
+			response, err := runClaude(prompt)
+			if err != nil {
+				fmt.Printf("  Error: %v\n", err)
+				continue
+			}
+
+			// Parse response
+			insight, err := roadmap.ParseAnalyzeResponse(ctx.Name, response)
+			if err != nil {
+				fmt.Printf("  Error parsing response: %v\n", err)
+				continue
+			}
+			insight.TranscriptOffset = newOffset
+
+			insights.Set(*insight)
+
+			fmt.Printf("  Goal: %s\n", insight.Goal)
+			fmt.Printf("  Focus: %s\n", insight.CurrentFocus)
+			fmt.Printf("  Next: %s\n", insight.NextStep)
+			fmt.Printf("  State: %s\n", insight.AttentionState)
+		}
+
+		if err := s.SaveInsights(insights); err != nil {
+			return err
+		}
+
+		return nil
+	},
+}
+
+func runClaude(prompt string) (string, error) {
+	cmd := exec.Command("claude", "--print", "--model", "claude-sonnet-4-20250514", prompt)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("claude CLI failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // --- roadmap refresh ---
@@ -307,6 +436,9 @@ func init() {
 	roadmapCmd.AddCommand(roadmapStatusCmd)
 	roadmapCmd.AddCommand(roadmapServeCmd)
 	roadmapCmd.AddCommand(roadmapRefreshCmd)
+	roadmapCmd.AddCommand(roadmapAnalyzeCmd)
+
+	roadmapAnalyzeCmd.Flags().BoolVar(&roadmapAnalyzeAll, "all", false, "Analyze all active contexts")
 
 	roadmapInitCmd.Flags().StringVar(&roadmapInitPrompt, "prompt", "", "Initial prompt for the session")
 	roadmapInitCmd.Flags().StringVar(&roadmapInitWorktree, "worktree", "", "Worktree path (defaults to current directory)")
