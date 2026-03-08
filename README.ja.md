@@ -90,7 +90,9 @@ devctx list
 | `devctx register <name>` | コンテキストを登録（通常は hook で自動） |
 | `devctx resume <name>` | コンテキストを再開 |
 | `devctx move <name> <status>` | ステータスを変更 |
+| `devctx touch <name>` | コンテキストの最終アクティブ時刻を更新 |
 | `devctx archive <name>` | 完了としてアーカイブ |
+| `devctx remove <name>` | コンテキストの追跡を解除 |
 
 ### 新規作成・設定
 

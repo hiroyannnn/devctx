@@ -90,7 +90,9 @@ devctx list
 | `devctx register <name>` | Register a context (usually auto via hook) |
 | `devctx resume <name>` | Resume a context |
 | `devctx move <name> <status>` | Change status |
+| `devctx touch <name>` | Update context's last-seen timestamp |
 | `devctx archive <name>` | Archive as done |
+| `devctx remove <name>` | Remove a context from tracking |
 
 ### Creation & Configuration
 
