@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hiroyannnn/devctx/roadmap"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -80,6 +81,10 @@ If called with a name, updates that specific context.`,
 		}
 
 		ctx.LastSeen = now
+
+		// Auto-detect phase (fast mode for hook performance)
+		scanner := roadmap.NewScanner()
+		scanner.RefreshPhase(ctx, roadmap.ScanModeFast)
 
 		if err := s.SaveStore(store); err != nil {
 			return err

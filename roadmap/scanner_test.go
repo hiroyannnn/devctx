@@ -42,6 +42,61 @@ func (m *mockGhRunner) Available() bool {
 	return m.available
 }
 
+func TestRefreshPhase_FastMode_SkipsGh(t *testing.T) {
+	git := &mockGitRunner{results: map[string]mockResult{
+		"rev-parse --git-dir":               {output: ".git"},
+		"rev-parse --verify origin/main":    {output: "abc123"},
+		"rev-parse --verify origin/feature": {err: fmt.Errorf("not found")},
+		"log origin/main..HEAD --oneline":   {output: "abc123 some commit"},
+		"status --porcelain":                {output: ""},
+	}}
+	gh := &mockGhRunner{
+		available: true,
+		results: map[string]mockResult{
+			// PR exists, but fast mode should NOT check this
+			"pr list --head feature --state merged --json state --limit 1": {output: "[]"},
+			"pr list --head feature --state open --json state --limit 1":   {output: `[{"state":"OPEN"}]`},
+		},
+	}
+
+	scanner := &Scanner{Git: git, Gh: gh}
+	ctx := &model.Context{Name: "test", Worktree: "/tmp/repo", Branch: "feature"}
+
+	scanner.RefreshPhase(ctx, ScanModeFast)
+
+	if ctx.Phase != model.PhaseCommitted {
+		t.Errorf("RefreshPhase(fast) Phase = %q, want %q", ctx.Phase, model.PhaseCommitted)
+	}
+	if ctx.PhaseCheckedAt.IsZero() {
+		t.Error("RefreshPhase(fast) PhaseCheckedAt should be set")
+	}
+}
+
+func TestRefreshPhase_FullMode_UsesGh(t *testing.T) {
+	git := &mockGitRunner{results: map[string]mockResult{
+		"rev-parse --git-dir": {output: ".git"},
+	}}
+	gh := &mockGhRunner{
+		available: true,
+		results: map[string]mockResult{
+			"pr list --head feature --state merged --json state --limit 1": {output: "[]"},
+			"pr list --head feature --state open --json state --limit 1":   {output: `[{"state":"OPEN"}]`},
+		},
+	}
+
+	scanner := &Scanner{Git: git, Gh: gh}
+	ctx := &model.Context{Name: "test", Worktree: "/tmp/repo", Branch: "feature"}
+
+	scanner.RefreshPhase(ctx, ScanModeFull)
+
+	if ctx.Phase != model.PhasePROpen {
+		t.Errorf("RefreshPhase(full) Phase = %q, want %q", ctx.Phase, model.PhasePROpen)
+	}
+	if ctx.PhaseCheckedAt.IsZero() {
+		t.Error("RefreshPhase(full) PhaseCheckedAt should be set")
+	}
+}
+
 func TestScanContext_EmptyWorktree(t *testing.T) {
 	scanner := &Scanner{
 		Git: &mockGitRunner{results: map[string]mockResult{}},

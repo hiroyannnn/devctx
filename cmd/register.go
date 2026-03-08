@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hiroyannnn/devctx/model"
+	"github.com/hiroyannnn/devctx/roadmap"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -84,6 +85,10 @@ If called manually, uses current directory and prompts for name.`,
 			if branch != "" {
 				existing.Branch = branch
 			}
+			// Auto-detect phase (fast mode for hook performance)
+			scanner := roadmap.NewScanner()
+			scanner.RefreshPhase(existing, roadmap.ScanModeFast)
+
 			if err := s.SaveStore(store); err != nil {
 				return err
 			}
@@ -123,6 +128,10 @@ If called manually, uses current directory and prompts for name.`,
 			LastSeen:       time.Now(),
 			Checklist:      make(map[string]bool),
 		}
+
+		// Auto-detect phase (fast mode for hook performance)
+		scanner := roadmap.NewScanner()
+		scanner.RefreshPhase(&ctx, roadmap.ScanModeFast)
 
 		store.Add(ctx)
 		if err := s.SaveStore(store); err != nil {

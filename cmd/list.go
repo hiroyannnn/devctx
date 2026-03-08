@@ -354,6 +354,14 @@ func formatCard(ctx model.Context) string {
 		b.WriteString("\n")
 	}
 
+	// Phase badge
+	if ctx.Phase != "" {
+		badgeStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(phaseColor(ctx.Phase)))
+		b.WriteString(badgeStyle.Render(phaseBadge(ctx.Phase)))
+		b.WriteString("\n")
+	}
+
 	// Branch (truncate if too long)
 	branch := ctx.Branch
 	if len(branch) > 24 {
@@ -390,6 +398,44 @@ func formatCard(ctx model.Context) string {
 	}
 
 	return b.String()
+}
+
+func phaseBadge(phase model.Phase) string {
+	switch phase {
+	case model.PhaseIdle:
+		return "○ Idle"
+	case model.PhaseImplementation:
+		return "● Impl"
+	case model.PhaseCommitted:
+		return "● Committed"
+	case model.PhasePushed:
+		return "● Pushed"
+	case model.PhasePROpen:
+		return "● PR Open"
+	case model.PhaseDone:
+		return "● Done"
+	default:
+		return ""
+	}
+}
+
+func phaseColor(phase model.Phase) string {
+	switch phase {
+	case model.PhaseIdle:
+		return "8"
+	case model.PhaseImplementation:
+		return "11"
+	case model.PhaseCommitted:
+		return "13"
+	case model.PhasePushed:
+		return "14"
+	case model.PhasePROpen:
+		return "12"
+	case model.PhaseDone:
+		return "10"
+	default:
+		return "8"
+	}
 }
 
 func shortenPath(path string) string {

@@ -250,12 +250,63 @@ func phaseIndex(phase model.Phase) int {
 	return 0
 }
 
+// --- roadmap refresh ---
+
+var roadmapRefreshCmd = &cobra.Command{
+	Use:   "refresh",
+	Short: "Refresh phases for all active contexts (full scan with gh)",
+	Long: `Re-scan all active contexts using both git and gh CLI to update
+their development phase. This is useful when you want accurate PR-based
+phase detection for all sessions at once.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := storage.New()
+		if err != nil {
+			return err
+		}
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
+		}
+
+		contexts := store.Active()
+		if len(contexts) == 0 {
+			fmt.Println("No active contexts.")
+			return nil
+		}
+
+		scanner := roadmap.NewScanner()
+		updated := 0
+		for i := range store.Contexts {
+			ctx := &store.Contexts[i]
+			if ctx.Status == model.StatusDone {
+				continue
+			}
+			oldPhase := ctx.Phase
+			scanner.RefreshPhase(ctx, roadmap.ScanModeFull)
+			if ctx.Phase != oldPhase {
+				updated++
+				fmt.Printf("  [%s] %s → %s\n", ctx.Name, oldPhase.Label(), ctx.Phase.Label())
+			} else {
+				fmt.Printf("  [%s] %s (unchanged)\n", ctx.Name, ctx.Phase.Label())
+			}
+		}
+
+		if err := s.SaveStore(store); err != nil {
+			return err
+		}
+
+		fmt.Printf("\nRefreshed %d contexts (%d changed)\n", len(contexts), updated)
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(roadmapCmd)
 	roadmapCmd.AddCommand(roadmapInitCmd)
 	roadmapCmd.AddCommand(roadmapScanCmd)
 	roadmapCmd.AddCommand(roadmapStatusCmd)
 	roadmapCmd.AddCommand(roadmapServeCmd)
+	roadmapCmd.AddCommand(roadmapRefreshCmd)
 
 	roadmapInitCmd.Flags().StringVar(&roadmapInitPrompt, "prompt", "", "Initial prompt for the session")
 	roadmapInitCmd.Flags().StringVar(&roadmapInitWorktree, "worktree", "", "Worktree path (defaults to current directory)")

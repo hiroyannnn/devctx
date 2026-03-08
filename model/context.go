@@ -41,6 +41,9 @@ func (p Phase) Label() string {
 	case PhaseDone:
 		return "Done"
 	default:
+		if p == "" {
+			return "(unknown)"
+		}
 		return string(p)
 	}
 }
@@ -61,6 +64,8 @@ type Context struct {
 	IssueURL       string            `yaml:"issue_url,omitempty"`
 	PRURL          string            `yaml:"pr_url,omitempty"`
 	InitialPrompt  string            `yaml:"initial_prompt,omitempty"`
+	Phase          Phase             `yaml:"phase,omitempty"`
+	PhaseCheckedAt time.Time         `yaml:"phase_checked_at,omitempty"`
 }
 
 type Config struct {

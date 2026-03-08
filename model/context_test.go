@@ -107,7 +107,8 @@ func TestPhaseLabel(t *testing.T) {
 		{PhasePushed, "Pushed"},
 		{PhasePROpen, "PR Open"},
 		{PhaseDone, "Done"},
-		{Phase("unknown"), "unknown"},
+		{Phase("custom"), "custom"},
+		{Phase(""), "(unknown)"},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +132,27 @@ func TestContextInitialPrompt(t *testing.T) {
 	}
 	if ctx.InitialPrompt != "認証機能を実装して" {
 		t.Errorf("InitialPrompt = %q, want %q", ctx.InitialPrompt, "認証機能を実装して")
+	}
+}
+
+func TestContextPhaseFields(t *testing.T) {
+	now := time.Now()
+	store := &Store{}
+	store.Add(Context{
+		Name:           "test",
+		Phase:          PhaseCommitted,
+		PhaseCheckedAt: now,
+	})
+
+	ctx := store.FindByName("test")
+	if ctx == nil {
+		t.Fatal("FindByName(test) returned nil")
+	}
+	if ctx.Phase != PhaseCommitted {
+		t.Errorf("Phase = %q, want %q", ctx.Phase, PhaseCommitted)
+	}
+	if !ctx.PhaseCheckedAt.Equal(now) {
+		t.Errorf("PhaseCheckedAt = %v, want %v", ctx.PhaseCheckedAt, now)
 	}
 }
 

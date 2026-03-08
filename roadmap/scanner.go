@@ -3,6 +3,7 @@ package roadmap
 import (
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/hiroyannnn/devctx/model"
 )
@@ -43,6 +44,16 @@ func (r *ExecGhRunner) Available() bool {
 	return err == nil
 }
 
+// ScanMode controls how thorough the scan should be.
+type ScanMode int
+
+const (
+	// ScanModeFast uses only local git commands (no gh CLI).
+	ScanModeFast ScanMode = iota
+	// ScanModeFull uses both git and gh CLI for PR detection.
+	ScanModeFull
+)
+
 // Scanner detects the Phase for contexts.
 type Scanner struct {
 	Git GitRunner
@@ -57,8 +68,18 @@ func NewScanner() *Scanner {
 	}
 }
 
-// ScanContext determines the Phase for a single context.
+// RefreshPhase scans and updates the Phase and PhaseCheckedAt fields on the context.
+func (s *Scanner) RefreshPhase(ctx *model.Context, mode ScanMode) {
+	ctx.Phase = s.scanWithMode(ctx, mode)
+	ctx.PhaseCheckedAt = time.Now()
+}
+
+// ScanContext determines the Phase for a single context (full mode).
 func (s *Scanner) ScanContext(ctx *model.Context) model.Phase {
+	return s.scanWithMode(ctx, ScanModeFull)
+}
+
+func (s *Scanner) scanWithMode(ctx *model.Context, mode ScanMode) model.Phase {
 	if ctx.Worktree == "" || ctx.Branch == "" {
 		return model.PhaseIdle
 	}
@@ -67,7 +88,7 @@ func (s *Scanner) ScanContext(ctx *model.Context) model.Phase {
 		return model.PhaseIdle
 	}
 
-	if s.Gh.Available() {
+	if mode == ScanModeFull && s.Gh.Available() {
 		if phase := s.checkPRPhase(ctx); phase != "" {
 			return phase
 		}
