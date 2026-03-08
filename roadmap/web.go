@@ -99,15 +99,20 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	phases := s.Scanner.ScanAll(store.Contexts)
+	active := store.Active()
 
-	entries := make([]RoadmapEntry, 0, len(store.Contexts))
-	for _, ctx := range store.Contexts {
+	entries := make([]RoadmapEntry, 0, len(active))
+	for _, ctx := range active {
+		phase := ctx.Phase
+		// If no cached phase, do a fast scan for this context
+		if phase == "" && ctx.Worktree != "" {
+			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
+		}
 		entries = append(entries, RoadmapEntry{
 			Name:          ctx.Name,
 			Branch:        ctx.Branch,
 			Status:        ctx.Status,
-			Phase:         phases[ctx.Name],
+			Phase:         phase,
 			InitialPrompt: ctx.InitialPrompt,
 			Worktree:      ctx.Worktree,
 			PRURL:         ctx.PRURL,
