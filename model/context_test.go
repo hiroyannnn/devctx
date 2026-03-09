@@ -203,6 +203,57 @@ func TestInsightStore(t *testing.T) {
 	}
 }
 
+func TestSessionInsightTopicsAndTasks(t *testing.T) {
+	store := &InsightStore{}
+	insight := SessionInsight{
+		Name: "auth",
+		Goal: "OAuth認証を実装する",
+		Topics: []SemanticTopic{
+			{ID: "t1", Name: "認証フロー", Keywords: []string{"OAuth", "token"}, Source: "llm"},
+			{ID: "t2", Name: "エラーハンドリング", Source: "git"},
+		},
+		Tasks: []TaskItem{
+			{Title: "トークンリフレッシュ実装", Status: TaskDone, TopicID: "t1", Source: "git"},
+			{Title: "エラーハンドリング追加", Status: TaskInProgress, TopicID: "t2", Source: "llm"},
+			{Title: "テスト追加", Status: TaskPlanned, Source: "llm"},
+		},
+	}
+
+	store.Set(insight)
+	got := store.Get("auth")
+	if got == nil {
+		t.Fatal("Get(auth) returned nil")
+	}
+	if len(got.Topics) != 2 {
+		t.Fatalf("Topics len = %d, want 2", len(got.Topics))
+	}
+	if got.Topics[0].Name != "認証フロー" {
+		t.Errorf("Topics[0].Name = %q, want 認証フロー", got.Topics[0].Name)
+	}
+	if got.Topics[0].Source != "llm" {
+		t.Errorf("Topics[0].Source = %q, want llm", got.Topics[0].Source)
+	}
+	if len(got.Tasks) != 3 {
+		t.Fatalf("Tasks len = %d, want 3", len(got.Tasks))
+	}
+	if got.Tasks[0].Status != TaskDone {
+		t.Errorf("Tasks[0].Status = %q, want done", got.Tasks[0].Status)
+	}
+	if got.Tasks[1].TopicID != "t2" {
+		t.Errorf("Tasks[1].TopicID = %q, want t2", got.Tasks[1].TopicID)
+	}
+}
+
+func TestTaskStatusConstants(t *testing.T) {
+	statuses := []TaskStatus{TaskPlanned, TaskInProgress, TaskDone, TaskBlocked}
+	expected := []string{"planned", "in_progress", "done", "blocked"}
+	for i, s := range statuses {
+		if string(s) != expected[i] {
+			t.Errorf("TaskStatus[%d] = %q, want %q", i, s, expected[i])
+		}
+	}
+}
+
 func TestAttentionStateConstants(t *testing.T) {
 	states := []AttentionState{AttentionActive, AttentionWaiting, AttentionIdle, AttentionBlocked}
 	expected := []string{"active", "waiting", "idle", "blocked"}

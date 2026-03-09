@@ -38,7 +38,13 @@ func BuildAnalyzePrompt(ctx *model.Context, transcript string) string {
   "goal": "このセッションが達成しようとしていること（1行）",
   "current_focus": "今取り組んでいるサブタスク（1行）",
   "next_step": "次にやるべきこと（1行）",
-  "attention_state": "active|waiting|idle|blocked のいずれか"
+  "attention_state": "active|waiting|idle|blocked のいずれか",
+  "topics": [
+    {"name": "トピック名", "keywords": ["関連キーワード"]}
+  ],
+  "tasks": [
+    {"title": "タスク名", "status": "planned|in_progress|done|blocked", "topic": "関連トピック名"}
+  ]
 }
 
 attention_stateの判定基準:
@@ -47,6 +53,8 @@ attention_stateの判定基準:
 - idle: 作業が一段落して次の指示待ち
 - blocked: エラーや問題で詰まっている
 
+topicsはこのセッションで扱っている意味的なテーマ（2-5個程度）。
+tasksは具体的な作業項目とその状態。
 JSONのみを出力してください。`)
 
 	return b.String()
@@ -54,10 +62,23 @@ JSONのみを出力してください。`)
 
 // analyzeResponse is the expected JSON structure from the LLM.
 type analyzeResponse struct {
-	Goal           string `json:"goal"`
-	CurrentFocus   string `json:"current_focus"`
-	NextStep       string `json:"next_step"`
-	AttentionState string `json:"attention_state"`
+	Goal           string              `json:"goal"`
+	CurrentFocus   string              `json:"current_focus"`
+	NextStep       string              `json:"next_step"`
+	AttentionState string              `json:"attention_state"`
+	Topics         []analyzeTopicResp  `json:"topics,omitempty"`
+	Tasks          []analyzeTaskResp   `json:"tasks,omitempty"`
+}
+
+type analyzeTopicResp struct {
+	Name     string   `json:"name"`
+	Keywords []string `json:"keywords,omitempty"`
+}
+
+type analyzeTaskResp struct {
+	Title  string `json:"title"`
+	Status string `json:"status"`
+	Topic  string `json:"topic,omitempty"`
 }
 
 var jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
@@ -91,14 +112,53 @@ func ParseAnalyzeResponse(name string, response string) (*model.SessionInsight, 
 		state = model.AttentionIdle
 	}
 
-	return &model.SessionInsight{
+	insight := &model.SessionInsight{
 		Name:           name,
 		Goal:           resp.Goal,
 		CurrentFocus:   resp.CurrentFocus,
 		NextStep:       resp.NextStep,
 		AttentionState: state,
 		InferredAt:     time.Now(),
-	}, nil
+	}
+
+	// Parse LLM-inferred topics
+	for _, t := range resp.Topics {
+		if t.Name == "" {
+			continue
+		}
+		insight.Topics = append(insight.Topics, model.SemanticTopic{
+			ID:       topicID(t.Name),
+			Name:     t.Name,
+			Keywords: t.Keywords,
+			Source:   "llm",
+		})
+	}
+
+	// Parse LLM-inferred tasks
+	for _, t := range resp.Tasks {
+		if t.Title == "" {
+			continue
+		}
+		status := model.TaskStatus(t.Status)
+		switch status {
+		case model.TaskPlanned, model.TaskInProgress, model.TaskDone, model.TaskBlocked:
+			// valid
+		default:
+			status = model.TaskPlanned
+		}
+		task := model.TaskItem{
+			Title:  t.Title,
+			Status: status,
+			Source: "llm",
+		}
+		// Link to topic by name
+		if t.Topic != "" {
+			task.TopicID = topicID(t.Topic)
+		}
+		insight.Tasks = append(insight.Tasks, task)
+	}
+
+	return insight, nil
 }
 
 // ReadTranscriptTail reads the last maxLines lines from the transcript content.

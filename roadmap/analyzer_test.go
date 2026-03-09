@@ -85,6 +85,79 @@ func TestParseAnalyzeResponse_ExtractsJSONFromMarkdown(t *testing.T) {
 	}
 }
 
+func TestParseAnalyzeResponse_WithTopicsAndTasks(t *testing.T) {
+	response := `{
+  "goal": "セッション管理機能を追加",
+  "current_focus": "マイルストーン追跡",
+  "next_step": "ダッシュボード表示",
+  "attention_state": "active",
+  "topics": [
+    {"name": "マイルストーン", "keywords": ["commit", "push", "PR"]},
+    {"name": "ダッシュボード", "keywords": ["web", "UI"]}
+  ],
+  "tasks": [
+    {"title": "イベントストア実装", "status": "done", "topic": "マイルストーン"},
+    {"title": "タイムライン表示", "status": "in_progress", "topic": "ダッシュボード"},
+    {"title": "トピック抽出", "status": "planned"}
+  ]
+}`
+
+	insight, err := ParseAnalyzeResponse("roadmap", response)
+	if err != nil {
+		t.Fatalf("ParseAnalyzeResponse() error = %v", err)
+	}
+
+	if len(insight.Topics) != 2 {
+		t.Fatalf("Topics len = %d, want 2", len(insight.Topics))
+	}
+	if insight.Topics[0].Name != "マイルストーン" {
+		t.Errorf("Topics[0].Name = %q", insight.Topics[0].Name)
+	}
+	if insight.Topics[0].Source != "llm" {
+		t.Errorf("Topics[0].Source = %q, want llm", insight.Topics[0].Source)
+	}
+	if len(insight.Topics[0].Keywords) != 3 {
+		t.Errorf("Topics[0].Keywords len = %d, want 3", len(insight.Topics[0].Keywords))
+	}
+
+	if len(insight.Tasks) != 3 {
+		t.Fatalf("Tasks len = %d, want 3", len(insight.Tasks))
+	}
+	if insight.Tasks[0].Status != model.TaskDone {
+		t.Errorf("Tasks[0].Status = %q, want done", insight.Tasks[0].Status)
+	}
+	if insight.Tasks[1].Status != model.TaskInProgress {
+		t.Errorf("Tasks[1].Status = %q, want in_progress", insight.Tasks[1].Status)
+	}
+	if insight.Tasks[2].Status != model.TaskPlanned {
+		t.Errorf("Tasks[2].Status = %q, want planned", insight.Tasks[2].Status)
+	}
+	// Tasks with topic should have TopicID
+	if insight.Tasks[0].TopicID == "" {
+		t.Error("Tasks[0].TopicID should be set")
+	}
+	if insight.Tasks[2].TopicID != "" {
+		t.Error("Tasks[2].TopicID should be empty (no topic specified)")
+	}
+}
+
+func TestParseAnalyzeResponse_InvalidTaskStatus(t *testing.T) {
+	response := `{
+  "goal": "test",
+  "current_focus": "test",
+  "next_step": "test",
+  "attention_state": "active",
+  "tasks": [{"title": "unknown status", "status": "invalid"}]
+}`
+	insight, err := ParseAnalyzeResponse("test", response)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if insight.Tasks[0].Status != model.TaskPlanned {
+		t.Errorf("invalid status should default to planned, got %q", insight.Tasks[0].Status)
+	}
+}
+
 func TestReadTranscriptTail(t *testing.T) {
 	lines := []string{
 		`{"role":"user","content":"line1"}`,

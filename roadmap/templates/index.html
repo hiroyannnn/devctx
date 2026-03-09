@@ -229,6 +229,50 @@ h1 {
   border-color: #1f6feb44;
   color: #58a6ff;
 }
+/* Topics & Tasks */
+.card-topics-tasks {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+.card-topics, .card-tasks {
+  flex: 1;
+}
+.section-title {
+  font-size: 0.72rem;
+  color: #8b949e;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.topic-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #1f6feb22;
+  border: 1px solid #1f6feb44;
+  color: #58a6ff;
+  margin: 2px 4px 2px 0;
+}
+.topic-tag.git { background: #f0883e22; border-color: #f0883e44; color: #f0883e; }
+.topic-tag.manual { background: #3fb95022; border-color: #3fb95044; color: #3fb950; }
+.task-item {
+  font-size: 0.75rem;
+  padding: 2px 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.task-icon {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.task-done { color: #3fb950; }
+.task-in_progress { color: #58a6ff; }
+.task-planned { color: #484f58; }
+.task-blocked { color: #f85149; }
 /* Timeline panel */
 .timeline-panel {
   margin-top: 12px;
@@ -551,6 +595,53 @@ function createCard(entry) {
 
   if (entry.milestones) {
     card.appendChild(createMilestoneChips(entry.milestones));
+  }
+
+  // Topics & Tasks
+  if ((entry.topics && entry.topics.length > 0) || (entry.tasks && entry.tasks.length > 0)) {
+    var ttContainer = document.createElement('div');
+    ttContainer.className = 'card-topics-tasks';
+
+    if (entry.topics && entry.topics.length > 0) {
+      var topicsDiv = document.createElement('div');
+      topicsDiv.className = 'card-topics';
+      var topicsTitle = document.createElement('div');
+      topicsTitle.className = 'section-title';
+      topicsTitle.textContent = 'Topics';
+      topicsDiv.appendChild(topicsTitle);
+      entry.topics.forEach(function(topic) {
+        var tag = document.createElement('span');
+        tag.className = 'topic-tag' + (topic.source === 'git' ? ' git' : topic.source === 'manual' ? ' manual' : '');
+        tag.textContent = topic.name;
+        topicsDiv.appendChild(tag);
+      });
+      ttContainer.appendChild(topicsDiv);
+    }
+
+    if (entry.tasks && entry.tasks.length > 0) {
+      var tasksDiv = document.createElement('div');
+      tasksDiv.className = 'card-tasks';
+      var tasksTitle = document.createElement('div');
+      tasksTitle.className = 'section-title';
+      tasksTitle.textContent = 'Tasks';
+      tasksDiv.appendChild(tasksTitle);
+      var TASK_ICONS = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
+      entry.tasks.forEach(function(task) {
+        var item = document.createElement('div');
+        item.className = 'task-item';
+        var icon = document.createElement('span');
+        icon.className = 'task-icon task-' + task.status;
+        icon.textContent = TASK_ICONS[task.status] || '\u25CB';
+        item.appendChild(icon);
+        var title = document.createElement('span');
+        title.textContent = task.title;
+        item.appendChild(title);
+        tasksDiv.appendChild(item);
+      });
+      ttContainer.appendChild(tasksDiv);
+    }
+
+    card.appendChild(ttContainer);
   }
 
   var footer = document.createElement('div');

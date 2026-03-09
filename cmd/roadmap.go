@@ -381,12 +381,21 @@ With --background, forks to background and returns immediately.`,
 			}
 			insight.TranscriptOffset = newOffset
 
+			// Merge mechanical extraction with LLM results
+			extractor := roadmap.NewExtractor()
+			bundle := extractor.CollectEvidence(ctx)
+			gitTopics := roadmap.ExtractTopics(bundle)
+			gitTasks := roadmap.ExtractTasks(bundle)
+			insight.Topics = mergeTopics(insight.Topics, gitTopics)
+			insight.Tasks = mergeTasks(insight.Tasks, gitTasks)
+
 			insights.Set(*insight)
 
 			fmt.Printf("  Goal: %s\n", insight.Goal)
 			fmt.Printf("  Focus: %s\n", insight.CurrentFocus)
 			fmt.Printf("  Next: %s\n", insight.NextStep)
 			fmt.Printf("  State: %s\n", insight.AttentionState)
+			fmt.Printf("  Topics: %d, Tasks: %d\n", len(insight.Topics), len(insight.Tasks))
 		}
 
 		if err := s.SaveInsights(insights); err != nil {
@@ -499,4 +508,52 @@ func init() {
 	roadmapInitCmd.Flags().StringVar(&roadmapInitWorktree, "worktree", "", "Worktree path (defaults to current directory)")
 
 	roadmapServeCmd.Flags().IntVar(&roadmapServePort, "port", 3333, "Port for the web dashboard")
+}
+
+// mergeTopics combines LLM-inferred topics with git-extracted topics, avoiding duplicates.
+func mergeTopics(llmTopics, gitTopics []model.SemanticTopic) []model.SemanticTopic {
+	seen := make(map[string]bool)
+	var result []model.SemanticTopic
+
+	// LLM topics take priority
+	for _, t := range llmTopics {
+		key := strings.ToLower(t.Name)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, t)
+		}
+	}
+	// Add git topics if not already present
+	for _, t := range gitTopics {
+		key := strings.ToLower(t.Name)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+// mergeTasks combines LLM-inferred tasks with git-extracted tasks, avoiding duplicates.
+func mergeTasks(llmTasks, gitTasks []model.TaskItem) []model.TaskItem {
+	seen := make(map[string]bool)
+	var result []model.TaskItem
+
+	// LLM tasks take priority
+	for _, t := range llmTasks {
+		key := strings.ToLower(t.Title)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, t)
+		}
+	}
+	// Add git tasks if not already present
+	for _, t := range gitTasks {
+		key := strings.ToLower(t.Title)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, t)
+		}
+	}
+	return result
 }
