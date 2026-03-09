@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hiroyannnn/devctx/model"
@@ -254,7 +255,14 @@ func phaseIndex(phase model.Phase) int {
 
 // --- roadmap analyze ---
 
-var roadmapAnalyzeAll bool
+var (
+	roadmapAnalyzeAll        bool
+	roadmapAnalyzeIfStale    bool
+	roadmapAnalyzeBackground bool
+	roadmapAnalyzeCooldown   int
+)
+
+const defaultAnalyzeCooldownMin = 5
 
 var roadmapAnalyzeCmd = &cobra.Command{
 	Use:   "analyze [name]",
@@ -263,8 +271,15 @@ var roadmapAnalyzeCmd = &cobra.Command{
 goal, current focus, next step, and attention state.
 
 Without arguments, analyzes the context matching the current directory.
-With --all, analyzes all active contexts.`,
+With --all, analyzes all active contexts.
+With --if-stale, skips analysis if last insight is fresh (default: 5 min cooldown).
+With --background, forks to background and returns immediately.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Background mode: re-exec self as detached process
+		if roadmapAnalyzeBackground {
+			return execAnalyzeBackground(args)
+		}
+
 		s, err := storage.New()
 		if err != nil {
 			return err
@@ -310,12 +325,24 @@ With --all, analyzes all active contexts.`,
 			return nil
 		}
 
+		cooldown := time.Duration(roadmapAnalyzeCooldown) * time.Minute
+
 		for _, ctx := range targets {
 			fmt.Printf("Analyzing [%s]...\n", ctx.Name)
 
 			if ctx.TranscriptPath == "" {
 				fmt.Printf("  Skipped: no transcript path\n")
 				continue
+			}
+
+			// Staleness check
+			if roadmapAnalyzeIfStale {
+				if existing := insights.Get(ctx.Name); existing != nil {
+					if time.Since(existing.InferredAt) < cooldown {
+						fmt.Printf("  Skipped: fresh (analyzed %s ago)\n", time.Since(existing.InferredAt).Truncate(time.Second))
+						continue
+					}
+				}
 			}
 
 			// Read transcript
@@ -368,6 +395,31 @@ With --all, analyzes all active contexts.`,
 
 		return nil
 	},
+}
+
+func execAnalyzeBackground(args []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot find executable: %w", err)
+	}
+
+	cmdArgs := []string{"roadmap", "analyze", "--if-stale"}
+	if roadmapAnalyzeAll {
+		cmdArgs = append(cmdArgs, "--all")
+	}
+	cmdArgs = append(cmdArgs, args...)
+
+	cmd := exec.Command(exe, cmdArgs...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	// Detach from parent process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start background analyze: %w", err)
+	}
+	// Don't wait - let it run in background
+	go cmd.Wait()
+	return nil
 }
 
 func runClaude(prompt string) (string, error) {
@@ -439,6 +491,9 @@ func init() {
 	roadmapCmd.AddCommand(roadmapAnalyzeCmd)
 
 	roadmapAnalyzeCmd.Flags().BoolVar(&roadmapAnalyzeAll, "all", false, "Analyze all active contexts")
+	roadmapAnalyzeCmd.Flags().BoolVar(&roadmapAnalyzeIfStale, "if-stale", false, "Skip if insight is fresh")
+	roadmapAnalyzeCmd.Flags().BoolVar(&roadmapAnalyzeBackground, "background", false, "Fork to background and return immediately")
+	roadmapAnalyzeCmd.Flags().IntVar(&roadmapAnalyzeCooldown, "cooldown", defaultAnalyzeCooldownMin, "Cooldown minutes for --if-stale")
 
 	roadmapInitCmd.Flags().StringVar(&roadmapInitPrompt, "prompt", "", "Initial prompt for the session")
 	roadmapInitCmd.Flags().StringVar(&roadmapInitWorktree, "worktree", "", "Worktree path (defaults to current directory)")

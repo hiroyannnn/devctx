@@ -62,6 +62,17 @@ Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 						},
 					},
 				},
+				"Stop": {
+					{
+						Matcher: "",
+						Hooks: []Hook{
+							{
+								Type:    "command",
+								Command: devctxPath + " roadmap analyze --if-stale --background",
+							},
+						},
+					},
+				},
 			},
 		}
 
@@ -153,6 +164,17 @@ func installHooksToSettings() error {
 		},
 	}
 	hooks["SessionEnd"] = mergeHookConfigs(hooks["SessionEnd"], sessionEndHook, devctxPath+" touch")
+
+	// Merge Stop hooks (background insight analysis)
+	stopHook := map[string]interface{}{
+		"hooks": []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": devctxPath + " roadmap analyze --if-stale --background",
+			},
+		},
+	}
+	hooks["Stop"] = mergeHookConfigs(hooks["Stop"], stopHook, devctxPath+" roadmap analyze")
 
 	settings["hooks"] = hooks
 
