@@ -295,6 +295,168 @@ func TestHandleAPIRoadmap_WithMilestones(t *testing.T) {
 	}
 }
 
+func TestHandleAPIRoadmapMap_GroupsByProject(t *testing.T) {
+	now := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:     "auth",
+				Branch:   "feature/auth",
+				Worktree: "/tmp/project/worktrees/auth",
+				Status:   model.StatusInProgress,
+				RepoRoot: "/tmp/project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+			{
+				Name:     "api-fix",
+				Branch:   "fix/api",
+				Worktree: "/tmp/project/worktrees/api-fix",
+				Status:   model.StatusReview,
+				RepoRoot: "/tmp/project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+			{
+				Name:     "other-task",
+				Branch:   "feature/other",
+				Worktree: "/tmp/other-project",
+				Status:   model.StatusInProgress,
+				RepoRoot: "/tmp/other-project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: store},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{
+				"rev-parse --git-dir": {err: fmt.Errorf("not found")},
+			}},
+			Gh: &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap-map", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmapMap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var groups []ProjectGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want 2", len(groups))
+	}
+
+	if groups[0].Name != "project" {
+		t.Errorf("groups[0].Name = %q, want project", groups[0].Name)
+	}
+	if len(groups[0].Sessions) != 2 {
+		t.Errorf("groups[0].Sessions len = %d, want 2", len(groups[0].Sessions))
+	}
+
+	if groups[1].Name != "other-project" {
+		t.Errorf("groups[1].Name = %q, want other-project", groups[1].Name)
+	}
+	if len(groups[1].Sessions) != 1 {
+		t.Errorf("groups[1].Sessions len = %d, want 1", len(groups[1].Sessions))
+	}
+}
+
+func TestHandleAPITimeline(t *testing.T) {
+	now := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	events := &model.EventStore{
+		Events: []model.SessionEvent{
+			{SessionName: "auth", Type: model.MilestoneSessionStart, OccurredAt: now, ObservedAt: now},
+			{SessionName: "auth", Type: model.MilestoneFirstCommit, Detail: "initial", OccurredAt: now, ObservedAt: now},
+			{SessionName: "auth", Type: model.MilestoneCommit, Detail: "fix", OccurredAt: now, ObservedAt: now},
+			{SessionName: "other", Type: model.MilestoneCommit, OccurredAt: now, ObservedAt: now},
+		},
+	}
+
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: &model.Store{}},
+		EventLoader: &mockEventLoader{store: events},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{}},
+			Gh:  &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/timeline/auth", nil)
+	w := httptest.NewRecorder()
+	server.handleAPITimeline(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var timeline SessionTimeline
+	if err := json.Unmarshal(w.Body.Bytes(), &timeline); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if timeline.SessionName != "auth" {
+		t.Errorf("SessionName = %q, want auth", timeline.SessionName)
+	}
+	if len(timeline.Events) != 3 {
+		t.Errorf("Events len = %d, want 3", len(timeline.Events))
+	}
+	if timeline.Summary.CommitCount != 1 {
+		t.Errorf("Summary.CommitCount = %d, want 1", timeline.Summary.CommitCount)
+	}
+	if timeline.Summary.SessionCount != 1 {
+		t.Errorf("Summary.SessionCount = %d, want 1", timeline.Summary.SessionCount)
+	}
+}
+
+func TestHandleAPITimeline_Empty(t *testing.T) {
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: &model.Store{}},
+		EventLoader: &mockEventLoader{store: &model.EventStore{}},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{}},
+			Gh:  &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/timeline/missing", nil)
+	w := httptest.NewRecorder()
+	server.handleAPITimeline(w, req)
+
+	var timeline SessionTimeline
+	if err := json.Unmarshal(w.Body.Bytes(), &timeline); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(timeline.Events) != 0 {
+		t.Errorf("Events len = %d, want 0", len(timeline.Events))
+	}
+}
+
+func TestHandleAPITimeline_NoSessionName(t *testing.T) {
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: &model.Store{}},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{}},
+			Gh:  &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/timeline/", nil)
+	w := httptest.NewRecorder()
+	server.handleAPITimeline(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{err: fmt.Errorf("disk error")},

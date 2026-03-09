@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +34,20 @@ type InsightLoader interface {
 // EventLoader abstracts event loading for testing.
 type EventLoader interface {
 	LoadEvents() (*model.EventStore, error)
+}
+
+// ProjectGroup groups sessions by project (repo root).
+type ProjectGroup struct {
+	Name     string         `json:"name"`
+	RepoRoot string         `json:"repo_root"`
+	Sessions []RoadmapEntry `json:"sessions"`
+}
+
+// SessionTimeline holds the event timeline for a single session.
+type SessionTimeline struct {
+	SessionName string               `json:"session_name"`
+	Events      []model.SessionEvent `json:"events"`
+	Summary     model.MilestoneSummary `json:"summary"`
 }
 
 // RoadmapEntry is the JSON response structure for each context.
@@ -81,6 +97,8 @@ func NewServer(loader StoreLoader, insightLoader InsightLoader, eventLoader Even
 func (s *Server) ListenAndServe() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
+	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
+	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
@@ -192,6 +210,149 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	s.cachedResult = data
 	s.cacheExpiry = time.Now().Add(cacheTTL)
 	s.cacheMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
+	store, err := s.StoreLoader.LoadStore()
+	if err != nil {
+		log.Printf("roadmap-map: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
+
+	active := store.Active()
+
+	var insights *model.InsightStore
+	if s.InsightLoader != nil {
+		insights, _ = s.InsightLoader.LoadInsights()
+	}
+
+	var events *model.EventStore
+	if s.EventLoader != nil {
+		events, _ = s.EventLoader.LoadEvents()
+	}
+
+	// Group by project (repo root)
+	projectMap := make(map[string]*ProjectGroup)
+	var projectOrder []string
+
+	for _, ctx := range active {
+		phase := ctx.Phase
+		if phase == "" && ctx.Worktree != "" {
+			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
+		}
+
+		entry := RoadmapEntry{
+			Name:          ctx.Name,
+			Branch:        ctx.Branch,
+			Status:        ctx.Status,
+			Phase:         phase,
+			InitialPrompt: ctx.InitialPrompt,
+			Worktree:      ctx.Worktree,
+			PRURL:         ctx.PRURL,
+			IssueURL:      ctx.IssueURL,
+			Note:          ctx.Note,
+			SessionName:   ctx.SessionName,
+			CreatedAt:     ctx.CreatedAt.Format("2006-01-02 15:04"),
+			LastSeen:      ctx.LastSeen.Format("2006-01-02 15:04"),
+			RepoRoot:      ctx.RepoRoot,
+		}
+
+		if events != nil {
+			summary := events.Summarize(ctx.Name)
+			if summary.CommitCount > 0 || summary.SessionCount > 0 {
+				entry.Milestones = &summary
+			}
+		}
+
+		if insights != nil {
+			if insight := insights.Get(ctx.Name); insight != nil {
+				entry.Goal = insight.Goal
+				entry.CurrentFocus = insight.CurrentFocus
+				entry.NextStep = insight.NextStep
+				entry.AttentionState = insight.AttentionState
+				if !insight.InferredAt.IsZero() {
+					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
+				}
+			}
+		}
+
+		projectKey := ctx.RepoRoot
+		if projectKey == "" {
+			projectKey = ctx.Worktree
+		}
+		projectName := filepath.Base(projectKey)
+
+		if _, exists := projectMap[projectKey]; !exists {
+			projectMap[projectKey] = &ProjectGroup{
+				Name:     projectName,
+				RepoRoot: projectKey,
+			}
+			projectOrder = append(projectOrder, projectKey)
+		}
+		projectMap[projectKey].Sessions = append(projectMap[projectKey].Sessions, entry)
+	}
+
+	// Build ordered result
+	groups := make([]ProjectGroup, 0, len(projectOrder))
+	for _, key := range projectOrder {
+		groups = append(groups, *projectMap[key])
+	}
+
+	data, err := json.Marshal(groups)
+	if err != nil {
+		log.Printf("roadmap-map: failed to marshal: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
+func (s *Server) handleAPITimeline(w http.ResponseWriter, r *http.Request) {
+	// Extract session name from URL: /api/timeline/{name}
+	sessionName := strings.TrimPrefix(r.URL.Path, "/api/timeline/")
+	if sessionName == "" {
+		http.Error(w, "session name required", http.StatusBadRequest)
+		return
+	}
+
+	var events *model.EventStore
+	if s.EventLoader != nil {
+		var err error
+		events, err = s.EventLoader.LoadEvents()
+		if err != nil {
+			log.Printf("timeline: failed to load events: %v", err)
+			http.Error(w, "failed to load events", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if events == nil {
+		events = &model.EventStore{}
+	}
+
+	timeline := SessionTimeline{
+		SessionName: sessionName,
+		Events:      events.ForSession(sessionName),
+		Summary:     events.Summarize(sessionName),
+	}
+
+	// Ensure Events is non-nil for JSON
+	if timeline.Events == nil {
+		timeline.Events = []model.SessionEvent{}
+	}
+
+	data, err := json.Marshal(timeline)
+	if err != nil {
+		log.Printf("timeline: failed to marshal: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
