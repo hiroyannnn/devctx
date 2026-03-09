@@ -457,6 +457,83 @@ func TestHandleAPITimeline_NoSessionName(t *testing.T) {
 	}
 }
 
+func TestHandleAPIRoadmapMap_IncludesTopicsAndTasks(t *testing.T) {
+	now := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:     "auth",
+				Branch:   "feature/auth",
+				Worktree: "/tmp/project/worktrees/auth",
+				Status:   model.StatusInProgress,
+				RepoRoot: "/tmp/project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+	insights := &model.InsightStore{
+		Insights: []model.SessionInsight{
+			{
+				Name:           "auth",
+				Goal:           "OAuth認証",
+				AttentionState: model.AttentionActive,
+				InferredAt:     now,
+				Topics: []model.SemanticTopic{
+					{ID: "auth", Name: "認証", Source: "llm"},
+				},
+				Tasks: []model.TaskItem{
+					{Title: "トークン実装", Status: model.TaskInProgress, Source: "llm"},
+				},
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader:   &mockStoreLoader{store: store},
+		InsightLoader: &mockInsightLoader{store: insights},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{
+				"rev-parse --git-dir": {err: fmt.Errorf("not found")},
+			}},
+			Gh: &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap-map", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmapMap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var groups []ProjectGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
+	}
+
+	session := groups[0].Sessions[0]
+	if session.Goal != "OAuth認証" {
+		t.Errorf("Goal = %q, want OAuth認証", session.Goal)
+	}
+	if len(session.Topics) != 1 {
+		t.Fatalf("Topics len = %d, want 1", len(session.Topics))
+	}
+	if session.Topics[0].Name != "認証" {
+		t.Errorf("Topics[0].Name = %q, want 認証", session.Topics[0].Name)
+	}
+	if len(session.Tasks) != 1 {
+		t.Fatalf("Tasks len = %d, want 1", len(session.Tasks))
+	}
+	if session.Tasks[0].Title != "トークン実装" {
+		t.Errorf("Tasks[0].Title = %q, want トークン実装", session.Tasks[0].Title)
+	}
+}
+
 func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{err: fmt.Errorf("disk error")},

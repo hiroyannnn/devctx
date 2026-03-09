@@ -278,6 +278,8 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 				entry.CurrentFocus = insight.CurrentFocus
 				entry.NextStep = insight.NextStep
 				entry.AttentionState = insight.AttentionState
+				entry.Topics = insight.Topics
+				entry.Tasks = insight.Tasks
 				if !insight.InferredAt.IsZero() {
 					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
 				}

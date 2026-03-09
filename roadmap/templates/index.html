@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Session Roadmap</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -349,6 +350,83 @@ h1 {
   padding: 48px;
   font-size: 1.1rem;
 }
+/* Graph view */
+#graph-container {
+  display: none;
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 120px);
+}
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+}
+#graph-inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 340px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  display: none;
+  font-size: 0.85rem;
+}
+#graph-inspector .inspector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+#graph-inspector .inspector-name {
+  font-weight: 600;
+  font-size: 1rem;
+  color: #f0f6fc;
+}
+#graph-inspector .inspector-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 2px 6px;
+}
+#graph-inspector .inspector-close:hover { color: #f0f6fc; }
+#graph-inspector .inspector-section {
+  margin-bottom: 10px;
+}
+#graph-inspector .inspector-section-title {
+  font-size: 0.72rem;
+  color: #8b949e;
+  font-weight: 600;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+#graph-inspector .inspector-value {
+  color: #c9d1d9;
+  line-height: 1.4;
+}
+#graph-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#graph-toolbar button {
+  padding: 4px 10px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+#graph-toolbar button:hover { color: #f0f6fc; border-color: #484f58; }
 </style>
 </head>
 <body>
@@ -356,10 +434,27 @@ h1 {
   <span class="view-toggle">
     <button class="view-btn active" id="btn-project" onclick="setView('project')">Project</button>
     <button class="view-btn" id="btn-flat" onclick="setView('flat')">Flat</button>
+    <button class="view-btn" id="btn-graph" onclick="setView('graph')">Graph</button>
   </span>
 </h1>
 <div class="meta" id="meta">Loading...</div>
 <div id="content"></div>
+<div id="graph-container">
+  <div id="graph-toolbar">
+    <button onclick="graphFit()">Fit</button>
+    <button onclick="graphReset()">Reset</button>
+    <button onclick="expandAllRepos()">Expand All</button>
+    <button onclick="collapseAllRepos()">Collapse All</button>
+  </div>
+  <div id="graph-canvas"></div>
+  <div id="graph-inspector">
+    <div class="inspector-header">
+      <span class="inspector-name" id="inspector-name"></span>
+      <button class="inspector-close" onclick="closeInspector()">&times;</button>
+    </div>
+    <div id="inspector-body"></div>
+  </div>
+</div>
 
 <script>
 // All data comes from the local devctx API.
@@ -379,10 +474,18 @@ const EVENT_LABELS = {
   pr_merged: 'PR Merged', command: 'Command', status_change: 'Status Change'
 };
 
+var graphNetwork = null;
+var graphNodes = null;
+var graphEdges = null;
+var allSessionsFlat = [];
+
 function setView(view) {
   currentView = view;
   document.getElementById('btn-project').className = 'view-btn' + (view === 'project' ? ' active' : '');
   document.getElementById('btn-flat').className = 'view-btn' + (view === 'flat' ? ' active' : '');
+  document.getElementById('btn-graph').className = 'view-btn' + (view === 'graph' ? ' active' : '');
+  document.getElementById('content').style.display = (view === 'graph') ? 'none' : '';
+  document.getElementById('graph-container').style.display = (view === 'graph') ? 'block' : 'none';
   if (cachedData) render(cachedData);
 }
 
@@ -751,17 +854,451 @@ function renderFlatView(groups) {
 }
 
 function render(data) {
+  // Flatten sessions for graph use
+  allSessionsFlat = [];
+  data.forEach(function(g) {
+    g.sessions.forEach(function(s) {
+      s._projectName = g.name;
+      s._projectKey = g.repo_root;
+      allSessionsFlat.push(s);
+    });
+  });
+
   if (currentView === 'project') {
     renderProjectView(data);
+  } else if (currentView === 'graph') {
+    renderGraphView(data);
   } else {
     renderFlatView(data);
+  }
+}
+
+// ── Graph View ──
+
+var PHASE_COLORS = {
+  idle: '#484f58', implementation: '#f0883e', committed: '#d2a8ff',
+  pushed: '#58a6ff', pr_open: '#bc8cff', done: '#3fb950'
+};
+var STATUS_BORDERS = {
+  'in-progress': '#58a6ff', review: '#bc8cff',
+  blocked: '#f85149', done: '#3fb950'
+};
+
+// Track which repos are expanded
+var expandedRepos = {};
+var graphGroups = [];
+
+function buildGraphData(groups) {
+  var nodes = [];
+  var edges = [];
+  var nodeId = 0;
+  var sessionNodeMap = {};
+
+  groups.forEach(function(group) {
+    var repoId = 'repo:' + group.repo_root;
+    var isExpanded = expandedRepos[repoId];
+    var count = group.sessions.length;
+
+    // Determine dominant phase for repo color
+    var phaseCounts = {};
+    group.sessions.forEach(function(s) {
+      phaseCounts[s.phase] = (phaseCounts[s.phase] || 0) + 1;
+    });
+    var dominantPhase = 'idle';
+    var maxCount = 0;
+    Object.keys(phaseCounts).forEach(function(p) {
+      if (phaseCounts[p] > maxCount) { maxCount = phaseCounts[p]; dominantPhase = p; }
+    });
+    var repoColor = PHASE_COLORS[dominantPhase] || '#484f58';
+
+    nodes.push({
+      id: repoId,
+      label: group.name + (isExpanded ? '' : ' (' + count + ')'),
+      shape: 'box',
+      color: {
+        background: isExpanded ? '#21262d' : repoColor + '22',
+        border: isExpanded ? '#58a6ff' : repoColor,
+        highlight: { background: '#30363d', border: '#58a6ff' }
+      },
+      font: { color: '#f0f6fc', size: isExpanded ? 13 : 15, face: '-apple-system, sans-serif', bold: true },
+      margin: isExpanded ? 8 : 12,
+      borderWidth: isExpanded ? 2 : 3,
+      borderDashes: false,
+      _type: 'repo',
+      _data: group,
+      _repoId: repoId
+    });
+
+    if (isExpanded) {
+      group.sessions.forEach(function(session) {
+        var sId = 'session:' + session.name;
+        sessionNodeMap[session.name] = sId;
+        var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+        var statusBorder = STATUS_BORDERS[session.status] || '#30363d';
+        var label = session.name;
+        if (session.branch) label += '\n' + session.branch;
+
+        nodes.push({
+          id: sId,
+          label: label,
+          shape: 'box',
+          color: {
+            background: phaseColor + '33',
+            border: statusBorder,
+            highlight: { background: phaseColor + '66', border: '#f0f6fc' }
+          },
+          font: { color: '#c9d1d9', size: 11, face: '-apple-system, sans-serif', multi: true },
+          margin: 8,
+          borderWidth: 2,
+          _type: 'session',
+          _data: session
+        });
+
+        edges.push({
+          from: repoId, to: sId,
+          color: { color: '#30363d', highlight: '#484f58' },
+          width: 1.5,
+          smooth: { type: 'cubicBezier' },
+          _type: 'structure'
+        });
+      });
+    }
+  });
+
+  // Shared-topic edges between expanded sessions only
+  var topicSessions = {};
+  allSessionsFlat.forEach(function(s) {
+    if (!sessionNodeMap[s.name]) return;
+    if (s.topics) {
+      s.topics.forEach(function(t) {
+        var key = t.name.toLowerCase();
+        if (!topicSessions[key]) topicSessions[key] = [];
+        topicSessions[key].push(s.name);
+      });
+    }
+  });
+
+  Object.keys(topicSessions).forEach(function(topic) {
+    var sessions = topicSessions[topic];
+    if (sessions.length < 2) return;
+    for (var i = 0; i < sessions.length; i++) {
+      for (var j = i + 1; j < sessions.length; j++) {
+        var fromId = sessionNodeMap[sessions[i]];
+        var toId = sessionNodeMap[sessions[j]];
+        if (fromId && toId) {
+          edges.push({
+            from: fromId, to: toId,
+            color: { color: '#58a6ff44', highlight: '#58a6ff' },
+            width: 1,
+            dashes: true,
+            smooth: { type: 'continuous' },
+            hidden: true,
+            title: topic,
+            _type: 'shared_topic',
+            _topic: topic
+          });
+        }
+      }
+    }
+  });
+
+  return { nodes: nodes, edges: edges };
+}
+
+function renderGraphView(groups) {
+  graphGroups = groups;
+  var data = buildGraphData(groups);
+
+  if (graphNetwork) {
+    graphNodes = new vis.DataSet(data.nodes);
+    graphEdges = new vis.DataSet(data.edges);
+    graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+  } else {
+    graphNodes = new vis.DataSet(data.nodes);
+    graphEdges = new vis.DataSet(data.edges);
+    var container = document.getElementById('graph-canvas');
+    graphNetwork = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
+      physics: {
+        enabled: true,
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: { gravitationalConstant: -200, springLength: 200, springConstant: 0.02, damping: 0.4 },
+        stabilization: { iterations: 300, fit: true },
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 200,
+        hideEdgesOnDrag: true,
+        multiselect: false
+      },
+      layout: { improvedLayout: true },
+      edges: { arrows: { to: false } }
+    });
+
+    graphNetwork.once('stabilizationIterationsDone', function() {
+      graphNetwork.setOptions({ physics: { enabled: false } });
+    });
+
+    graphNetwork.on('doubleClick', function(params) {
+      if (params.nodes.length > 0) {
+        var nodeData = graphNodes.get(params.nodes[0]);
+        if (nodeData._type === 'repo') {
+          toggleRepo(nodeData._repoId);
+        }
+      }
+    });
+
+    graphNetwork.on('click', function(params) {
+      if (params.nodes.length > 0) {
+        var nodeData = graphNodes.get(params.nodes[0]);
+        if (nodeData._type === 'session') {
+          showInspector(nodeData._data);
+          highlightTopicEdges(params.nodes[0]);
+        } else if (nodeData._type === 'repo') {
+          closeInspector();
+          clearTopicEdges();
+        }
+      } else {
+        closeInspector();
+        clearTopicEdges();
+      }
+    });
+
+    graphNetwork.on('hoverNode', function(params) {
+      var nodeData = graphNodes.get(params.node);
+      if (nodeData._type === 'session') {
+        highlightTopicEdges(params.node);
+      }
+    });
+
+    graphNetwork.on('blurNode', function() {
+      if (!document.getElementById('graph-inspector').style.display ||
+          document.getElementById('graph-inspector').style.display === 'none') {
+        clearTopicEdges();
+      }
+    });
+  }
+
+  var now = new Date();
+  document.getElementById('meta').textContent =
+    allSessionsFlat.length + ' session(s) | Graph View | Updated: ' + now.toLocaleTimeString();
+}
+
+function restabilizeGraph(iterations) {
+  graphNetwork.setOptions({ physics: { enabled: true } });
+  graphNetwork.once('stabilizationIterationsDone', function() {
+    graphNetwork.setOptions({ physics: { enabled: false } });
+    graphNetwork.fit({ animation: { duration: 300 } });
+  });
+  graphNetwork.stabilize(iterations || 200);
+}
+
+function toggleRepo(repoId) {
+  expandedRepos[repoId] = !expandedRepos[repoId];
+  var data = buildGraphData(graphGroups);
+  graphNodes = new vis.DataSet(data.nodes);
+  graphEdges = new vis.DataSet(data.edges);
+  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+  restabilizeGraph(200);
+}
+
+function expandAllRepos() {
+  graphGroups.forEach(function(g) {
+    expandedRepos['repo:' + g.repo_root] = true;
+  });
+  var data = buildGraphData(graphGroups);
+  graphNodes = new vis.DataSet(data.nodes);
+  graphEdges = new vis.DataSet(data.edges);
+  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+  restabilizeGraph(400);
+}
+
+function collapseAllRepos() {
+  expandedRepos = {};
+  var data = buildGraphData(graphGroups);
+  graphNodes = new vis.DataSet(data.nodes);
+  graphEdges = new vis.DataSet(data.edges);
+  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+  restabilizeGraph(200);
+}
+
+function highlightTopicEdges(nodeId) {
+  // Show shared_topic edges connected to this node
+  graphEdges.forEach(function(edge) {
+    if (edge._type === 'shared_topic') {
+      var show = (edge.from === nodeId || edge.to === nodeId);
+      graphEdges.update({ id: edge.id, hidden: !show });
+    }
+  });
+}
+
+function clearTopicEdges() {
+  graphEdges.forEach(function(edge) {
+    if (edge._type === 'shared_topic') {
+      graphEdges.update({ id: edge.id, hidden: true });
+    }
+  });
+}
+
+function showInspector(session) {
+  var inspector = document.getElementById('graph-inspector');
+  inspector.style.display = 'block';
+  document.getElementById('inspector-name').textContent = session.name;
+
+  var body = document.getElementById('inspector-body');
+  body.replaceChildren();
+
+  function addSection(title, content) {
+    if (!content) return;
+    var sec = document.createElement('div');
+    sec.className = 'inspector-section';
+    var t = document.createElement('div');
+    t.className = 'inspector-section-title';
+    t.textContent = title;
+    sec.appendChild(t);
+    var v = document.createElement('div');
+    v.className = 'inspector-value';
+    if (typeof content === 'string') {
+      v.textContent = content;
+    } else {
+      v.appendChild(content);
+    }
+    sec.appendChild(v);
+    body.appendChild(sec);
+  }
+
+  // Status & Phase
+  var statusPhase = document.createElement('div');
+  statusPhase.style.display = 'flex';
+  statusPhase.style.gap = '8px';
+  statusPhase.style.marginBottom = '4px';
+  var statusBadge = document.createElement('span');
+  statusBadge.className = 'card-status status-' + (session.status || '').replace(/[^a-z-]/g, '');
+  statusBadge.textContent = session.status;
+  statusPhase.appendChild(statusBadge);
+  var phaseBadge = document.createElement('span');
+  phaseBadge.className = 'milestone-chip achieved';
+  phaseBadge.textContent = PHASE_LABELS[session.phase] || session.phase;
+  statusPhase.appendChild(phaseBadge);
+  addSection('Status', statusPhase);
+
+  addSection('Branch', session.branch);
+  if (session.goal) addSection('Goal', session.goal);
+  if (session.current_focus) addSection('Focus', session.current_focus);
+  if (session.next_step) addSection('Next Step', session.next_step);
+
+  if (session.attention_state) {
+    var badge = document.createElement('span');
+    badge.className = 'attention-badge attention-' + session.attention_state;
+    badge.textContent = session.attention_state;
+    addSection('Attention', badge);
+  }
+
+  // Pipeline
+  addSection('Pipeline', createPipeline(session.phase));
+
+  // Milestones
+  if (session.milestones) {
+    addSection('Milestones', createMilestoneChips(session.milestones));
+  }
+
+  // Topics
+  if (session.topics && session.topics.length > 0) {
+    var topicsEl = document.createElement('div');
+    session.topics.forEach(function(topic) {
+      var tag = document.createElement('span');
+      tag.className = 'topic-tag' + (topic.source === 'git' ? ' git' : topic.source === 'manual' ? ' manual' : '');
+      tag.textContent = topic.name;
+      topicsEl.appendChild(tag);
+    });
+    addSection('Topics', topicsEl);
+  }
+
+  // Tasks
+  if (session.tasks && session.tasks.length > 0) {
+    var TASK_ICONS = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
+    var tasksEl = document.createElement('div');
+    session.tasks.forEach(function(task) {
+      var item = document.createElement('div');
+      item.className = 'task-item';
+      var icon = document.createElement('span');
+      icon.className = 'task-icon task-' + task.status;
+      icon.textContent = TASK_ICONS[task.status] || '\u25CB';
+      item.appendChild(icon);
+      var title = document.createElement('span');
+      title.textContent = task.title;
+      item.appendChild(title);
+      tasksEl.appendChild(item);
+    });
+    addSection('Tasks', tasksEl);
+  }
+
+  // Links
+  if (session.pr_url || session.issue_url) {
+    var linksEl = document.createElement('div');
+    linksEl.className = 'card-links';
+    if (session.pr_url) {
+      var a = document.createElement('a');
+      a.href = session.pr_url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'Pull Request';
+      linksEl.appendChild(a);
+    }
+    if (session.issue_url) {
+      var a2 = document.createElement('a');
+      a2.href = session.issue_url;
+      a2.target = '_blank';
+      a2.rel = 'noopener noreferrer';
+      a2.textContent = 'Issue';
+      a2.style.marginLeft = '8px';
+      linksEl.appendChild(a2);
+    }
+    addSection('Links', linksEl);
+  }
+
+  // Timestamps
+  addSection('Last Seen', session.last_seen);
+  if (session.inferred_at) addSection('Inferred', session.inferred_at);
+}
+
+function closeInspector() {
+  document.getElementById('graph-inspector').style.display = 'none';
+  clearTopicEdges();
+}
+
+function graphFit() {
+  if (graphNetwork) graphNetwork.fit({ animation: true });
+}
+
+function graphReset() {
+  if (graphNetwork) {
+    graphNetwork.setOptions({ physics: { enabled: true } });
+    setTimeout(function() {
+      graphNetwork.stabilize(100);
+      graphNetwork.once('stabilizationIterationsDone', function() {
+        graphNetwork.setOptions({ physics: { enabled: false } });
+        graphNetwork.fit({ animation: true });
+      });
+    }, 50);
   }
 }
 
 async function refresh() {
   try {
     var res = await fetch('/api/roadmap-map');
-    cachedData = await res.json();
+    var newData = await res.json();
+    // For graph view, skip re-render if data hasn't changed (preserves zoom/pan)
+    if (currentView === 'graph' && cachedData && graphNetwork) {
+      var newJson = JSON.stringify(newData);
+      var oldJson = JSON.stringify(cachedData);
+      if (newJson === oldJson) {
+        var now = new Date();
+        document.getElementById('meta').textContent =
+          allSessionsFlat.length + ' session(s) | Graph View | Updated: ' + now.toLocaleTimeString();
+        return;
+      }
+    }
+    cachedData = newData;
     render(cachedData);
   } catch (e) {
     document.getElementById('meta').textContent = 'Error: ' + e.message;
