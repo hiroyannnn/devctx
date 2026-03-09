@@ -23,6 +23,8 @@ A CLI tool for managing Claude Code sessions and git worktrees in a kanban-style
 - **Notes** - Add memos to contexts
 - **GitHub Integration** - Auto-detect and link Issues/PRs
 - **Worktree Creation** - Create branch to Claude launch in one command
+- **Session Roadmap** - Auto-detect development phases (idle → impl → committed → pushed → PR → done)
+- **AI Insights** - Claude infers goal, focus, next step, and attention state for each session
 
 ## Installation
 
@@ -111,6 +113,19 @@ devctx list
 | `devctx sync [name]` | Auto-detect and link PR/Issue |
 | `devctx sync --all` | Update session names for all contexts |
 | `devctx pr <name>` | Create a PR |
+
+### Session Roadmap
+
+| Command | Description |
+|---------|-------------|
+| `devctx roadmap scan` | Show git-based phases for all sessions |
+| `devctx roadmap status` | Visual progress through development phases |
+| `devctx roadmap serve` | Start web dashboard (localhost:3333) |
+| `devctx roadmap refresh` | Full re-scan with PR detection (uses gh CLI) |
+| `devctx roadmap analyze [name]` | Generate AI insights via Claude CLI |
+| `devctx roadmap analyze --all` | Generate insights for all active sessions |
+| `devctx roadmap init --prompt "..."` | Set initial prompt for a session |
+| `devctx insight [name]` | Show/set session insights manually |
 
 ### Monitoring & Search
 
@@ -236,6 +251,55 @@ This creates:
 - `/devctx-note` - Add a note
 - `/devctx-link` - Link Issue/PR
 - `/devctx-status` - Show context status
+- `/devctx-insight` - Save session insights (goal, focus, next step, state)
+
+A rule file (`~/.claude/rules/devctx-insight-auto.md`) is also installed, which instructs Claude to automatically run `/devctx-insight` after creating implementation plans.
+
+## Session Roadmap
+
+The roadmap tracks your development lifecycle automatically.
+
+### Phase Detection
+
+Phases are auto-detected from git state on `register` / `touch`:
+
+| Phase | Condition |
+|-------|-----------|
+| Idle | No changes, no commits ahead |
+| Implementation | Uncommitted changes |
+| Committed | Commits ahead of base branch |
+| Pushed | Remote branch up to date |
+| PR Open | Open pull request detected |
+| Done | Merged pull request |
+
+### AI Insights
+
+Claude can infer session context and save it as insights:
+
+```bash
+# Install custom commands + auto-execution rule
+devctx commands --install
+
+# In Claude Code, after a plan is created:
+# Claude automatically runs /devctx-insight
+
+# Or manually trigger analysis via Claude CLI:
+devctx roadmap analyze
+```
+
+Insights include:
+- **Goal** - What this session is trying to achieve
+- **Current Focus** - What's being worked on now
+- **Next Step** - What should be done next
+- **Attention State** - active / waiting / idle / blocked
+
+### Web Dashboard
+
+```bash
+devctx roadmap serve
+```
+
+Opens a web dashboard at `http://localhost:3333` showing all sessions with their phases and AI insights.
 
 ## Troubleshooting
 
