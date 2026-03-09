@@ -272,6 +272,20 @@ Phases are auto-detected from git state on `register` / `touch`:
 | PR Open | Open pull request detected |
 | Done | Merged pull request |
 
+### Milestone Tracking
+
+Development milestones are automatically recorded as events:
+
+| Milestone | Source |
+|-----------|--------|
+| First Commit / Commits | git log on `register` / `touch` |
+| First Push | git remote check |
+| PR Created / Merged | `gh` CLI on `roadmap refresh` |
+| Session Start / End | Claude Code hooks |
+| Status Changes | `devctx move` commands |
+
+Events are stored in `~/.config/devctx/events.yaml` as an append-only log.
+
 ### AI Insights
 
 Claude can infer session context and save it as insights:
@@ -292,6 +306,10 @@ Insights include:
 - **Current Focus** - What's being worked on now
 - **Next Step** - What should be done next
 - **Attention State** - active / waiting / idle / blocked
+- **Topics** - Semantic themes extracted from git and LLM (e.g., "auth", "error handling")
+- **Tasks** - Concrete work items with status (planned / in_progress / done / blocked)
+
+Topic/task extraction uses a hybrid approach: mechanical extraction from git (branch names, commit messages, changed directories) combined with LLM-based clustering and normalization.
 
 ### Web Dashboard
 
@@ -299,7 +317,13 @@ Insights include:
 devctx roadmap serve
 ```
 
-Opens a web dashboard at `http://localhost:3333` showing all sessions with their phases and AI insights.
+Opens a web dashboard at `http://localhost:3333` with:
+- **Project grouping** - Sessions grouped by repository
+- **Phase pipeline** - Visual progress through development phases
+- **Milestone chips** - Sessions/Commits/Pushed/PR status at a glance
+- **Topics & Tasks** - Semantic topics and task lists per session
+- **Event timeline** - Click a card to expand its full event history
+- **Project / Flat view toggle** - Switch between grouped and flat layouts
 
 ## Troubleshooting
 

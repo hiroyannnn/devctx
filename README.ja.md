@@ -291,6 +291,20 @@ devctx commands --install
 | PR Open | オープンな PR が検出された |
 | Done | マージ済みの PR |
 
+### マイルストーン追跡
+
+開発マイルストーンがイベントとして自動記録されます:
+
+| マイルストーン | ソース |
+|-------------|--------|
+| 初回コミット / コミット | `register` / `touch` 時の git log |
+| 初回プッシュ | git remote チェック |
+| PR 作成 / マージ | `roadmap refresh` の `gh` CLI |
+| セッション開始 / 終了 | Claude Code hooks |
+| ステータス変更 | `devctx move` コマンド |
+
+イベントは `~/.config/devctx/events.yaml` に append-only ログとして保存されます。
+
 ### AI インサイト
 
 Claude がセッションの文脈を分析してインサイトを保存します:
@@ -311,6 +325,10 @@ devctx roadmap analyze
 - **Current Focus** - 今取り組んでいるサブタスク
 - **Next Step** - 次にやるべきこと
 - **Attention State** - active（作業中）/ waiting（入力待ち）/ idle（一段落）/ blocked（詰まっている）
+- **Topics** - git と LLM から抽出されたセマンティックトピック（例: 「認証」「エラーハンドリング」）
+- **Tasks** - ステータス付きの具体的な作業項目（planned / in_progress / done / blocked）
+
+トピック・タスク抽出はハイブリッド方式: git からの機械抽出（ブランチ名、コミットメッセージ、変更ディレクトリ）と LLM によるクラスタリング・正規化を組み合わせています。
 
 ### Web ダッシュボード
 
@@ -318,7 +336,13 @@ devctx roadmap analyze
 devctx roadmap serve
 ```
 
-`http://localhost:3333` で全セッションのフェーズと AI インサイトを表示する Web ダッシュボードが起動します。
+`http://localhost:3333` でダッシュボードが起動します:
+- **プロジェクトグルーピング** - リポジトリ別にセッションを表示
+- **フェーズパイプライン** - 開発フェーズの進捗をビジュアル表示
+- **マイルストーンチップ** - Sessions/Commits/Pushed/PR の状態を一目で確認
+- **トピック＆タスク** - セッション毎のセマンティックトピックとタスクリスト
+- **イベントタイムライン** - カードクリックでイベント履歴を展開
+- **Project / Flat 表示切替** - グループ化とフラット表示を切り替え
 
 ## トラブルシューティング
 
