@@ -85,12 +85,17 @@ If the target status has a checklist, you'll be prompted to confirm each item.`,
 		}
 
 		// Update status
+		oldStatus := ctx.Status
 		ctx.Status = targetStatus
 		ctx.LastSeen = time.Now()
 
 		if err := s.SaveStore(store); err != nil {
 			return err
 		}
+
+		// Record status change event
+		recordEvent(s, name, model.MilestoneStatusChange,
+			fmt.Sprintf("%s → %s", oldStatus, targetStatus))
 
 		fmt.Printf("✓ Moved [%s] to %s\n", name, targetStatus)
 

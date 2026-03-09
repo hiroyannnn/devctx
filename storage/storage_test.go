@@ -162,6 +162,92 @@ func TestLoadInsightsReturnsEmptyWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLoadEventsReturnsEmptyWhenMissing(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+
+	store, err := s.LoadEvents()
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	if len(store.Events) != 0 {
+		t.Fatalf("LoadEvents() events len = %d, want 0", len(store.Events))
+	}
+}
+
+func TestSaveEventsAndLoadEventsRoundTrip(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+
+	now := time.Now().Truncate(time.Second)
+	store := &model.EventStore{
+		Events: []model.SessionEvent{
+			{
+				SessionName: "auth",
+				Type:        model.MilestoneFirstCommit,
+				Detail:      "abc1234",
+				OccurredAt:  now,
+				ObservedAt:  now,
+			},
+			{
+				SessionName: "auth",
+				Type:        model.MilestoneSessionStart,
+				OccurredAt:  now,
+				ObservedAt:  now,
+			},
+		},
+	}
+
+	if err := s.SaveEvents(store); err != nil {
+		t.Fatalf("SaveEvents() error = %v", err)
+	}
+
+	loaded, err := s.LoadEvents()
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+
+	if len(loaded.Events) != 2 {
+		t.Fatalf("loaded events len = %d, want 2", len(loaded.Events))
+	}
+	if loaded.Events[0].Type != model.MilestoneFirstCommit {
+		t.Errorf("Events[0].Type = %q, want first_commit", loaded.Events[0].Type)
+	}
+	if loaded.Events[0].Detail != "abc1234" {
+		t.Errorf("Events[0].Detail = %q, want abc1234", loaded.Events[0].Detail)
+	}
+}
+
+func TestAppendEvent(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+
+	now := time.Now()
+	if err := s.AppendEvent(model.SessionEvent{
+		SessionName: "auth",
+		Type:        model.MilestoneSessionStart,
+		OccurredAt:  now,
+		ObservedAt:  now,
+	}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	if err := s.AppendEvent(model.SessionEvent{
+		SessionName: "auth",
+		Type:        model.MilestoneCommit,
+		Detail:      "def5678",
+		OccurredAt:  now,
+		ObservedAt:  now,
+	}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	loaded, err := s.LoadEvents()
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	if len(loaded.Events) != 2 {
+		t.Fatalf("Events len = %d, want 2", len(loaded.Events))
+	}
+}
+
 func TestSaveInsightsAndLoadInsightsRoundTrip(t *testing.T) {
 	s := &Storage{basePath: t.TempDir()}
 

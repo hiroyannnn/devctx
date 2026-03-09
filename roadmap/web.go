@@ -29,6 +29,11 @@ type InsightLoader interface {
 	LoadInsights() (*model.InsightStore, error)
 }
 
+// EventLoader abstracts event loading for testing.
+type EventLoader interface {
+	LoadEvents() (*model.EventStore, error)
+}
+
 // RoadmapEntry is the JSON response structure for each context.
 type RoadmapEntry struct {
 	Name           string              `json:"name"`
@@ -48,12 +53,15 @@ type RoadmapEntry struct {
 	NextStep       string              `json:"next_step,omitempty"`
 	AttentionState model.AttentionState `json:"attention_state,omitempty"`
 	InferredAt     string              `json:"inferred_at,omitempty"`
+	RepoRoot       string              `json:"repo_root,omitempty"`
+	Milestones     *model.MilestoneSummary `json:"milestones,omitempty"`
 }
 
 // Server serves the roadmap web UI.
 type Server struct {
 	StoreLoader   StoreLoader
 	InsightLoader InsightLoader
+	EventLoader   EventLoader
 	Scanner       *Scanner
 	Port          int
 
@@ -65,8 +73,8 @@ type Server struct {
 const cacheTTL = 5 * time.Second
 
 // NewServer creates a new Server.
-func NewServer(loader StoreLoader, insightLoader InsightLoader, scanner *Scanner, port int) *Server {
-	return &Server{StoreLoader: loader, InsightLoader: insightLoader, Scanner: scanner, Port: port}
+func NewServer(loader StoreLoader, insightLoader InsightLoader, eventLoader EventLoader, scanner *Scanner, port int) *Server {
+	return &Server{StoreLoader: loader, InsightLoader: insightLoader, EventLoader: eventLoader, Scanner: scanner, Port: port}
 }
 
 // ListenAndServe starts the HTTP server on localhost only.
@@ -118,6 +126,12 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 		insights, _ = s.InsightLoader.LoadInsights()
 	}
 
+	// Load events (non-fatal if fails)
+	var events *model.EventStore
+	if s.EventLoader != nil {
+		events, _ = s.EventLoader.LoadEvents()
+	}
+
 	entries := make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
 		phase := ctx.Phase
@@ -139,6 +153,15 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			SessionName:   ctx.SessionName,
 			CreatedAt:     ctx.CreatedAt.Format("2006-01-02 15:04"),
 			LastSeen:      ctx.LastSeen.Format("2006-01-02 15:04"),
+			RepoRoot:      ctx.RepoRoot,
+		}
+
+		// Merge milestone data
+		if events != nil {
+			summary := events.Summarize(ctx.Name)
+			if summary.CommitCount > 0 || summary.SessionCount > 0 {
+				entry.Milestones = &summary
+			}
 		}
 
 		// Merge insight data

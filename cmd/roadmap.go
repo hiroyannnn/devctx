@@ -239,7 +239,7 @@ The dashboard auto-refreshes every 5 seconds.`,
 		}
 
 		scanner := roadmap.NewScanner()
-		server := roadmap.NewServer(s, s, scanner, roadmapServePort)
+		server := roadmap.NewServer(s, s, s, scanner, roadmapServePort)
 		return server.ListenAndServe()
 	},
 }

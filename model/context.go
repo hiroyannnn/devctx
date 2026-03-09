@@ -66,6 +66,7 @@ type Context struct {
 	InitialPrompt  string            `yaml:"initial_prompt,omitempty"`
 	Phase          Phase             `yaml:"phase,omitempty"`
 	PhaseCheckedAt time.Time         `yaml:"phase_checked_at,omitempty"`
+	RepoRoot       string            `yaml:"repo_root,omitempty"` // Git repo root path for project grouping
 }
 
 type Config struct {

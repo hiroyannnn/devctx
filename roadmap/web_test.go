@@ -225,6 +225,76 @@ func TestHandleIndex(t *testing.T) {
 	}
 }
 
+type mockEventLoader struct {
+	store *model.EventStore
+	err   error
+}
+
+func (m *mockEventLoader) LoadEvents() (*model.EventStore, error) {
+	return m.store, m.err
+}
+
+func TestHandleAPIRoadmap_WithMilestones(t *testing.T) {
+	now := time.Date(2026, 3, 9, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:     "auth",
+				Branch:   "feature/auth",
+				Worktree: "/tmp/auth",
+				Status:   model.StatusInProgress,
+				RepoRoot: "/tmp/project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+	events := &model.EventStore{
+		Events: []model.SessionEvent{
+			{SessionName: "auth", Type: model.MilestoneSessionStart, OccurredAt: now, ObservedAt: now},
+			{SessionName: "auth", Type: model.MilestoneFirstCommit, Detail: "initial", OccurredAt: now, ObservedAt: now},
+			{SessionName: "auth", Type: model.MilestoneCommit, Detail: "fix bug", OccurredAt: now, ObservedAt: now},
+			{SessionName: "auth", Type: model.MilestoneCommit, Detail: "add test", OccurredAt: now, ObservedAt: now},
+		},
+	}
+
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: store},
+		EventLoader: &mockEventLoader{store: events},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{
+				"rev-parse --git-dir": {err: fmt.Errorf("not found")},
+			}},
+			Gh: &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmap(w, req)
+
+	var entries []RoadmapEntry
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+
+	if entries[0].RepoRoot != "/tmp/project" {
+		t.Errorf("RepoRoot = %q, want /tmp/project", entries[0].RepoRoot)
+	}
+	if entries[0].Milestones == nil {
+		t.Fatal("Milestones is nil")
+	}
+	if entries[0].Milestones.SessionCount != 1 {
+		t.Errorf("SessionCount = %d, want 1", entries[0].Milestones.SessionCount)
+	}
+	if entries[0].Milestones.CommitCount != 2 {
+		t.Errorf("CommitCount = %d, want 2", entries[0].Milestones.CommitCount)
+	}
+}
+
 func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{err: fmt.Errorf("disk error")},

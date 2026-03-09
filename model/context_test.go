@@ -213,6 +213,30 @@ func TestAttentionStateConstants(t *testing.T) {
 	}
 }
 
+func TestContextRepoRoot(t *testing.T) {
+	store := &Store{}
+	store.Add(Context{
+		Name:     "auth",
+		Worktree: "/tmp/project/worktrees/auth",
+		RepoRoot: "/tmp/project",
+	})
+	store.Add(Context{
+		Name:     "api-fix",
+		Worktree: "/tmp/project/worktrees/api-fix",
+		RepoRoot: "/tmp/project",
+	})
+	store.Add(Context{
+		Name:     "other",
+		Worktree: "/tmp/other-project",
+		RepoRoot: "/tmp/other-project",
+	})
+
+	ctx := store.FindByName("auth")
+	if ctx.RepoRoot != "/tmp/project" {
+		t.Errorf("RepoRoot = %q, want /tmp/project", ctx.RepoRoot)
+	}
+}
+
 func hasContext(contexts []Context, name string) bool {
 	for _, c := range contexts {
 		if c.Name == name {

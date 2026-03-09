@@ -67,6 +67,9 @@ If called manually, uses current directory and prompts for name.`,
 			cwd = worktreeRoot
 		}
 
+		// Detect repo root for project grouping
+		repoRoot := detectRepoRoot(cwd)
+
 		// Check if already registered by worktree
 		existing := store.FindByWorktree(cwd)
 		if existing != nil {
@@ -85,9 +88,18 @@ If called manually, uses current directory and prompts for name.`,
 			if branch != "" {
 				existing.Branch = branch
 			}
+			if repoRoot != "" {
+				existing.RepoRoot = repoRoot
+			}
 			// Auto-detect phase (fast mode for hook performance)
-			scanner := roadmap.NewScanner()
-			scanner.RefreshPhase(existing, roadmap.ScanModeFast)
+			phaseScanner := roadmap.NewScanner()
+			phaseScanner.RefreshPhase(existing, roadmap.ScanModeFast)
+
+			// Collect git milestones
+			collectAndSaveMilestones(s, existing)
+
+			// Record session_start event
+			recordEvent(s, existing.Name, model.MilestoneSessionStart, "")
 
 			if err := s.SaveStore(store); err != nil {
 				return err
@@ -127,13 +139,17 @@ If called manually, uses current directory and prompts for name.`,
 			CreatedAt:      time.Now(),
 			LastSeen:       time.Now(),
 			Checklist:      make(map[string]bool),
+			RepoRoot:       repoRoot,
 		}
 
 		// Auto-detect phase (fast mode for hook performance)
-		scanner := roadmap.NewScanner()
-		scanner.RefreshPhase(&ctx, roadmap.ScanModeFast)
+		phaseScanner := roadmap.NewScanner()
+		phaseScanner.RefreshPhase(&ctx, roadmap.ScanModeFast)
 
 		store.Add(ctx)
+
+		// Record session_start event
+		recordEvent(s, name, model.MilestoneSessionStart, "")
 		if err := s.SaveStore(store); err != nil {
 			return err
 		}
@@ -182,6 +198,49 @@ func generateName(branch, dir string) string {
 	}
 	// Use directory name
 	return filepath.Base(dir)
+}
+
+func detectRepoRoot(dir string) string {
+	// For worktrees, find the main repository root
+	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	commonDir := strings.TrimSpace(string(out))
+	// commonDir is like /path/to/repo/.git - get parent
+	if strings.HasSuffix(commonDir, "/.git") {
+		return strings.TrimSuffix(commonDir, "/.git")
+	}
+	// Fallback: use toplevel
+	return getWorktreeRoot(dir)
+}
+
+func collectAndSaveMilestones(s *storage.Storage, ctx *model.Context) {
+	events, err := s.LoadEvents()
+	if err != nil {
+		return
+	}
+	collector := roadmap.NewMilestoneCollector()
+	newEvents := collector.CollectGitMilestones(ctx, events)
+	for _, e := range newEvents {
+		events.Append(e)
+	}
+	if len(newEvents) > 0 {
+		_ = s.SaveEvents(events)
+	}
+}
+
+func recordEvent(s *storage.Storage, sessionName string, mtype model.MilestoneType, detail string) {
+	now := time.Now()
+	_ = s.AppendEvent(model.SessionEvent{
+		SessionName: sessionName,
+		Type:        mtype,
+		Detail:      detail,
+		OccurredAt:  now,
+		ObservedAt:  now,
+	})
 }
 
 func min(a, b int) int {

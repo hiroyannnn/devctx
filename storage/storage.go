@@ -36,6 +36,10 @@ func (s *Storage) insightsPath() string {
 	return filepath.Join(s.basePath, "insights.yaml")
 }
 
+func (s *Storage) eventsPath() string {
+	return filepath.Join(s.basePath, "events.yaml")
+}
+
 func (s *Storage) LoadStore() (*model.Store, error) {
 	store := &model.Store{}
 	data, err := os.ReadFile(s.contextsPath())
@@ -107,6 +111,38 @@ func (s *Storage) SaveInsights(store *model.InsightStore) error {
 		return err
 	}
 	return os.WriteFile(s.insightsPath(), data, 0644)
+}
+
+func (s *Storage) LoadEvents() (*model.EventStore, error) {
+	store := &model.EventStore{}
+	data, err := os.ReadFile(s.eventsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return store, nil
+		}
+		return nil, err
+	}
+	if err := yaml.Unmarshal(data, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Storage) SaveEvents(store *model.EventStore) error {
+	data, err := yaml.Marshal(store)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.eventsPath(), data, 0644)
+}
+
+func (s *Storage) AppendEvent(event model.SessionEvent) error {
+	store, err := s.LoadEvents()
+	if err != nil {
+		return err
+	}
+	store.Append(event)
+	return s.SaveEvents(store)
 }
 
 func defaultConfig() *model.Config {

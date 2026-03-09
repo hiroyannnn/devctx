@@ -166,6 +166,27 @@ h1 {
   margin-left: 8px;
 }
 .card-links a:hover { text-decoration: underline; }
+.card-milestones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+.milestone-chip {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  white-space: nowrap;
+}
+.milestone-chip.achieved {
+  background: #1f6feb22;
+  border-color: #1f6feb44;
+  color: #58a6ff;
+}
 .empty {
   text-align: center;
   color: #484f58;
@@ -302,6 +323,34 @@ function createCard(entry) {
   }
 
   card.appendChild(createPipeline(entry.phase));
+
+  if (entry.milestones) {
+    const ms = entry.milestones;
+    const container = document.createElement('div');
+    container.className = 'card-milestones';
+
+    function addChip(label, achieved) {
+      const chip = document.createElement('span');
+      chip.className = 'milestone-chip' + (achieved ? ' achieved' : '');
+      chip.textContent = label;
+      container.appendChild(chip);
+    }
+
+    addChip('Sessions: ' + (ms.session_count || 0), ms.session_count > 0);
+    addChip('Commits: ' + (ms.commit_count || 0), ms.commit_count > 0);
+    if (ms.first_push_at && ms.first_push_at !== '0001-01-01T00:00:00Z') {
+      addChip('Pushed', true);
+    }
+    if (ms.pr_created_at && ms.pr_created_at !== '0001-01-01T00:00:00Z') {
+      addChip('PR Created', true);
+    }
+    if (ms.pr_merged_at && ms.pr_merged_at !== '0001-01-01T00:00:00Z') {
+      addChip('Merged', true);
+    }
+    addChip('Commands: ' + (ms.command_count || 0), ms.command_count > 0);
+
+    card.appendChild(container);
+  }
 
   const footer = document.createElement('div');
   footer.className = 'card-footer';
