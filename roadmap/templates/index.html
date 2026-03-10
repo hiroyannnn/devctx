@@ -427,6 +427,7 @@ h1 {
   font-size: 0.78rem;
 }
 #graph-toolbar button:hover { color: #f0f6fc; border-color: #484f58; }
+#graph-toolbar select { margin-right: 8px; }
 </style>
 </head>
 <body>
@@ -434,17 +435,16 @@ h1 {
   <span class="view-toggle">
     <button class="view-btn active" id="btn-project" onclick="setView('project')">Project</button>
     <button class="view-btn" id="btn-flat" onclick="setView('flat')">Flat</button>
-    <button class="view-btn" id="btn-graph" onclick="setView('graph')">Graph</button>
+    <button class="view-btn" id="btn-graph" onclick="setView('graph')">Mind Map</button>
   </span>
 </h1>
 <div class="meta" id="meta">Loading...</div>
 <div id="content"></div>
 <div id="graph-container">
   <div id="graph-toolbar">
+    <select id="project-select" onchange="renderGraphView(graphGroups)" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
-    <button onclick="expandAllRepos()">Expand All</button>
-    <button onclick="collapseAllRepos()">Collapse All</button>
   </div>
   <div id="graph-canvas"></div>
   <div id="graph-inspector">
@@ -854,13 +854,14 @@ function renderFlatView(groups) {
 }
 
 function render(data) {
-  // Flatten sessions for graph use
+  // Flatten sessions for flat view (use copies to avoid mutating cached data)
   allSessionsFlat = [];
   data.forEach(function(g) {
     g.sessions.forEach(function(s) {
-      s._projectName = g.name;
-      s._projectKey = g.repo_root;
-      allSessionsFlat.push(s);
+      var copy = Object.assign({}, s);
+      copy._projectName = g.name;
+      copy._projectKey = g.repo_root;
+      allSessionsFlat.push(copy);
     });
   });
 
@@ -873,132 +874,202 @@ function render(data) {
   }
 }
 
-// ── Graph View ──
+// ── Mind Map View ──
 
 var PHASE_COLORS = {
   idle: '#484f58', implementation: '#f0883e', committed: '#d2a8ff',
   pushed: '#58a6ff', pr_open: '#bc8cff', done: '#3fb950'
 };
-var STATUS_BORDERS = {
-  'in-progress': '#58a6ff', review: '#bc8cff',
-  blocked: '#f85149', done: '#3fb950'
+var TASK_COLORS = {
+  done: '#3fb950', in_progress: '#58a6ff', planned: '#484f58', blocked: '#f85149'
 };
+var TASK_ICONS_MAP = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
 
-// Track which repos are expanded
-var expandedRepos = {};
 var graphGroups = [];
+var selectedProject = '';
 
-function buildGraphData(groups) {
+function updateProjectSelect(groups) {
+  var sel = document.getElementById('project-select');
+  var prev = sel.value;
+  sel.replaceChildren();
+  var allOpt = document.createElement('option');
+  allOpt.value = '';
+  allOpt.textContent = 'All Projects (' + groups.length + ')';
+  sel.appendChild(allOpt);
+  groups.forEach(function(g) {
+    var opt = document.createElement('option');
+    opt.value = g.repo_root;
+    opt.textContent = g.name + ' (' + g.sessions.length + ')';
+    sel.appendChild(opt);
+  });
+  if (prev) sel.value = prev;
+  selectedProject = sel.value;
+}
+
+function buildMindMapData(groups) {
   var nodes = [];
   var edges = [];
-  var nodeId = 0;
-  var sessionNodeMap = {};
+  var nid = 0;
 
-  groups.forEach(function(group) {
-    var repoId = 'repo:' + group.repo_root;
-    var isExpanded = expandedRepos[repoId];
-    var count = group.sessions.length;
+  var filteredGroups = groups;
+  selectedProject = document.getElementById('project-select').value;
+  if (selectedProject) {
+    filteredGroups = groups.filter(function(g) { return g.repo_root === selectedProject; });
+  }
 
-    // Determine dominant phase for repo color
-    var phaseCounts = {};
-    group.sessions.forEach(function(s) {
-      phaseCounts[s.phase] = (phaseCounts[s.phase] || 0) + 1;
-    });
-    var dominantPhase = 'idle';
-    var maxCount = 0;
-    Object.keys(phaseCounts).forEach(function(p) {
-      if (phaseCounts[p] > maxCount) { maxCount = phaseCounts[p]; dominantPhase = p; }
-    });
-    var repoColor = PHASE_COLORS[dominantPhase] || '#484f58';
+  var rootId = 'root';
+  nodes.push({
+    id: rootId,
+    label: 'Sessions',
+    shape: 'box',
+    color: { background: '#161b22', border: '#58a6ff' },
+    font: { color: '#f0f6fc', size: 16, face: '-apple-system, sans-serif', bold: true },
+    margin: { top: 10, bottom: 10, left: 16, right: 16 },
+    borderWidth: 2,
+    level: 0,
+    _type: 'root'
+  });
 
+  filteredGroups.forEach(function(group) {
+    var projectId = 'proj:' + (++nid);
     nodes.push({
-      id: repoId,
-      label: group.name + (isExpanded ? '' : ' (' + count + ')'),
+      id: projectId,
+      label: group.name + ' (' + group.sessions.length + ')',
       shape: 'box',
-      color: {
-        background: isExpanded ? '#21262d' : repoColor + '22',
-        border: isExpanded ? '#58a6ff' : repoColor,
-        highlight: { background: '#30363d', border: '#58a6ff' }
-      },
-      font: { color: '#f0f6fc', size: isExpanded ? 13 : 15, face: '-apple-system, sans-serif', bold: true },
-      margin: isExpanded ? 8 : 12,
-      borderWidth: isExpanded ? 2 : 3,
-      borderDashes: false,
-      _type: 'repo',
-      _data: group,
-      _repoId: repoId
+      color: { background: '#21262d', border: '#30363d' },
+      font: { color: '#f0f6fc', size: 14, face: '-apple-system, sans-serif', bold: true },
+      margin: { top: 8, bottom: 8, left: 12, right: 12 },
+      borderWidth: 2,
+      level: 1,
+      _type: 'project',
+      _data: group
     });
+    edges.push({ from: rootId, to: projectId, color: { color: '#30363d' }, width: 2 });
 
-    if (isExpanded) {
-      group.sessions.forEach(function(session) {
-        var sId = 'session:' + session.name;
-        sessionNodeMap[session.name] = sId;
-        var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
-        var statusBorder = STATUS_BORDERS[session.status] || '#30363d';
-        var label = session.name;
-        if (session.branch) label += '\n' + session.branch;
+    // Limit sessions in "All Projects" view
+    var sessions = group.sessions;
+    var truncated = false;
+    if (!selectedProject && sessions.length > 5) {
+      sessions = sessions.slice(0, 5);
+      truncated = true;
+    }
 
+    sessions.forEach(function(session) {
+      var sessionId = 'sess:' + (++nid);
+      var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+      var statusLabel = session.status ? ' [' + session.status + ']' : '';
+      var label = session.name + statusLabel;
+
+      nodes.push({
+        id: sessionId,
+        label: label,
+        shape: 'box',
+        color: {
+          background: phaseColor + '33',
+          border: phaseColor
+        },
+        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true },
+        margin: { top: 6, bottom: 6, left: 10, right: 10 },
+        borderWidth: 2,
+        level: 2,
+        _type: 'session',
+        _data: session
+      });
+      edges.push({ from: projectId, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+
+      // Goal node
+      if (session.goal) {
+        var goalId = 'goal:' + (++nid);
         nodes.push({
-          id: sId,
-          label: label,
+          id: goalId,
+          label: '\uD83C\uDFAF ' + session.goal,
           shape: 'box',
+          color: { background: '#f0883e22', border: '#f0883e' },
+          font: { color: '#f0883e', size: 11, face: '-apple-system, sans-serif' },
+          margin: { top: 4, bottom: 4, left: 8, right: 8 },
+          borderWidth: 1,
+          level: 3,
+          _type: 'goal'
+        });
+        edges.push({ from: sessionId, to: goalId, color: { color: '#f0883e44' }, width: 1 });
+      }
+
+      // Task nodes
+      if (session.tasks && session.tasks.length > 0) {
+        session.tasks.forEach(function(task) {
+          var taskId = 'task:' + (++nid);
+          var tc = TASK_COLORS[task.status] || '#484f58';
+          var icon = TASK_ICONS_MAP[task.status] || '\u25CB';
+          var isActive = task.status === 'in_progress';
+
+          nodes.push({
+            id: taskId,
+            label: icon + ' ' + task.title,
+            shape: 'box',
+            color: {
+              background: isActive ? tc + '44' : tc + '18',
+              border: tc
+            },
+            font: {
+              color: isActive ? '#f0f6fc' : '#8b949e',
+              size: isActive ? 11 : 10,
+              face: '-apple-system, sans-serif',
+              bold: isActive
+            },
+            margin: { top: 3, bottom: 3, left: 8, right: 8 },
+            borderWidth: isActive ? 3 : 1,
+            level: 3,
+            _type: 'task',
+            _data: task
+          });
+          edges.push({
+            from: sessionId, to: taskId,
+            color: { color: isActive ? tc + '88' : '#30363d' },
+            width: isActive ? 2 : 1
+          });
+        });
+      }
+
+      // Phase node
+      if (session.phase) {
+        var phaseId = 'phase:' + (++nid);
+        var pLabel = PHASE_LABELS[session.phase] || session.phase;
+        nodes.push({
+          id: phaseId,
+          label: pLabel,
+          shape: 'ellipse',
           color: {
             background: phaseColor + '33',
-            border: statusBorder,
-            highlight: { background: phaseColor + '66', border: '#f0f6fc' }
+            border: phaseColor
           },
-          font: { color: '#c9d1d9', size: 11, face: '-apple-system, sans-serif', multi: true },
-          margin: 8,
-          borderWidth: 2,
-          _type: 'session',
-          _data: session
+          font: { color: phaseColor, size: 9, face: '-apple-system, sans-serif' },
+          margin: { top: 2, bottom: 2, left: 6, right: 6 },
+          borderWidth: 1,
+          level: 3,
+          _type: 'phase'
         });
-
-        edges.push({
-          from: repoId, to: sId,
-          color: { color: '#30363d', highlight: '#484f58' },
-          width: 1.5,
-          smooth: { type: 'cubicBezier' },
-          _type: 'structure'
-        });
-      });
-    }
-  });
-
-  // Shared-topic edges between expanded sessions only
-  var topicSessions = {};
-  allSessionsFlat.forEach(function(s) {
-    if (!sessionNodeMap[s.name]) return;
-    if (s.topics) {
-      s.topics.forEach(function(t) {
-        var key = t.name.toLowerCase();
-        if (!topicSessions[key]) topicSessions[key] = [];
-        topicSessions[key].push(s.name);
-      });
-    }
-  });
-
-  Object.keys(topicSessions).forEach(function(topic) {
-    var sessions = topicSessions[topic];
-    if (sessions.length < 2) return;
-    for (var i = 0; i < sessions.length; i++) {
-      for (var j = i + 1; j < sessions.length; j++) {
-        var fromId = sessionNodeMap[sessions[i]];
-        var toId = sessionNodeMap[sessions[j]];
-        if (fromId && toId) {
-          edges.push({
-            from: fromId, to: toId,
-            color: { color: '#58a6ff44', highlight: '#58a6ff' },
-            width: 1,
-            dashes: true,
-            smooth: { type: 'continuous' },
-            hidden: true,
-            title: topic,
-            _type: 'shared_topic',
-            _topic: topic
-          });
-        }
+        edges.push({ from: sessionId, to: phaseId, color: { color: phaseColor + '44' }, width: 1 });
       }
+    });
+
+    // "+N more" indicator
+    if (truncated) {
+      var moreId = 'more:' + (++nid);
+      var remaining = group.sessions.length - 5;
+      nodes.push({
+        id: moreId,
+        label: '+' + remaining + ' more...',
+        shape: 'box',
+        color: { background: '#161b22', border: '#30363d' },
+        font: { color: '#8b949e', size: 10, face: '-apple-system, sans-serif', vadjust: 0 },
+        margin: { top: 4, bottom: 4, left: 8, right: 8 },
+        borderWidth: 1,
+        borderDashes: [4, 4],
+        level: 2,
+        _type: 'more',
+        _data: group
+      });
+      edges.push({ from: projectId, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
     }
   });
 
@@ -1007,43 +1078,43 @@ function buildGraphData(groups) {
 
 function renderGraphView(groups) {
   graphGroups = groups;
-  var data = buildGraphData(groups);
+  updateProjectSelect(groups);
+  var data = buildMindMapData(groups);
 
   if (graphNetwork) {
     graphNodes = new vis.DataSet(data.nodes);
     graphEdges = new vis.DataSet(data.edges);
     graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+    graphNetwork.fit({ animation: { duration: 300 } });
   } else {
     graphNodes = new vis.DataSet(data.nodes);
     graphEdges = new vis.DataSet(data.edges);
     var container = document.getElementById('graph-canvas');
     graphNetwork = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
-      physics: {
-        enabled: true,
-        solver: 'forceAtlas2Based',
-        forceAtlas2Based: { gravitationalConstant: -200, springLength: 200, springConstant: 0.02, damping: 0.4 },
-        stabilization: { iterations: 300, fit: true },
+      layout: {
+        hierarchical: {
+          enabled: true,
+          direction: 'LR',
+          sortMethod: 'directed',
+          levelSeparation: 220,
+          nodeSpacing: 40,
+          treeSpacing: 60,
+          parentCentralization: true,
+          blockShifting: true,
+          edgeMinimization: true
+        }
       },
+      physics: { enabled: false },
       interaction: {
         hover: true,
         tooltipDelay: 200,
-        hideEdgesOnDrag: true,
-        multiselect: false
+        multiselect: false,
+        navigationButtons: false,
+        keyboard: { enabled: true }
       },
-      layout: { improvedLayout: true },
-      edges: { arrows: { to: false } }
-    });
-
-    graphNetwork.once('stabilizationIterationsDone', function() {
-      graphNetwork.setOptions({ physics: { enabled: false } });
-    });
-
-    graphNetwork.on('doubleClick', function(params) {
-      if (params.nodes.length > 0) {
-        var nodeData = graphNodes.get(params.nodes[0]);
-        if (nodeData._type === 'repo') {
-          toggleRepo(nodeData._repoId);
-        }
+      edges: {
+        arrows: { to: false },
+        smooth: { type: 'cubicBezier', roundness: 0.5 }
       }
     });
 
@@ -1052,91 +1123,25 @@ function renderGraphView(groups) {
         var nodeData = graphNodes.get(params.nodes[0]);
         if (nodeData._type === 'session') {
           showInspector(nodeData._data);
-          highlightTopicEdges(params.nodes[0]);
-        } else if (nodeData._type === 'repo') {
+        } else if (nodeData._type === 'more') {
+          // Click "+N more" to select that project
+          var sel = document.getElementById('project-select');
+          sel.value = nodeData._data.repo_root;
+          renderGraphView(graphGroups);
+        } else {
           closeInspector();
-          clearTopicEdges();
         }
       } else {
         closeInspector();
-        clearTopicEdges();
-      }
-    });
-
-    graphNetwork.on('hoverNode', function(params) {
-      var nodeData = graphNodes.get(params.node);
-      if (nodeData._type === 'session') {
-        highlightTopicEdges(params.node);
-      }
-    });
-
-    graphNetwork.on('blurNode', function() {
-      if (!document.getElementById('graph-inspector').style.display ||
-          document.getElementById('graph-inspector').style.display === 'none') {
-        clearTopicEdges();
       }
     });
   }
 
+  var sessionCount = 0;
+  groups.forEach(function(g) { sessionCount += g.sessions.length; });
   var now = new Date();
   document.getElementById('meta').textContent =
-    allSessionsFlat.length + ' session(s) | Graph View | Updated: ' + now.toLocaleTimeString();
-}
-
-function restabilizeGraph(iterations) {
-  graphNetwork.setOptions({ physics: { enabled: true } });
-  graphNetwork.once('stabilizationIterationsDone', function() {
-    graphNetwork.setOptions({ physics: { enabled: false } });
-    graphNetwork.fit({ animation: { duration: 300 } });
-  });
-  graphNetwork.stabilize(iterations || 200);
-}
-
-function toggleRepo(repoId) {
-  expandedRepos[repoId] = !expandedRepos[repoId];
-  var data = buildGraphData(graphGroups);
-  graphNodes = new vis.DataSet(data.nodes);
-  graphEdges = new vis.DataSet(data.edges);
-  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
-  restabilizeGraph(200);
-}
-
-function expandAllRepos() {
-  graphGroups.forEach(function(g) {
-    expandedRepos['repo:' + g.repo_root] = true;
-  });
-  var data = buildGraphData(graphGroups);
-  graphNodes = new vis.DataSet(data.nodes);
-  graphEdges = new vis.DataSet(data.edges);
-  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
-  restabilizeGraph(400);
-}
-
-function collapseAllRepos() {
-  expandedRepos = {};
-  var data = buildGraphData(graphGroups);
-  graphNodes = new vis.DataSet(data.nodes);
-  graphEdges = new vis.DataSet(data.edges);
-  graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
-  restabilizeGraph(200);
-}
-
-function highlightTopicEdges(nodeId) {
-  // Show shared_topic edges connected to this node
-  graphEdges.forEach(function(edge) {
-    if (edge._type === 'shared_topic') {
-      var show = (edge.from === nodeId || edge.to === nodeId);
-      graphEdges.update({ id: edge.id, hidden: !show });
-    }
-  });
-}
-
-function clearTopicEdges() {
-  graphEdges.forEach(function(edge) {
-    if (edge._type === 'shared_topic') {
-      graphEdges.update({ id: edge.id, hidden: true });
-    }
-  });
+    sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
 }
 
 function showInspector(session) {
@@ -1215,14 +1220,13 @@ function showInspector(session) {
 
   // Tasks
   if (session.tasks && session.tasks.length > 0) {
-    var TASK_ICONS = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
     var tasksEl = document.createElement('div');
     session.tasks.forEach(function(task) {
       var item = document.createElement('div');
       item.className = 'task-item';
       var icon = document.createElement('span');
       icon.className = 'task-icon task-' + task.status;
-      icon.textContent = TASK_ICONS[task.status] || '\u25CB';
+      icon.textContent = TASK_ICONS_MAP[task.status] || '\u25CB';
       item.appendChild(icon);
       var title = document.createElement('span');
       title.textContent = task.title;
@@ -1263,7 +1267,6 @@ function showInspector(session) {
 
 function closeInspector() {
   document.getElementById('graph-inspector').style.display = 'none';
-  clearTopicEdges();
 }
 
 function graphFit() {
@@ -1272,14 +1275,7 @@ function graphFit() {
 
 function graphReset() {
   if (graphNetwork) {
-    graphNetwork.setOptions({ physics: { enabled: true } });
-    setTimeout(function() {
-      graphNetwork.stabilize(100);
-      graphNetwork.once('stabilizationIterationsDone', function() {
-        graphNetwork.setOptions({ physics: { enabled: false } });
-        graphNetwork.fit({ animation: true });
-      });
-    }, 50);
+    graphNetwork.fit({ animation: { duration: 500 } });
   }
 }
 
@@ -1287,14 +1283,16 @@ async function refresh() {
   try {
     var res = await fetch('/api/roadmap-map');
     var newData = await res.json();
-    // For graph view, skip re-render if data hasn't changed (preserves zoom/pan)
+    // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
     if (currentView === 'graph' && cachedData && graphNetwork) {
       var newJson = JSON.stringify(newData);
       var oldJson = JSON.stringify(cachedData);
       if (newJson === oldJson) {
+        var sessionCount = 0;
+        newData.forEach(function(g) { sessionCount += g.sessions.length; });
         var now = new Date();
         document.getElementById('meta').textContent =
-          allSessionsFlat.length + ' session(s) | Graph View | Updated: ' + now.toLocaleTimeString();
+          sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
         return;
       }
     }
