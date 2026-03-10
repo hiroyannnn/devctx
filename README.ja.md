@@ -342,8 +342,11 @@ devctx roadmap serve
 - **マイルストーンチップ** - Sessions/Commits/Pushed/PR の状態を一目で確認
 - **トピック＆タスク** - セッション毎のセマンティックトピックとタスクリスト
 - **イベントタイムライン** - カードクリックでイベント履歴を展開
-- **Project / Flat / Graph 表示** - グループ化・フラット・グラフ表示を切り替え
-- **グラフビュー** - vis-network によるセッション関連グラフ（リポジトリ折りたたみ、ダブルクリック展開、inspector panel、共通トピックエッジ）
+- **Project / Flat / Mind Map 表示** - グループ化・フラット・マインドマップ表示を切り替え
+- **マインドマップビュー** - 階層ツリー表示（Project → Session → Goal/Tasks/Phase）、要対応順ソート、単一プロジェクト時の階層省略、「No roadmap」警告、inspector パネル
+
+![Mind Map - 全体表示](assets/mindmap-all.png)
+![Mind Map - 詳細表示](assets/mindmap-detail.png)
 
 ## トラブルシューティング
 

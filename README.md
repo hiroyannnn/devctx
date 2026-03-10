@@ -323,8 +323,11 @@ Opens a web dashboard at `http://localhost:3333` with:
 - **Milestone chips** - Sessions/Commits/Pushed/PR status at a glance
 - **Topics & Tasks** - Semantic topics and task lists per session
 - **Event timeline** - Click a card to expand its full event history
-- **Project / Flat / Graph view** - Switch between grouped, flat, and graph layouts
-- **Graph view** - vis-network powered relationship graph with collapsible repo clusters, double-click to expand, inspector panel for session details, shared-topic edge highlighting
+- **Project / Flat / Mind Map view** - Switch between grouped, flat, and mind map layouts
+- **Mind Map view** - Hierarchical tree visualization (Project → Session → Goal/Tasks/Phase) with priority sorting, hierarchy pruning for single projects, "No roadmap" warnings, and inspector panel
+
+![Mind Map - All Projects](assets/mindmap-all.png)
+![Mind Map - Detail](assets/mindmap-detail.png)
 
 ## Troubleshooting
 
