@@ -190,6 +190,11 @@ func installHooksToSettings() error {
 
 	fmt.Printf("✓ Hooks installed to %s\n", settingsPath)
 	fmt.Println("Note: You may need to run /hooks in Claude Code to review and approve the changes.")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. devctx commands --install   # Install Claude slash commands + auto-insight rule")
+	fmt.Println("  2. eval \"$(devctx shell-init)\"  # Add to .bashrc/.zshrc for shell shortcuts")
+	fmt.Println("  3. devctx roadmap serve         # Open the web dashboard with Mind Map view")
 	return nil
 }
 

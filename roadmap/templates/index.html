@@ -459,7 +459,7 @@ h1 {
 <script>
 // All data comes from the local devctx API.
 // All dynamic values are inserted via textContent (safe against XSS).
-var currentView = 'project';
+var currentView = localStorage.getItem('devctx-view') || 'project';
 var cachedData = null;
 
 const PHASES = ['idle', 'implementation', 'committed', 'pushed', 'pr_open', 'done'];
@@ -481,6 +481,7 @@ var allSessionsFlat = [];
 
 function setView(view) {
   currentView = view;
+  localStorage.setItem('devctx-view', view);
   document.getElementById('btn-project').className = 'view-btn' + (view === 'project' ? ' active' : '');
   document.getElementById('btn-flat').className = 'view-btn' + (view === 'flat' ? ' active' : '');
   document.getElementById('btn-graph').className = 'view-btn' + (view === 'graph' ? ' active' : '');
@@ -1436,7 +1437,12 @@ async function refresh() {
   }
 }
 
-refresh();
+// Restore saved view on load
+if (currentView !== 'project') {
+  setView(currentView);
+} else {
+  refresh();
+}
 setInterval(refresh, 5000);
 </script>
 </body>

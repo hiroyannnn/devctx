@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -104,9 +106,30 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/", s.handleIndex)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
-	fmt.Printf("Session Roadmap: http://%s\n", addr)
+	url := fmt.Sprintf("http://%s", addr)
+	fmt.Printf("Session Roadmap: %s\n", url)
 	fmt.Println("Press Ctrl+C to stop")
+
+	// Auto-open browser
+	go openBrowser(url)
+
 	return http.ListenAndServe(addr, mux)
+}
+
+// openBrowser opens the given URL in the default browser.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	_ = cmd.Start()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
