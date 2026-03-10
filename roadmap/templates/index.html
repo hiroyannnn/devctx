@@ -906,6 +906,32 @@ function updateProjectSelect(groups) {
   selectedProject = sel.value;
 }
 
+// Priority order for sorting groups: higher = more urgent
+var STATUS_PRIORITY = {'in-progress': 5, blocked: 4, review: 3, done: 0};
+function groupPriority(group) {
+  var max = 0;
+  group.sessions.forEach(function(s) {
+    var p = STATUS_PRIORITY[s.status] || 1;
+    if (p > max) max = p;
+  });
+  return max;
+}
+
+function summarizeGroup(group) {
+  var counts = {};
+  group.sessions.forEach(function(s) {
+    var st = s.status || 'unknown';
+    counts[st] = (counts[st] || 0) + 1;
+  });
+  var parts = [];
+  if (counts['in-progress']) parts.push(counts['in-progress'] + ' active');
+  if (counts['blocked']) parts.push(counts['blocked'] + ' blocked');
+  if (counts['review']) parts.push(counts['review'] + ' review');
+  if (counts['done']) parts.push(counts['done'] + ' done');
+  if (parts.length === 0) parts.push(group.sessions.length + ' sessions');
+  return parts.join(' / ');
+}
+
 function buildMindMapData(groups) {
   var nodes = [];
   var edges = [];
@@ -917,65 +943,166 @@ function buildMindMapData(groups) {
     filteredGroups = groups.filter(function(g) { return g.repo_root === selectedProject; });
   }
 
+  var isAllProjects = !selectedProject;
+  var isSingleProject = filteredGroups.length === 1;
+  var isSingleSession = isSingleProject && filteredGroups[0].sessions.length === 1;
+
+  // Sort groups by priority (most urgent first) in All Projects view
+  if (isAllProjects) {
+    filteredGroups = filteredGroups.slice().sort(function(a, b) {
+      return groupPriority(b) - groupPriority(a);
+    });
+  }
+
+  // Determine level offsets based on hierarchy pruning
+  var rootLevel = 0;
+  var projectLevel = 1;
+  var sessionLevel = 2;
+  var detailLevel = 3;
+  var showRoot = !isSingleProject;
+  var showProject = !isSingleSession;
+
+  if (isSingleSession) {
+    // Skip both root and project
+    sessionLevel = 0;
+    detailLevel = 1;
+  } else if (isSingleProject) {
+    // Skip root only
+    projectLevel = 0;
+    sessionLevel = 1;
+    detailLevel = 2;
+  }
+
+  // Root node (only in multi-project view)
   var rootId = 'root';
-  nodes.push({
-    id: rootId,
-    label: 'Sessions',
-    shape: 'box',
-    color: { background: '#161b22', border: '#58a6ff' },
-    font: { color: '#f0f6fc', size: 16, face: '-apple-system, sans-serif', bold: true },
-    margin: { top: 10, bottom: 10, left: 16, right: 16 },
-    borderWidth: 2,
-    level: 0,
-    _type: 'root'
-  });
+  if (showRoot) {
+    nodes.push({
+      id: rootId,
+      label: 'Sessions',
+      shape: 'box',
+      color: { background: '#161b22', border: '#58a6ff' },
+      font: { color: '#f0f6fc', size: 16, face: '-apple-system, sans-serif', bold: true },
+      margin: { top: 10, bottom: 10, left: 16, right: 16 },
+      borderWidth: 2,
+      level: rootLevel,
+      _type: 'root'
+    });
+  }
 
   filteredGroups.forEach(function(group) {
     var projectId = 'proj:' + (++nid);
-    nodes.push({
-      id: projectId,
-      label: group.name + ' (' + group.sessions.length + ')',
-      shape: 'box',
-      color: { background: '#21262d', border: '#30363d' },
-      font: { color: '#f0f6fc', size: 14, face: '-apple-system, sans-serif', bold: true },
-      margin: { top: 8, bottom: 8, left: 12, right: 12 },
-      borderWidth: 2,
-      level: 1,
-      _type: 'project',
-      _data: group
-    });
-    edges.push({ from: rootId, to: projectId, color: { color: '#30363d' }, width: 2 });
+    var parentId = showRoot ? rootId : null;
 
-    // Limit sessions in "All Projects" view
-    var sessions = group.sessions;
-    var truncated = false;
-    if (!selectedProject && sessions.length > 5) {
-      sessions = sessions.slice(0, 5);
-      truncated = true;
+    // Project node (skip when single session)
+    if (showProject) {
+      var projLabel = group.name;
+      if (isAllProjects) {
+        // In All Projects: show summary instead of session count
+        projLabel += '\n' + summarizeGroup(group);
+      } else {
+        projLabel += ' (' + group.sessions.length + ')';
+      }
+
+      // Determine project border color by most urgent status
+      var projPrio = groupPriority(group);
+      var projBorder = '#30363d';
+      if (projPrio >= 5) projBorder = '#58a6ff';
+      else if (projPrio >= 4) projBorder = '#f85149';
+      else if (projPrio >= 3) projBorder = '#bc8cff';
+
+      nodes.push({
+        id: projectId,
+        label: projLabel,
+        shape: 'box',
+        color: { background: '#21262d', border: projBorder },
+        font: { color: '#f0f6fc', size: isAllProjects ? 12 : 14, face: '-apple-system, sans-serif', bold: true, multi: true },
+        margin: { top: 8, bottom: 8, left: 12, right: 12 },
+        borderWidth: 2,
+        level: projectLevel,
+        _type: 'project',
+        _data: group
+      });
+      if (parentId) {
+        edges.push({ from: parentId, to: projectId, color: { color: '#30363d' }, width: 2 });
+      }
     }
 
-    sessions.forEach(function(session) {
+    var sessionParent = showProject ? projectId : null;
+
+    // In All Projects: collapse sessions (no child nodes per session)
+    if (isAllProjects) {
+      // Show only sessions, no task/goal/phase expansion
+      var sessions = group.sessions.slice(0, 3);
+      var truncated = group.sessions.length > 3;
+
+      sessions.forEach(function(session) {
+        var sessionId = 'sess:' + (++nid);
+        var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+        var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
+        // Session label: name + phase badge inline
+        var label = session.name;
+        if (pLabel) label += ' \u00B7 ' + pLabel;
+
+        nodes.push({
+          id: sessionId,
+          label: label,
+          shape: 'box',
+          color: { background: phaseColor + '33', border: phaseColor },
+          font: { color: '#c9d1d9', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 4, bottom: 4, left: 8, right: 8 },
+          borderWidth: 1,
+          level: sessionLevel,
+          _type: 'session',
+          _data: session
+        });
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1 });
+      });
+
+      if (truncated) {
+        var moreId = 'more:' + (++nid);
+        var remaining = group.sessions.length - 3;
+        nodes.push({
+          id: moreId,
+          label: '+' + remaining + ' more...',
+          shape: 'box',
+          color: { background: '#161b22', border: '#30363d' },
+          font: { color: '#8b949e', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 3, bottom: 3, left: 6, right: 6 },
+          borderWidth: 1,
+          borderDashes: [4, 4],
+          level: sessionLevel,
+          _type: 'more',
+          _data: group
+        });
+        edges.push({ from: sessionParent, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
+      }
+      return; // skip detailed view for All Projects
+    }
+
+    // Detailed view (single project selected)
+    group.sessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
       var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
-      var statusLabel = session.status ? ' [' + session.status + ']' : '';
-      var label = session.name + statusLabel;
+      var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
+      // Phase integrated into session label
+      var label = session.name;
+      if (pLabel) label += '\n' + pLabel;
 
       nodes.push({
         id: sessionId,
         label: label,
         shape: 'box',
-        color: {
-          background: phaseColor + '33',
-          border: phaseColor
-        },
-        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true },
+        color: { background: phaseColor + '33', border: phaseColor },
+        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
         borderWidth: 2,
-        level: 2,
+        level: sessionLevel,
         _type: 'session',
         _data: session
       });
-      edges.push({ from: projectId, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+      if (sessionParent) {
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+      }
 
       // Goal node
       if (session.goal) {
@@ -988,15 +1115,44 @@ function buildMindMapData(groups) {
           font: { color: '#f0883e', size: 11, face: '-apple-system, sans-serif' },
           margin: { top: 4, bottom: 4, left: 8, right: 8 },
           borderWidth: 1,
-          level: 3,
+          level: detailLevel,
           _type: 'goal'
         });
         edges.push({ from: sessionId, to: goalId, color: { color: '#f0883e44' }, width: 1 });
       }
 
-      // Task nodes
+      // Task nodes: sorted by status (in_progress first, then planned, blocked, done)
       if (session.tasks && session.tasks.length > 0) {
-        session.tasks.forEach(function(task) {
+        var taskOrder = {in_progress: 0, planned: 1, blocked: 2, done: 3};
+        var sorted = session.tasks.slice().sort(function(a, b) {
+          return (taskOrder[a.status] || 9) - (taskOrder[b.status] || 9);
+        });
+        var doneCount = 0;
+        var doneShown = false;
+        sorted.forEach(function(task) {
+          // Collapse done tasks: show summary node instead
+          if (task.status === 'done') {
+            doneCount++;
+            if (!doneShown) {
+              doneShown = true;
+              var total = sorted.filter(function(t) { return t.status === 'done'; }).length;
+              var doneId = 'done:' + (++nid);
+              nodes.push({
+                id: doneId,
+                label: '\u2713 Done (' + total + ')',
+                shape: 'box',
+                color: { background: '#3fb95018', border: '#3fb950' },
+                font: { color: '#3fb950', size: 9, face: '-apple-system, sans-serif' },
+                margin: { top: 3, bottom: 3, left: 6, right: 6 },
+                borderWidth: 1,
+                level: detailLevel,
+                _type: 'done_summary'
+              });
+              edges.push({ from: sessionId, to: doneId, color: { color: '#3fb95044' }, width: 1 });
+            }
+            return;
+          }
+
           var taskId = 'task:' + (++nid);
           var tc = TASK_COLORS[task.status] || '#484f58';
           var icon = TASK_ICONS_MAP[task.status] || '\u25CB';
@@ -1012,65 +1168,42 @@ function buildMindMapData(groups) {
             },
             font: {
               color: isActive ? '#f0f6fc' : '#8b949e',
-              size: isActive ? 11 : 10,
+              size: isActive ? 12 : 10,
               face: '-apple-system, sans-serif',
               bold: isActive
             },
             margin: { top: 3, bottom: 3, left: 8, right: 8 },
             borderWidth: isActive ? 3 : 1,
-            level: 3,
+            level: detailLevel,
             _type: 'task',
             _data: task
           });
           edges.push({
             from: sessionId, to: taskId,
-            color: { color: isActive ? tc + '88' : '#30363d' },
-            width: isActive ? 2 : 1
+            color: { color: isActive ? tc : '#30363d' },
+            width: isActive ? 3 : 1
           });
         });
       }
 
-      // Phase node
-      if (session.phase) {
-        var phaseId = 'phase:' + (++nid);
-        var pLabel = PHASE_LABELS[session.phase] || session.phase;
+      // No roadmap warning when no goal and no tasks
+      if (!session.goal && (!session.tasks || session.tasks.length === 0)) {
+        var warnId = 'warn:' + (++nid);
         nodes.push({
-          id: phaseId,
-          label: pLabel,
-          shape: 'ellipse',
-          color: {
-            background: phaseColor + '33',
-            border: phaseColor
-          },
-          font: { color: phaseColor, size: 9, face: '-apple-system, sans-serif' },
-          margin: { top: 2, bottom: 2, left: 6, right: 6 },
+          id: warnId,
+          label: '\u26A0 No roadmap',
+          shape: 'box',
+          color: { background: '#f8514922', border: '#f85149' },
+          font: { color: '#f85149', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 3, bottom: 3, left: 8, right: 8 },
           borderWidth: 1,
-          level: 3,
-          _type: 'phase'
+          borderDashes: [4, 4],
+          level: detailLevel,
+          _type: 'warning'
         });
-        edges.push({ from: sessionId, to: phaseId, color: { color: phaseColor + '44' }, width: 1 });
+        edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
       }
     });
-
-    // "+N more" indicator
-    if (truncated) {
-      var moreId = 'more:' + (++nid);
-      var remaining = group.sessions.length - 5;
-      nodes.push({
-        id: moreId,
-        label: '+' + remaining + ' more...',
-        shape: 'box',
-        color: { background: '#161b22', border: '#30363d' },
-        font: { color: '#8b949e', size: 10, face: '-apple-system, sans-serif', vadjust: 0 },
-        margin: { top: 4, bottom: 4, left: 8, right: 8 },
-        borderWidth: 1,
-        borderDashes: [4, 4],
-        level: 2,
-        _type: 'more',
-        _data: group
-      });
-      edges.push({ from: projectId, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
-    }
   });
 
   return { nodes: nodes, edges: edges };
