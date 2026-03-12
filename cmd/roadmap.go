@@ -432,7 +432,8 @@ func execAnalyzeBackground(args []string) error {
 }
 
 func runClaude(prompt string) (string, error) {
-	cmd := exec.Command("claude", "--print", "--model", "claude-sonnet-4-20250514", prompt)
+	cmd := exec.Command("claude", "--print", "--model", "claude-sonnet-4-20250514", "-p", "-")
+	cmd.Stdin = strings.NewReader(prompt)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("claude CLI failed: %w", err)

@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/hiroyannnn/devctx/model"
 	"gopkg.in/yaml.v3"
@@ -110,7 +112,25 @@ func (s *Storage) SaveInsights(store *model.InsightStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.insightsPath(), data, 0644)
+	return atomicWriteFile(s.insightsPath(), data, 0644)
+}
+
+// UpdateInsights atomically loads, updates, and saves insights with file locking.
+func (s *Storage) UpdateInsights(fn func(*model.InsightStore) error) error {
+	return s.withFileLock(s.insightsPath(), func() error {
+		store, err := s.LoadInsights()
+		if err != nil {
+			return err
+		}
+		if err := fn(store); err != nil {
+			return err
+		}
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.insightsPath(), data, 0644)
+	})
 }
 
 func (s *Storage) LoadEvents() (*model.EventStore, error) {
@@ -137,12 +157,44 @@ func (s *Storage) SaveEvents(store *model.EventStore) error {
 }
 
 func (s *Storage) AppendEvent(event model.SessionEvent) error {
-	store, err := s.LoadEvents()
+	return s.withFileLock(s.eventsPath(), func() error {
+		store, err := s.LoadEvents()
+		if err != nil {
+			return err
+		}
+		store.Append(event)
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.eventsPath(), data, 0644)
+	})
+}
+
+// withFileLock acquires an exclusive file lock, runs fn, and releases the lock.
+func (s *Storage) withFileLock(path string, fn func() error) error {
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
+		return fmt.Errorf("cannot create lock file: %w", err)
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("cannot acquire lock: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+
+	return fn()
+}
+
+// atomicWriteFile writes data to a temp file then renames to target path.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
 		return err
 	}
-	store.Append(event)
-	return s.SaveEvents(store)
+	return os.Rename(tmp, path)
 }
 
 func defaultConfig() *model.Config {

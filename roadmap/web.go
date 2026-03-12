@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -110,10 +111,14 @@ func (s *Server) ListenAndServe() error {
 	fmt.Printf("Session Roadmap: %s\n", url)
 	fmt.Println("Press Ctrl+C to stop")
 
-	// Auto-open browser
+	// Auto-open browser after listener is established
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	go openBrowser(url)
 
-	return http.ListenAndServe(addr, mux)
+	return http.Serve(ln, mux)
 }
 
 // openBrowser opens the given URL in the default browser.
@@ -129,7 +134,10 @@ func openBrowser(url string) {
 	default:
 		return
 	}
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	go cmd.Wait()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
