@@ -23,6 +23,8 @@ Claude Code セッションと git worktree をカンバン形式で管理する
 - **メモ機能** - コンテキストにメモを追加
 - **GitHub 連携** - Issue/PR の自動検出・リンク
 - **worktree 自動作成** - ブランチ作成から Claude 起動まで一発
+- **セッションロードマップ** - 開発フェーズの自動検出（idle → impl → committed → pushed → PR → done）
+- **AI インサイト** - Claude がセッションの目標・フォーカス・次のステップ・状態を推定
 
 ## インストール
 
@@ -90,7 +92,9 @@ devctx list
 | `devctx register <name>` | コンテキストを登録（通常は hook で自動） |
 | `devctx resume <name>` | コンテキストを再開 |
 | `devctx move <name> <status>` | ステータスを変更 |
+| `devctx touch <name>` | コンテキストの最終アクティブ時刻を更新 |
 | `devctx archive <name>` | 完了としてアーカイブ |
+| `devctx remove <name>` | コンテキストの追跡を解除 |
 
 ### 新規作成・設定
 
@@ -109,6 +113,19 @@ devctx list
 | `devctx sync [name]` | PR/Issue を自動検出してリンク |
 | `devctx sync --all` | 全コンテキストのセッション名を更新 |
 | `devctx pr <name>` | PR を作成 |
+
+### セッションロードマップ
+
+| コマンド | 説明 |
+|---------|------|
+| `devctx roadmap scan` | git ベースのフェーズを一覧表示 |
+| `devctx roadmap status` | 開発フェーズの進捗をビジュアル表示 |
+| `devctx roadmap serve` | Web ダッシュボードを起動（localhost:3333） |
+| `devctx roadmap refresh` | PR 検出含むフルスキャン（gh CLI 使用） |
+| `devctx roadmap analyze [name]` | Claude CLI で AI インサイトを生成 |
+| `devctx roadmap analyze --all` | 全アクティブセッションのインサイトを生成 |
+| `devctx roadmap init --prompt "..."` | セッションの初期プロンプトを設定 |
+| `devctx insight [name]` | セッションインサイトの表示/手動設定 |
 
 ### 監視・検索
 
@@ -253,6 +270,84 @@ devctx commands --install
 - `/devctx-note` - メモを追加
 - `/devctx-link` - Issue/PR をリンク
 - `/devctx-status` - コンテキストの状態を表示
+- `/devctx-insight` - セッションインサイトを保存（目標・フォーカス・次のステップ・状態）
+
+ルールファイル（`~/.claude/rules/devctx-insight-auto.md`）も同時にインストールされ、実装計画の作成後に Claude が自動で `/devctx-insight` を実行します。
+
+## セッションロードマップ
+
+セッションの開発ライフサイクルを自動追跡します。
+
+### フェーズ検出
+
+`register` / `touch` 時に git の状態からフェーズを自動検出:
+
+| フェーズ | 条件 |
+|---------|------|
+| Idle | 変更なし、コミットなし |
+| Implementation | 未コミットの変更あり |
+| Committed | ベースブランチより先のコミットあり |
+| Pushed | リモートブランチが最新 |
+| PR Open | オープンな PR が検出された |
+| Done | マージ済みの PR |
+
+### マイルストーン追跡
+
+開発マイルストーンがイベントとして自動記録されます:
+
+| マイルストーン | ソース |
+|-------------|--------|
+| 初回コミット / コミット | `register` / `touch` 時の git log |
+| 初回プッシュ | git remote チェック |
+| PR 作成 / マージ | `roadmap refresh` の `gh` CLI |
+| セッション開始 / 終了 | Claude Code hooks |
+| ステータス変更 | `devctx move` コマンド |
+
+イベントは `~/.config/devctx/events.yaml` に append-only ログとして保存されます。
+
+### AI インサイト
+
+Claude がセッションの文脈を分析してインサイトを保存します:
+
+```bash
+# カスタムコマンドと自動実行ルールをインストール
+devctx commands --install
+
+# Claude Code でのセッション中:
+# 実装計画の作成後、Claude が自動的に /devctx-insight を実行
+
+# または Claude CLI で手動分析:
+devctx roadmap analyze
+```
+
+インサイトの内容:
+- **Goal** - このセッションが達成しようとしていること
+- **Current Focus** - 今取り組んでいるサブタスク
+- **Next Step** - 次にやるべきこと
+- **Attention State** - active（作業中）/ waiting（入力待ち）/ idle（一段落）/ blocked（詰まっている）
+- **Topics** - git と LLM から抽出されたセマンティックトピック（例: 「認証」「エラーハンドリング」）
+- **Tasks** - ステータス付きの具体的な作業項目（planned / in_progress / done / blocked）
+
+トピック・タスク抽出はハイブリッド方式: git からの機械抽出（ブランチ名、コミットメッセージ、変更ディレクトリ）と LLM によるクラスタリング・正規化を組み合わせています。
+
+### Web ダッシュボード
+
+```bash
+devctx roadmap serve
+```
+
+`http://localhost:3333` でダッシュボードが起動します:
+- **プロジェクトグルーピング** - リポジトリ別にセッションを表示
+- **フェーズパイプライン** - 開発フェーズの進捗をビジュアル表示
+- **マイルストーンチップ** - Sessions/Commits/Pushed/PR の状態を一目で確認
+- **トピック＆タスク** - セッション毎のセマンティックトピックとタスクリスト
+- **イベントタイムライン** - カードクリックでイベント履歴を展開
+- **Project / Flat / Mind Map 表示** - グループ化・フラット・マインドマップ表示を切り替え
+- **マインドマップビュー** - 階層ツリー表示（Project → Session → Goal/Tasks/Phase）、要対応順ソート、単一プロジェクト時の階層省略、「No roadmap」警告、inspector パネル
+
+![Project View](assets/screenshot-project.png)
+![Mind Map - 全体表示](assets/screenshot-mindmap-all.png)
+![Mind Map - 詳細表示](assets/screenshot-mindmap-detail.png)
 
 ## トラブルシューティング
 

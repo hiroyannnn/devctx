@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Roadmap</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 24px;
+}
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+  color: #f0f6fc;
+}
+.meta {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 24px;
+}
+.view-toggle {
+  display: inline-flex;
+  gap: 4px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 2px;
+  margin-left: 12px;
+}
+.view-btn {
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: #8b949e;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.view-btn.active {
+  background: #30363d;
+  color: #f0f6fc;
+}
+.project-group {
+  margin-bottom: 24px;
+}
+.project-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #21262d;
+}
+.project-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #f0f6fc;
+}
+.project-count {
+  font-size: 0.75rem;
+  color: #8b949e;
+  background: #21262d;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.card:hover { border-color: #484f58; }
+.card.expanded { border-color: #58a6ff; }
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.card-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #f0f6fc;
+}
+.card-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+.status-in-progress { background: #1f6feb33; color: #58a6ff; }
+.status-review { background: #8957e533; color: #bc8cff; }
+.status-blocked { background: #da363333; color: #f85149; }
+.status-done { background: #23863533; color: #3fb950; }
+.card-branch {
+  font-size: 0.85rem;
+  color: #8b949e;
+  margin-bottom: 8px;
+  font-family: monospace;
+}
+.card-prompt {
+  font-size: 0.85rem;
+  color: #c9d1d9;
+  margin-bottom: 16px;
+  line-height: 1.4;
+  max-height: 3.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-insights {
+  background: #0d111766;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.insight-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.insight-label {
+  color: #8b949e;
+  min-width: 44px;
+  flex-shrink: 0;
+}
+.insight-value {
+  color: #c9d1d9;
+}
+.insight-freshness {
+  font-size: 0.7rem;
+  color: #484f58;
+  text-align: right;
+  margin-top: 4px;
+}
+.attention-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+.attention-active { background: #1f6feb33; color: #58a6ff; }
+.attention-waiting { background: #8957e533; color: #bc8cff; }
+.attention-idle { background: #30363d; color: #8b949e; }
+.attention-blocked { background: #da363333; color: #f85149; }
+.pipeline {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+}
+.stage-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #30363d;
+  background: #0d1117;
+  z-index: 1;
+}
+.stage-dot.reached { background: #30363d; border-color: #484f58; }
+.stage-dot.current { background: #58a6ff; border-color: #58a6ff; box-shadow: 0 0 8px #58a6ff44; }
+.stage-label {
+  font-size: 0.65rem;
+  color: #484f58;
+  margin-top: 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.stage-label.reached { color: #8b949e; }
+.stage-label.current { color: #58a6ff; font-weight: 600; }
+.connector {
+  height: 2px;
+  flex: 0.5;
+  background: #30363d;
+  margin-top: -10px;
+}
+.connector.reached { background: #484f58; }
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  font-size: 0.75rem;
+  color: #484f58;
+}
+.card-links a {
+  color: #58a6ff;
+  text-decoration: none;
+  margin-left: 8px;
+}
+.card-links a:hover { text-decoration: underline; }
+.card-milestones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+.milestone-chip {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  white-space: nowrap;
+}
+.milestone-chip.achieved {
+  background: #1f6feb22;
+  border-color: #1f6feb44;
+  color: #58a6ff;
+}
+/* Topics & Tasks */
+.card-topics-tasks {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+.card-topics, .card-tasks {
+  flex: 1;
+}
+.section-title {
+  font-size: 0.72rem;
+  color: #8b949e;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.topic-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #1f6feb22;
+  border: 1px solid #1f6feb44;
+  color: #58a6ff;
+  margin: 2px 4px 2px 0;
+}
+.topic-tag.git { background: #f0883e22; border-color: #f0883e44; color: #f0883e; }
+.topic-tag.manual { background: #3fb95022; border-color: #3fb95044; color: #3fb950; }
+.task-item {
+  font-size: 0.75rem;
+  padding: 2px 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.task-icon {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.task-done { color: #3fb950; }
+.task-in_progress { color: #58a6ff; }
+.task-planned { color: #484f58; }
+.task-blocked { color: #f85149; }
+/* Timeline panel */
+.timeline-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #21262d;
+}
+.timeline-title {
+  font-size: 0.8rem;
+  color: #8b949e;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.timeline-event {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 0.78rem;
+  align-items: flex-start;
+}
+.timeline-dot-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 16px;
+  flex-shrink: 0;
+}
+.timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #484f58;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.timeline-dot.session_start { background: #3fb950; }
+.timeline-dot.session_end { background: #8b949e; }
+.timeline-dot.first_commit, .timeline-dot.commit { background: #f0883e; }
+.timeline-dot.first_push { background: #58a6ff; }
+.timeline-dot.pr_created { background: #bc8cff; }
+.timeline-dot.pr_merged { background: #3fb950; }
+.timeline-dot.status_change { background: #d2a8ff; }
+.timeline-dot.command { background: #8b949e; }
+.timeline-line {
+  width: 2px;
+  flex: 1;
+  background: #21262d;
+  min-height: 8px;
+}
+.timeline-content {
+  flex: 1;
+}
+.timeline-type {
+  color: #8b949e;
+  min-width: 90px;
+  display: inline-block;
+}
+.timeline-detail {
+  color: #c9d1d9;
+}
+.timeline-time {
+  color: #484f58;
+  font-size: 0.7rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.timeline-loading {
+  color: #484f58;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+.empty {
+  text-align: center;
+  color: #484f58;
+  padding: 48px;
+  font-size: 1.1rem;
+}
+/* Graph view */
+#graph-container {
+  display: none;
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 120px);
+}
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+}
+#graph-inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 340px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  display: none;
+  font-size: 0.85rem;
+}
+#graph-inspector .inspector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+#graph-inspector .inspector-name {
+  font-weight: 600;
+  font-size: 1rem;
+  color: #f0f6fc;
+}
+#graph-inspector .inspector-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 2px 6px;
+}
+#graph-inspector .inspector-close:hover { color: #f0f6fc; }
+#graph-inspector .inspector-section {
+  margin-bottom: 10px;
+}
+#graph-inspector .inspector-section-title {
+  font-size: 0.72rem;
+  color: #8b949e;
+  font-weight: 600;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+#graph-inspector .inspector-value {
+  color: #c9d1d9;
+  line-height: 1.4;
+}
+#graph-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#graph-toolbar button {
+  padding: 4px 10px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+#graph-toolbar button:hover { color: #f0f6fc; border-color: #484f58; }
+#graph-toolbar select { margin-right: 8px; }
+</style>
+</head>
+<body>
+<h1>Session Roadmap
+  <span class="view-toggle">
+    <button class="view-btn active" id="btn-project" onclick="setView('project')">Project</button>
+    <button class="view-btn" id="btn-flat" onclick="setView('flat')">Flat</button>
+    <button class="view-btn" id="btn-graph" onclick="setView('graph')">Mind Map</button>
+  </span>
+</h1>
+<div class="meta" id="meta">Loading...</div>
+<div id="content"></div>
+<div id="graph-container">
+  <div id="graph-toolbar">
+    <select id="project-select" onchange="renderGraphView(graphGroups)" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
+    <button onclick="graphFit()">Fit</button>
+    <button onclick="graphReset()">Reset</button>
+  </div>
+  <div id="graph-canvas"></div>
+  <div id="graph-inspector">
+    <div class="inspector-header">
+      <span class="inspector-name" id="inspector-name"></span>
+      <button class="inspector-close" onclick="closeInspector()">&times;</button>
+    </div>
+    <div id="inspector-body"></div>
+  </div>
+</div>
+
+<script>
+// All data comes from the local devctx API.
+// All dynamic values are inserted via textContent (safe against XSS).
+var currentView = localStorage.getItem('devctx-view') || 'project';
+var cachedData = null;
+
+const PHASES = ['idle', 'implementation', 'committed', 'pushed', 'pr_open', 'done'];
+const PHASE_LABELS = {
+  idle: 'Idle', implementation: 'Impl', committed: 'Commit',
+  pushed: 'Push', pr_open: 'PR', done: 'Done'
+};
+const EVENT_LABELS = {
+  session_start: 'Session Start', session_end: 'Session End',
+  first_commit: 'First Commit', commit: 'Commit',
+  first_push: 'First Push', pr_created: 'PR Created',
+  pr_merged: 'PR Merged', command: 'Command', status_change: 'Status Change'
+};
+
+var graphNetwork = null;
+var graphNodes = null;
+var graphEdges = null;
+var allSessionsFlat = [];
+
+function setView(view) {
+  currentView = view;
+  localStorage.setItem('devctx-view', view);
+  document.getElementById('btn-project').className = 'view-btn' + (view === 'project' ? ' active' : '');
+  document.getElementById('btn-flat').className = 'view-btn' + (view === 'flat' ? ' active' : '');
+  document.getElementById('btn-graph').className = 'view-btn' + (view === 'graph' ? ' active' : '');
+  document.getElementById('content').style.display = (view === 'graph') ? 'none' : '';
+  document.getElementById('graph-container').style.display = (view === 'graph') ? 'block' : 'none';
+  if (cachedData) render(cachedData);
+}
+
+function phaseIndex(phase) {
+  var idx = PHASES.indexOf(phase);
+  return idx >= 0 ? idx : 0;
+}
+
+function createInsightRow(label, value) {
+  var row = document.createElement('div');
+  row.className = 'insight-row';
+  var labelEl = document.createElement('span');
+  labelEl.className = 'insight-label';
+  labelEl.textContent = label;
+  var valueEl = document.createElement('span');
+  valueEl.className = 'insight-value';
+  valueEl.textContent = value;
+  row.appendChild(labelEl);
+  row.appendChild(valueEl);
+  return row;
+}
+
+function createPipeline(currentPhase) {
+  var container = document.createElement('div');
+  container.className = 'pipeline';
+  var currentIdx = phaseIndex(currentPhase);
+
+  PHASES.forEach(function(phase, i) {
+    if (i > 0) {
+      var conn = document.createElement('div');
+      conn.className = 'connector' + (i <= currentIdx ? ' reached' : '');
+      container.appendChild(conn);
+    }
+    var stage = document.createElement('div');
+    stage.className = 'stage';
+    var dot = document.createElement('div');
+    dot.className = 'stage-dot';
+    if (i < currentIdx) dot.classList.add('reached');
+    else if (i === currentIdx) dot.classList.add('current');
+    var label = document.createElement('div');
+    label.className = 'stage-label';
+    if (i < currentIdx) label.classList.add('reached');
+    else if (i === currentIdx) label.classList.add('current');
+    label.textContent = PHASE_LABELS[phase];
+    stage.appendChild(dot);
+    stage.appendChild(label);
+    container.appendChild(stage);
+  });
+
+  return container;
+}
+
+function createMilestoneChips(ms) {
+  var container = document.createElement('div');
+  container.className = 'card-milestones';
+
+  function addChip(label, achieved) {
+    var chip = document.createElement('span');
+    chip.className = 'milestone-chip' + (achieved ? ' achieved' : '');
+    chip.textContent = label;
+    container.appendChild(chip);
+  }
+
+  addChip('Sessions: ' + (ms.session_count || 0), ms.session_count > 0);
+  addChip('Commits: ' + (ms.commit_count || 0), ms.commit_count > 0);
+  if (ms.first_push_at && ms.first_push_at !== '0001-01-01T00:00:00Z') addChip('Pushed', true);
+  if (ms.pr_created_at && ms.pr_created_at !== '0001-01-01T00:00:00Z') addChip('PR Created', true);
+  if (ms.pr_merged_at && ms.pr_merged_at !== '0001-01-01T00:00:00Z') addChip('Merged', true);
+  addChip('Commands: ' + (ms.command_count || 0), ms.command_count > 0);
+
+  return container;
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function createTimelineEvent(evt) {
+  var row = document.createElement('div');
+  row.className = 'timeline-event';
+
+  var dotCol = document.createElement('div');
+  dotCol.className = 'timeline-dot-col';
+  var dot = document.createElement('div');
+  dot.className = 'timeline-dot ' + (evt.type || '');
+  dotCol.appendChild(dot);
+  var line = document.createElement('div');
+  line.className = 'timeline-line';
+  dotCol.appendChild(line);
+  row.appendChild(dotCol);
+
+  var content = document.createElement('div');
+  content.className = 'timeline-content';
+  var typeSpan = document.createElement('span');
+  typeSpan.className = 'timeline-type';
+  typeSpan.textContent = EVENT_LABELS[evt.type] || evt.type;
+  content.appendChild(typeSpan);
+  if (evt.detail) {
+    var detail = document.createElement('span');
+    detail.className = 'timeline-detail';
+    detail.textContent = evt.detail;
+    content.appendChild(detail);
+  }
+  row.appendChild(content);
+
+  var time = document.createElement('span');
+  time.className = 'timeline-time';
+  time.textContent = formatTime(evt.occurred_at);
+  row.appendChild(time);
+
+  return row;
+}
+
+async function toggleTimeline(card, sessionName) {
+  var existing = card.querySelector('.timeline-panel');
+  if (existing) {
+    existing.remove();
+    card.classList.remove('expanded');
+    return;
+  }
+
+  card.classList.add('expanded');
+  var panel = document.createElement('div');
+  panel.className = 'timeline-panel';
+  var title = document.createElement('div');
+  title.className = 'timeline-title';
+  title.textContent = 'Event Timeline';
+  panel.appendChild(title);
+
+  var loading = document.createElement('div');
+  loading.className = 'timeline-loading';
+  loading.textContent = 'Loading...';
+  panel.appendChild(loading);
+  card.appendChild(panel);
+
+  try {
+    var res = await fetch('/api/timeline/' + encodeURIComponent(sessionName));
+    var data = await res.json();
+    loading.remove();
+
+    if (data.events && data.events.length > 0) {
+      // Show newest first
+      var events = data.events.slice().reverse();
+      events.forEach(function(evt) {
+        panel.appendChild(createTimelineEvent(evt));
+      });
+    } else {
+      var empty = document.createElement('div');
+      empty.className = 'timeline-loading';
+      empty.textContent = 'No events recorded yet.';
+      panel.appendChild(empty);
+    }
+  } catch (e) {
+    loading.textContent = 'Error loading timeline: ' + e.message;
+  }
+}
+
+function createCard(entry) {
+  var card = document.createElement('div');
+  card.className = 'card';
+  card.onclick = function() { toggleTimeline(card, entry.name); };
+
+  var header = document.createElement('div');
+  header.className = 'card-header';
+  var name = document.createElement('span');
+  name.className = 'card-name';
+  name.textContent = entry.name;
+  var status = document.createElement('span');
+  status.className = 'card-status status-' + (entry.status || '').replace(/[^a-z-]/g, '');
+  status.textContent = entry.status;
+  header.appendChild(name);
+  header.appendChild(status);
+  card.appendChild(header);
+
+  var branch = document.createElement('div');
+  branch.className = 'card-branch';
+  branch.textContent = entry.branch || 'no branch';
+  card.appendChild(branch);
+
+  if (entry.goal || entry.current_focus || entry.next_step) {
+    var insights = document.createElement('div');
+    insights.className = 'card-insights';
+    if (entry.goal) insights.appendChild(createInsightRow('Goal', entry.goal));
+    if (entry.current_focus) insights.appendChild(createInsightRow('Focus', entry.current_focus));
+    if (entry.next_step) insights.appendChild(createInsightRow('Next', entry.next_step));
+    if (entry.attention_state) {
+      var badge = document.createElement('span');
+      badge.className = 'attention-badge attention-' + entry.attention_state;
+      badge.textContent = entry.attention_state;
+      insights.appendChild(badge);
+    }
+    if (entry.inferred_at) {
+      var fresh = document.createElement('div');
+      fresh.className = 'insight-freshness';
+      fresh.textContent = 'Inferred: ' + entry.inferred_at;
+      insights.appendChild(fresh);
+    }
+    card.appendChild(insights);
+  } else if (entry.initial_prompt) {
+    var prompt = document.createElement('div');
+    prompt.className = 'card-prompt';
+    prompt.textContent = entry.initial_prompt;
+    card.appendChild(prompt);
+  }
+
+  card.appendChild(createPipeline(entry.phase));
+
+  if (entry.milestones) {
+    card.appendChild(createMilestoneChips(entry.milestones));
+  }
+
+  // Topics & Tasks
+  if ((entry.topics && entry.topics.length > 0) || (entry.tasks && entry.tasks.length > 0)) {
+    var ttContainer = document.createElement('div');
+    ttContainer.className = 'card-topics-tasks';
+
+    if (entry.topics && entry.topics.length > 0) {
+      var topicsDiv = document.createElement('div');
+      topicsDiv.className = 'card-topics';
+      var topicsTitle = document.createElement('div');
+      topicsTitle.className = 'section-title';
+      topicsTitle.textContent = 'Topics';
+      topicsDiv.appendChild(topicsTitle);
+      entry.topics.forEach(function(topic) {
+        var tag = document.createElement('span');
+        tag.className = 'topic-tag' + (topic.source === 'git' ? ' git' : topic.source === 'manual' ? ' manual' : '');
+        tag.textContent = topic.name;
+        topicsDiv.appendChild(tag);
+      });
+      ttContainer.appendChild(topicsDiv);
+    }
+
+    if (entry.tasks && entry.tasks.length > 0) {
+      var tasksDiv = document.createElement('div');
+      tasksDiv.className = 'card-tasks';
+      var tasksTitle = document.createElement('div');
+      tasksTitle.className = 'section-title';
+      tasksTitle.textContent = 'Tasks';
+      tasksDiv.appendChild(tasksTitle);
+      var TASK_ICONS = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
+      entry.tasks.forEach(function(task) {
+        var item = document.createElement('div');
+        item.className = 'task-item';
+        var icon = document.createElement('span');
+        icon.className = 'task-icon task-' + task.status;
+        icon.textContent = TASK_ICONS[task.status] || '\u25CB';
+        item.appendChild(icon);
+        var title = document.createElement('span');
+        title.textContent = task.title;
+        item.appendChild(title);
+        tasksDiv.appendChild(item);
+      });
+      ttContainer.appendChild(tasksDiv);
+    }
+
+    card.appendChild(ttContainer);
+  }
+
+  var footer = document.createElement('div');
+  footer.className = 'card-footer';
+  var timeEl = document.createElement('span');
+  timeEl.textContent = entry.last_seen;
+  footer.appendChild(timeEl);
+
+  var links = document.createElement('span');
+  links.className = 'card-links';
+  if (entry.pr_url) {
+    var a = document.createElement('a');
+    a.href = entry.pr_url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = 'PR';
+    a.onclick = function(e) { e.stopPropagation(); };
+    links.appendChild(a);
+  }
+  if (entry.issue_url) {
+    var a2 = document.createElement('a');
+    a2.href = entry.issue_url;
+    a2.target = '_blank';
+    a2.rel = 'noopener noreferrer';
+    a2.textContent = 'Issue';
+    a2.onclick = function(e) { e.stopPropagation(); };
+    links.appendChild(a2);
+  }
+  footer.appendChild(links);
+  card.appendChild(footer);
+
+  return card;
+}
+
+function renderProjectView(groups) {
+  var container = document.getElementById('content');
+  container.replaceChildren();
+
+  if (groups.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No sessions registered.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var totalSessions = 0;
+  groups.forEach(function(group) {
+    var section = document.createElement('div');
+    section.className = 'project-group';
+
+    var header = document.createElement('div');
+    header.className = 'project-header';
+    var nameEl = document.createElement('span');
+    nameEl.className = 'project-name';
+    nameEl.textContent = group.name;
+    header.appendChild(nameEl);
+    var countEl = document.createElement('span');
+    countEl.className = 'project-count';
+    countEl.textContent = group.sessions.length + ' session(s)';
+    header.appendChild(countEl);
+    section.appendChild(header);
+
+    var cards = document.createElement('div');
+    cards.className = 'cards';
+    group.sessions.forEach(function(entry) {
+      cards.appendChild(createCard(entry));
+    });
+    section.appendChild(cards);
+
+    container.appendChild(section);
+    totalSessions += group.sessions.length;
+  });
+
+  var now = new Date();
+  document.getElementById('meta').textContent =
+    groups.length + ' project(s), ' + totalSessions + ' session(s) | Updated: ' + now.toLocaleTimeString();
+}
+
+function renderFlatView(groups) {
+  var container = document.getElementById('content');
+  container.replaceChildren();
+
+  var allSessions = [];
+  groups.forEach(function(g) {
+    g.sessions.forEach(function(s) { allSessions.push(s); });
+  });
+
+  if (allSessions.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No sessions registered.';
+    container.appendChild(empty);
+    return;
+  }
+
+  var cards = document.createElement('div');
+  cards.className = 'cards';
+  allSessions.forEach(function(entry) {
+    cards.appendChild(createCard(entry));
+  });
+  container.appendChild(cards);
+
+  var now = new Date();
+  document.getElementById('meta').textContent =
+    allSessions.length + ' session(s) | Updated: ' + now.toLocaleTimeString();
+}
+
+function render(data) {
+  // Flatten sessions for flat view (use copies to avoid mutating cached data)
+  allSessionsFlat = [];
+  data.forEach(function(g) {
+    g.sessions.forEach(function(s) {
+      var copy = Object.assign({}, s);
+      copy._projectName = g.name;
+      copy._projectKey = g.repo_root;
+      allSessionsFlat.push(copy);
+    });
+  });
+
+  if (currentView === 'project') {
+    renderProjectView(data);
+  } else if (currentView === 'graph') {
+    renderGraphView(data);
+  } else {
+    renderFlatView(data);
+  }
+}
+
+// ── Mind Map View ──
+
+var PHASE_COLORS = {
+  idle: '#484f58', implementation: '#f0883e', committed: '#d2a8ff',
+  pushed: '#58a6ff', pr_open: '#bc8cff', done: '#3fb950'
+};
+var TASK_COLORS = {
+  done: '#3fb950', in_progress: '#58a6ff', planned: '#484f58', blocked: '#f85149'
+};
+var TASK_ICONS_MAP = {done: '\u2713', in_progress: '\u25B6', planned: '\u25CB', blocked: '\u2716'};
+
+var graphGroups = [];
+var selectedProject = '';
+
+function updateProjectSelect(groups) {
+  var sel = document.getElementById('project-select');
+  var prev = sel.value;
+  sel.replaceChildren();
+  var allOpt = document.createElement('option');
+  allOpt.value = '';
+  allOpt.textContent = 'All Projects (' + groups.length + ')';
+  sel.appendChild(allOpt);
+  groups.forEach(function(g) {
+    var opt = document.createElement('option');
+    opt.value = g.repo_root;
+    opt.textContent = g.name + ' (' + g.sessions.length + ')';
+    sel.appendChild(opt);
+  });
+  if (prev) sel.value = prev;
+  selectedProject = sel.value;
+}
+
+// Priority order for sorting groups: higher = more urgent
+var STATUS_PRIORITY = {'in-progress': 5, blocked: 4, review: 3, done: 0};
+function groupPriority(group) {
+  var max = 0;
+  group.sessions.forEach(function(s) {
+    var p = STATUS_PRIORITY[s.status] || 1;
+    if (p > max) max = p;
+  });
+  return max;
+}
+
+function summarizeGroup(group) {
+  var counts = {};
+  group.sessions.forEach(function(s) {
+    var st = s.status || 'unknown';
+    counts[st] = (counts[st] || 0) + 1;
+  });
+  var parts = [];
+  if (counts['in-progress']) parts.push(counts['in-progress'] + ' active');
+  if (counts['blocked']) parts.push(counts['blocked'] + ' blocked');
+  if (counts['review']) parts.push(counts['review'] + ' review');
+  if (counts['done']) parts.push(counts['done'] + ' done');
+  if (parts.length === 0) parts.push(group.sessions.length + ' sessions');
+  return parts.join(' / ');
+}
+
+function buildMindMapData(groups) {
+  var nodes = [];
+  var edges = [];
+  var nid = 0;
+
+  var filteredGroups = groups;
+  selectedProject = document.getElementById('project-select').value;
+  if (selectedProject) {
+    filteredGroups = groups.filter(function(g) { return g.repo_root === selectedProject; });
+  }
+
+  var isAllProjects = !selectedProject;
+  var isSingleProject = filteredGroups.length === 1;
+  var isSingleSession = isSingleProject && filteredGroups[0].sessions.length === 1;
+
+  // Sort groups by priority (most urgent first) in All Projects view
+  if (isAllProjects) {
+    filteredGroups = filteredGroups.slice().sort(function(a, b) {
+      return groupPriority(b) - groupPriority(a);
+    });
+  }
+
+  // Determine level offsets based on hierarchy pruning
+  var rootLevel = 0;
+  var projectLevel = 1;
+  var sessionLevel = 2;
+  var detailLevel = 3;
+  var showRoot = !isSingleProject;
+  var showProject = !isSingleSession;
+
+  if (isSingleSession) {
+    // Skip both root and project
+    sessionLevel = 0;
+    detailLevel = 1;
+  } else if (isSingleProject) {
+    // Skip root only
+    projectLevel = 0;
+    sessionLevel = 1;
+    detailLevel = 2;
+  }
+
+  // Root node (only in multi-project view)
+  var rootId = 'root';
+  if (showRoot) {
+    nodes.push({
+      id: rootId,
+      label: 'Sessions',
+      shape: 'box',
+      color: { background: '#161b22', border: '#58a6ff' },
+      font: { color: '#f0f6fc', size: 16, face: '-apple-system, sans-serif', bold: true },
+      margin: { top: 10, bottom: 10, left: 16, right: 16 },
+      borderWidth: 2,
+      level: rootLevel,
+      _type: 'root'
+    });
+  }
+
+  filteredGroups.forEach(function(group) {
+    var projectId = 'proj:' + (++nid);
+    var parentId = showRoot ? rootId : null;
+
+    // Project node (skip when single session)
+    if (showProject) {
+      var projLabel = group.name;
+      if (isAllProjects) {
+        // In All Projects: show summary instead of session count
+        projLabel += '\n' + summarizeGroup(group);
+      } else {
+        projLabel += ' (' + group.sessions.length + ')';
+      }
+
+      // Determine project border color by most urgent status
+      var projPrio = groupPriority(group);
+      var projBorder = '#30363d';
+      if (projPrio >= 5) projBorder = '#58a6ff';
+      else if (projPrio >= 4) projBorder = '#f85149';
+      else if (projPrio >= 3) projBorder = '#bc8cff';
+
+      nodes.push({
+        id: projectId,
+        label: projLabel,
+        shape: 'box',
+        color: { background: '#21262d', border: projBorder },
+        font: { color: '#f0f6fc', size: isAllProjects ? 12 : 14, face: '-apple-system, sans-serif', bold: true, multi: true },
+        margin: { top: 8, bottom: 8, left: 12, right: 12 },
+        borderWidth: 2,
+        level: projectLevel,
+        _type: 'project',
+        _data: group
+      });
+      if (parentId) {
+        edges.push({ from: parentId, to: projectId, color: { color: '#30363d' }, width: 2 });
+      }
+    }
+
+    var sessionParent = showProject ? projectId : null;
+
+    // In All Projects: collapse sessions (no child nodes per session)
+    if (isAllProjects) {
+      // Show only sessions, no task/goal/phase expansion
+      var sessions = group.sessions.slice(0, 3);
+      var truncated = group.sessions.length > 3;
+
+      sessions.forEach(function(session) {
+        var sessionId = 'sess:' + (++nid);
+        var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+        var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
+        // Session label: name + phase badge inline
+        var label = session.name;
+        if (pLabel) label += ' \u00B7 ' + pLabel;
+
+        nodes.push({
+          id: sessionId,
+          label: label,
+          shape: 'box',
+          color: { background: phaseColor + '33', border: phaseColor },
+          font: { color: '#c9d1d9', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 4, bottom: 4, left: 8, right: 8 },
+          borderWidth: 1,
+          level: sessionLevel,
+          _type: 'session',
+          _data: session
+        });
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1 });
+      });
+
+      if (truncated) {
+        var moreId = 'more:' + (++nid);
+        var remaining = group.sessions.length - 3;
+        nodes.push({
+          id: moreId,
+          label: '+' + remaining + ' more...',
+          shape: 'box',
+          color: { background: '#161b22', border: '#30363d' },
+          font: { color: '#8b949e', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 3, bottom: 3, left: 6, right: 6 },
+          borderWidth: 1,
+          borderDashes: [4, 4],
+          level: sessionLevel,
+          _type: 'more',
+          _data: group
+        });
+        edges.push({ from: sessionParent, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
+      }
+      return; // skip detailed view for All Projects
+    }
+
+    // Detailed view (single project selected)
+    group.sessions.forEach(function(session) {
+      var sessionId = 'sess:' + (++nid);
+      var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+      var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
+      // Phase integrated into session label
+      var label = session.name;
+      if (pLabel) label += '\n' + pLabel;
+
+      nodes.push({
+        id: sessionId,
+        label: label,
+        shape: 'box',
+        color: { background: phaseColor + '33', border: phaseColor },
+        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true, multi: true },
+        margin: { top: 6, bottom: 6, left: 10, right: 10 },
+        borderWidth: 2,
+        level: sessionLevel,
+        _type: 'session',
+        _data: session
+      });
+      if (sessionParent) {
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+      }
+
+      // Goal node
+      if (session.goal) {
+        var goalId = 'goal:' + (++nid);
+        nodes.push({
+          id: goalId,
+          label: '\uD83C\uDFAF ' + session.goal,
+          shape: 'box',
+          color: { background: '#f0883e22', border: '#f0883e' },
+          font: { color: '#f0883e', size: 11, face: '-apple-system, sans-serif' },
+          margin: { top: 4, bottom: 4, left: 8, right: 8 },
+          borderWidth: 1,
+          level: detailLevel,
+          _type: 'goal'
+        });
+        edges.push({ from: sessionId, to: goalId, color: { color: '#f0883e44' }, width: 1 });
+      }
+
+      // Task nodes: sorted by status (in_progress first, then planned, blocked, done)
+      if (session.tasks && session.tasks.length > 0) {
+        var taskOrder = {in_progress: 0, planned: 1, blocked: 2, done: 3};
+        var sorted = session.tasks.slice().sort(function(a, b) {
+          return (taskOrder[a.status] || 9) - (taskOrder[b.status] || 9);
+        });
+        var doneCount = 0;
+        var doneShown = false;
+        sorted.forEach(function(task) {
+          // Collapse done tasks: show summary node instead
+          if (task.status === 'done') {
+            doneCount++;
+            if (!doneShown) {
+              doneShown = true;
+              var total = sorted.filter(function(t) { return t.status === 'done'; }).length;
+              var doneId = 'done:' + (++nid);
+              nodes.push({
+                id: doneId,
+                label: '\u2713 Done (' + total + ')',
+                shape: 'box',
+                color: { background: '#3fb95018', border: '#3fb950' },
+                font: { color: '#3fb950', size: 9, face: '-apple-system, sans-serif' },
+                margin: { top: 3, bottom: 3, left: 6, right: 6 },
+                borderWidth: 1,
+                level: detailLevel,
+                _type: 'done_summary'
+              });
+              edges.push({ from: sessionId, to: doneId, color: { color: '#3fb95044' }, width: 1 });
+            }
+            return;
+          }
+
+          var taskId = 'task:' + (++nid);
+          var tc = TASK_COLORS[task.status] || '#484f58';
+          var icon = TASK_ICONS_MAP[task.status] || '\u25CB';
+          var isActive = task.status === 'in_progress';
+
+          nodes.push({
+            id: taskId,
+            label: icon + ' ' + task.title,
+            shape: 'box',
+            color: {
+              background: isActive ? tc + '44' : tc + '18',
+              border: tc
+            },
+            font: {
+              color: isActive ? '#f0f6fc' : '#8b949e',
+              size: isActive ? 12 : 10,
+              face: '-apple-system, sans-serif',
+              bold: isActive
+            },
+            margin: { top: 3, bottom: 3, left: 8, right: 8 },
+            borderWidth: isActive ? 3 : 1,
+            level: detailLevel,
+            _type: 'task',
+            _data: task
+          });
+          edges.push({
+            from: sessionId, to: taskId,
+            color: { color: isActive ? tc : '#30363d' },
+            width: isActive ? 3 : 1
+          });
+        });
+      }
+
+      // No roadmap warning when no goal and no tasks
+      if (!session.goal && (!session.tasks || session.tasks.length === 0)) {
+        var warnId = 'warn:' + (++nid);
+        nodes.push({
+          id: warnId,
+          label: '\u26A0 No roadmap',
+          shape: 'box',
+          color: { background: '#f8514922', border: '#f85149' },
+          font: { color: '#f85149', size: 10, face: '-apple-system, sans-serif' },
+          margin: { top: 3, bottom: 3, left: 8, right: 8 },
+          borderWidth: 1,
+          borderDashes: [4, 4],
+          level: detailLevel,
+          _type: 'warning'
+        });
+        edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
+      }
+    });
+  });
+
+  return { nodes: nodes, edges: edges };
+}
+
+function renderGraphView(groups) {
+  graphGroups = groups;
+  updateProjectSelect(groups);
+  var data = buildMindMapData(groups);
+
+  if (graphNetwork) {
+    graphNodes = new vis.DataSet(data.nodes);
+    graphEdges = new vis.DataSet(data.edges);
+    graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+    graphNetwork.fit({ animation: { duration: 300 } });
+  } else {
+    graphNodes = new vis.DataSet(data.nodes);
+    graphEdges = new vis.DataSet(data.edges);
+    var container = document.getElementById('graph-canvas');
+    graphNetwork = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
+      layout: {
+        hierarchical: {
+          enabled: true,
+          direction: 'LR',
+          sortMethod: 'directed',
+          levelSeparation: 220,
+          nodeSpacing: 40,
+          treeSpacing: 60,
+          parentCentralization: true,
+          blockShifting: true,
+          edgeMinimization: true
+        }
+      },
+      physics: { enabled: false },
+      interaction: {
+        hover: true,
+        tooltipDelay: 200,
+        multiselect: false,
+        navigationButtons: false,
+        keyboard: { enabled: true }
+      },
+      edges: {
+        arrows: { to: false },
+        smooth: { type: 'cubicBezier', roundness: 0.5 }
+      }
+    });
+
+    graphNetwork.on('click', function(params) {
+      if (params.nodes.length > 0) {
+        var nodeData = graphNodes.get(params.nodes[0]);
+        if (nodeData._type === 'session') {
+          showInspector(nodeData._data);
+        } else if (nodeData._type === 'more') {
+          // Click "+N more" to select that project
+          var sel = document.getElementById('project-select');
+          sel.value = nodeData._data.repo_root;
+          renderGraphView(graphGroups);
+        } else {
+          closeInspector();
+        }
+      } else {
+        closeInspector();
+      }
+    });
+  }
+
+  var sessionCount = 0;
+  groups.forEach(function(g) { sessionCount += g.sessions.length; });
+  var now = new Date();
+  document.getElementById('meta').textContent =
+    sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
+}
+
+function showInspector(session) {
+  var inspector = document.getElementById('graph-inspector');
+  inspector.style.display = 'block';
+  document.getElementById('inspector-name').textContent = session.name;
+
+  var body = document.getElementById('inspector-body');
+  body.replaceChildren();
+
+  function addSection(title, content) {
+    if (!content) return;
+    var sec = document.createElement('div');
+    sec.className = 'inspector-section';
+    var t = document.createElement('div');
+    t.className = 'inspector-section-title';
+    t.textContent = title;
+    sec.appendChild(t);
+    var v = document.createElement('div');
+    v.className = 'inspector-value';
+    if (typeof content === 'string') {
+      v.textContent = content;
+    } else {
+      v.appendChild(content);
+    }
+    sec.appendChild(v);
+    body.appendChild(sec);
+  }
+
+  // Status & Phase
+  var statusPhase = document.createElement('div');
+  statusPhase.style.display = 'flex';
+  statusPhase.style.gap = '8px';
+  statusPhase.style.marginBottom = '4px';
+  var statusBadge = document.createElement('span');
+  statusBadge.className = 'card-status status-' + (session.status || '').replace(/[^a-z-]/g, '');
+  statusBadge.textContent = session.status;
+  statusPhase.appendChild(statusBadge);
+  var phaseBadge = document.createElement('span');
+  phaseBadge.className = 'milestone-chip achieved';
+  phaseBadge.textContent = PHASE_LABELS[session.phase] || session.phase;
+  statusPhase.appendChild(phaseBadge);
+  addSection('Status', statusPhase);
+
+  addSection('Branch', session.branch);
+  if (session.goal) addSection('Goal', session.goal);
+  if (session.current_focus) addSection('Focus', session.current_focus);
+  if (session.next_step) addSection('Next Step', session.next_step);
+
+  if (session.attention_state) {
+    var badge = document.createElement('span');
+    badge.className = 'attention-badge attention-' + session.attention_state;
+    badge.textContent = session.attention_state;
+    addSection('Attention', badge);
+  }
+
+  // Pipeline
+  addSection('Pipeline', createPipeline(session.phase));
+
+  // Milestones
+  if (session.milestones) {
+    addSection('Milestones', createMilestoneChips(session.milestones));
+  }
+
+  // Topics
+  if (session.topics && session.topics.length > 0) {
+    var topicsEl = document.createElement('div');
+    session.topics.forEach(function(topic) {
+      var tag = document.createElement('span');
+      tag.className = 'topic-tag' + (topic.source === 'git' ? ' git' : topic.source === 'manual' ? ' manual' : '');
+      tag.textContent = topic.name;
+      topicsEl.appendChild(tag);
+    });
+    addSection('Topics', topicsEl);
+  }
+
+  // Tasks
+  if (session.tasks && session.tasks.length > 0) {
+    var tasksEl = document.createElement('div');
+    session.tasks.forEach(function(task) {
+      var item = document.createElement('div');
+      item.className = 'task-item';
+      var icon = document.createElement('span');
+      icon.className = 'task-icon task-' + task.status;
+      icon.textContent = TASK_ICONS_MAP[task.status] || '\u25CB';
+      item.appendChild(icon);
+      var title = document.createElement('span');
+      title.textContent = task.title;
+      item.appendChild(title);
+      tasksEl.appendChild(item);
+    });
+    addSection('Tasks', tasksEl);
+  }
+
+  // Links
+  if (session.pr_url || session.issue_url) {
+    var linksEl = document.createElement('div');
+    linksEl.className = 'card-links';
+    if (session.pr_url) {
+      var a = document.createElement('a');
+      a.href = session.pr_url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'Pull Request';
+      linksEl.appendChild(a);
+    }
+    if (session.issue_url) {
+      var a2 = document.createElement('a');
+      a2.href = session.issue_url;
+      a2.target = '_blank';
+      a2.rel = 'noopener noreferrer';
+      a2.textContent = 'Issue';
+      a2.style.marginLeft = '8px';
+      linksEl.appendChild(a2);
+    }
+    addSection('Links', linksEl);
+  }
+
+  // Timestamps
+  addSection('Last Seen', session.last_seen);
+  if (session.inferred_at) addSection('Inferred', session.inferred_at);
+}
+
+function closeInspector() {
+  document.getElementById('graph-inspector').style.display = 'none';
+}
+
+function graphFit() {
+  if (graphNetwork) graphNetwork.fit({ animation: true });
+}
+
+function graphReset() {
+  if (graphNetwork) {
+    graphNetwork.fit({ animation: { duration: 500 } });
+  }
+}
+
+async function refresh() {
+  try {
+    var res = await fetch('/api/roadmap-map');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var newData = await res.json();
+    // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
+    if (currentView === 'graph' && cachedData && graphNetwork) {
+      var newJson = JSON.stringify(newData);
+      var oldJson = JSON.stringify(cachedData);
+      if (newJson === oldJson) {
+        var sessionCount = 0;
+        newData.forEach(function(g) { sessionCount += g.sessions.length; });
+        var now = new Date();
+        document.getElementById('meta').textContent =
+          sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
+        return;
+      }
+    }
+    cachedData = newData;
+    render(cachedData);
+  } catch (e) {
+    document.getElementById('meta').textContent = 'Error: ' + e.message;
+  }
+}
+
+// Restore saved view on load
+if (currentView !== 'project') {
+  setView(currentView);
+} else {
+  refresh();
+}
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

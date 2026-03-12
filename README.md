@@ -23,6 +23,8 @@ A CLI tool for managing Claude Code sessions and git worktrees in a kanban-style
 - **Notes** - Add memos to contexts
 - **GitHub Integration** - Auto-detect and link Issues/PRs
 - **Worktree Creation** - Create branch to Claude launch in one command
+- **Session Roadmap** - Auto-detect development phases (idle → impl → committed → pushed → PR → done)
+- **AI Insights** - Claude infers goal, focus, next step, and attention state for each session
 
 ## Installation
 
@@ -90,7 +92,9 @@ devctx list
 | `devctx register <name>` | Register a context (usually auto via hook) |
 | `devctx resume <name>` | Resume a context |
 | `devctx move <name> <status>` | Change status |
+| `devctx touch <name>` | Update context's last-seen timestamp |
 | `devctx archive <name>` | Archive as done |
+| `devctx remove <name>` | Remove a context from tracking |
 
 ### Creation & Configuration
 
@@ -109,6 +113,19 @@ devctx list
 | `devctx sync [name]` | Auto-detect and link PR/Issue |
 | `devctx sync --all` | Update session names for all contexts |
 | `devctx pr <name>` | Create a PR |
+
+### Session Roadmap
+
+| Command | Description |
+|---------|-------------|
+| `devctx roadmap scan` | Show git-based phases for all sessions |
+| `devctx roadmap status` | Visual progress through development phases |
+| `devctx roadmap serve` | Start web dashboard (localhost:3333) |
+| `devctx roadmap refresh` | Full re-scan with PR detection (uses gh CLI) |
+| `devctx roadmap analyze [name]` | Generate AI insights via Claude CLI |
+| `devctx roadmap analyze --all` | Generate insights for all active sessions |
+| `devctx roadmap init --prompt "..."` | Set initial prompt for a session |
+| `devctx insight [name]` | Show/set session insights manually |
 
 ### Monitoring & Search
 
@@ -234,6 +251,84 @@ This creates:
 - `/devctx-note` - Add a note
 - `/devctx-link` - Link Issue/PR
 - `/devctx-status` - Show context status
+- `/devctx-insight` - Save session insights (goal, focus, next step, state)
+
+A rule file (`~/.claude/rules/devctx-insight-auto.md`) is also installed, which instructs Claude to automatically run `/devctx-insight` after creating implementation plans.
+
+## Session Roadmap
+
+The roadmap tracks your development lifecycle automatically.
+
+### Phase Detection
+
+Phases are auto-detected from git state on `register` / `touch`:
+
+| Phase | Condition |
+|-------|-----------|
+| Idle | No changes, no commits ahead |
+| Implementation | Uncommitted changes |
+| Committed | Commits ahead of base branch |
+| Pushed | Remote branch up to date |
+| PR Open | Open pull request detected |
+| Done | Merged pull request |
+
+### Milestone Tracking
+
+Development milestones are automatically recorded as events:
+
+| Milestone | Source |
+|-----------|--------|
+| First Commit / Commits | git log on `register` / `touch` |
+| First Push | git remote check |
+| PR Created / Merged | `gh` CLI on `roadmap refresh` |
+| Session Start / End | Claude Code hooks |
+| Status Changes | `devctx move` commands |
+
+Events are stored in `~/.config/devctx/events.yaml` as an append-only log.
+
+### AI Insights
+
+Claude can infer session context and save it as insights:
+
+```bash
+# Install custom commands + auto-execution rule
+devctx commands --install
+
+# In Claude Code, after a plan is created:
+# Claude automatically runs /devctx-insight
+
+# Or manually trigger analysis via Claude CLI:
+devctx roadmap analyze
+```
+
+Insights include:
+- **Goal** - What this session is trying to achieve
+- **Current Focus** - What's being worked on now
+- **Next Step** - What should be done next
+- **Attention State** - active / waiting / idle / blocked
+- **Topics** - Semantic themes extracted from git and LLM (e.g., "auth", "error handling")
+- **Tasks** - Concrete work items with status (planned / in_progress / done / blocked)
+
+Topic/task extraction uses a hybrid approach: mechanical extraction from git (branch names, commit messages, changed directories) combined with LLM-based clustering and normalization.
+
+### Web Dashboard
+
+```bash
+devctx roadmap serve
+```
+
+Opens a web dashboard at `http://localhost:3333` with:
+- **Project grouping** - Sessions grouped by repository
+- **Phase pipeline** - Visual progress through development phases
+- **Milestone chips** - Sessions/Commits/Pushed/PR status at a glance
+- **Topics & Tasks** - Semantic topics and task lists per session
+- **Event timeline** - Click a card to expand its full event history
+- **Project / Flat / Mind Map view** - Switch between grouped, flat, and mind map layouts
+- **Mind Map view** - Hierarchical tree visualization (Project → Session → Goal/Tasks/Phase) with priority sorting, hierarchy pruning for single projects, "No roadmap" warnings, and inspector panel
+
+![Project View](assets/screenshot-project.png)
+![Mind Map - All Projects](assets/screenshot-mindmap-all.png)
+![Mind Map - Detail](assets/screenshot-mindmap-detail.png)
 
 ## Troubleshooting
 

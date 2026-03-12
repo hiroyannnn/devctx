@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/hiroyannnn/devctx/model"
+	"github.com/hiroyannnn/devctx/roadmap"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -80,6 +82,16 @@ If called with a name, updates that specific context.`,
 		}
 
 		ctx.LastSeen = now
+
+		// Auto-detect phase (fast mode for hook performance)
+		phaseScanner := roadmap.NewScanner()
+		phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
+
+		// Collect git milestones
+		collectAndSaveMilestones(s, ctx)
+
+		// Record session_end event
+		recordEvent(s, ctx.Name, model.MilestoneSessionEnd, "")
 
 		if err := s.SaveStore(store); err != nil {
 			return err
