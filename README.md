@@ -326,8 +326,9 @@ Opens a web dashboard at `http://localhost:3333` with:
 - **Project / Flat / Mind Map view** - Switch between grouped, flat, and mind map layouts
 - **Mind Map view** - Hierarchical tree visualization (Project → Session → Goal/Tasks/Phase) with priority sorting, hierarchy pruning for single projects, "No roadmap" warnings, and inspector panel
 
-![Mind Map - All Projects](assets/mindmap-all.png)
-![Mind Map - Detail](assets/mindmap-detail.png)
+![Project View](assets/screenshot-project.png)
+![Mind Map - All Projects](assets/screenshot-mindmap-all.png)
+![Mind Map - Detail](assets/screenshot-mindmap-detail.png)
 
 ## Troubleshooting
 

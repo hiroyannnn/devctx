@@ -345,8 +345,9 @@ devctx roadmap serve
 - **Project / Flat / Mind Map 表示** - グループ化・フラット・マインドマップ表示を切り替え
 - **マインドマップビュー** - 階層ツリー表示（Project → Session → Goal/Tasks/Phase）、要対応順ソート、単一プロジェクト時の階層省略、「No roadmap」警告、inspector パネル
 
-![Mind Map - 全体表示](assets/mindmap-all.png)
-![Mind Map - 詳細表示](assets/mindmap-detail.png)
+![Project View](assets/screenshot-project.png)
+![Mind Map - 全体表示](assets/screenshot-mindmap-all.png)
+![Mind Map - 詳細表示](assets/screenshot-mindmap-detail.png)
 
 ## トラブルシューティング
 
