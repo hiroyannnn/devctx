@@ -225,10 +225,7 @@ func collectAndSaveMilestones(s *storage.Storage, ctx *model.Context) {
 	collector := roadmap.NewMilestoneCollector()
 	newEvents := collector.CollectGitMilestones(ctx, events)
 	for _, e := range newEvents {
-		events.Append(e)
-	}
-	if len(newEvents) > 0 {
-		_ = s.SaveEvents(events)
+		_ = s.AppendEvent(e)
 	}
 }
 

@@ -187,8 +187,9 @@ var roadmapStatusCmd = &cobra.Command{
 			fmt.Printf("  %s %s\n", branchStyle.Render("branch:"), ctx.Branch)
 			if ctx.InitialPrompt != "" {
 				prompt := ctx.InitialPrompt
-				if len(prompt) > 60 {
-					prompt = prompt[:57] + "..."
+				runes := []rune(prompt)
+				if len(runes) > 60 {
+					prompt = string(runes[:57]) + "..."
 				}
 				fmt.Printf("  %s %s\n", branchStyle.Render("prompt:"), prompt)
 			}
@@ -288,10 +289,6 @@ With --background, forks to background and returns immediately.`,
 		if err != nil {
 			return err
 		}
-		insights, err := s.LoadInsights()
-		if err != nil {
-			return err
-		}
 
 		var targets []*model.Context
 
@@ -308,7 +305,10 @@ With --background, forks to background and returns immediately.`,
 			}
 			targets = append(targets, ctx)
 		} else {
-			cwd, _ := os.Getwd()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("failed to get current directory: %w", err)
+			}
 			worktreeRoot := getWorktreeRoot(cwd)
 			if worktreeRoot != "" {
 				cwd = worktreeRoot
@@ -335,12 +335,15 @@ With --background, forks to background and returns immediately.`,
 				continue
 			}
 
-			// Staleness check
+			// Staleness check (read-only, safe without lock)
 			if roadmapAnalyzeIfStale {
-				if existing := insights.Get(ctx.Name); existing != nil {
-					if time.Since(existing.InferredAt) < cooldown {
-						fmt.Printf("  Skipped: fresh (analyzed %s ago)\n", time.Since(existing.InferredAt).Truncate(time.Second))
-						continue
+				insights, _ := s.LoadInsights()
+				if insights != nil {
+					if existing := insights.Get(ctx.Name); existing != nil {
+						if time.Since(existing.InferredAt) < cooldown {
+							fmt.Printf("  Skipped: fresh (analyzed %s ago)\n", time.Since(existing.InferredAt).Truncate(time.Second))
+							continue
+						}
 					}
 				}
 			}
@@ -352,11 +355,12 @@ With --background, forks to background and returns immediately.`,
 				continue
 			}
 
-			// Get previous offset for incremental processing
-			existing := insights.Get(ctx.Name)
+			// Get previous offset for incremental processing (read-only)
 			var prevOffset int64
-			if existing != nil {
-				prevOffset = existing.TranscriptOffset
+			if insights, _ := s.LoadInsights(); insights != nil {
+				if existing := insights.Get(ctx.Name); existing != nil {
+					prevOffset = existing.TranscriptOffset
+				}
 			}
 
 			transcript, newOffset := roadmap.ReadTranscriptTail(string(data), 50, prevOffset)
@@ -389,17 +393,21 @@ With --background, forks to background and returns immediately.`,
 			insight.Topics = mergeTopics(insight.Topics, gitTopics)
 			insight.Tasks = mergeTasks(insight.Tasks, gitTasks)
 
-			insights.Set(*insight)
+			// Save each insight atomically via UpdateInsights
+			insightCopy := *insight
+			if err := s.UpdateInsights(func(store *model.InsightStore) error {
+				store.Set(insightCopy)
+				return nil
+			}); err != nil {
+				fmt.Printf("  Error saving insight: %v\n", err)
+				continue
+			}
 
 			fmt.Printf("  Goal: %s\n", insight.Goal)
 			fmt.Printf("  Focus: %s\n", insight.CurrentFocus)
 			fmt.Printf("  Next: %s\n", insight.NextStep)
 			fmt.Printf("  State: %s\n", insight.AttentionState)
 			fmt.Printf("  Topics: %d, Tasks: %d\n", len(insight.Topics), len(insight.Tasks))
-		}
-
-		if err := s.SaveInsights(insights); err != nil {
-			return err
 		}
 
 		return nil

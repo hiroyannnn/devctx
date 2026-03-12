@@ -33,10 +33,6 @@ Without a name argument, uses the context matching the current directory.`,
 		if err != nil {
 			return err
 		}
-		insights, err := s.LoadInsights()
-		if err != nil {
-			return err
-		}
 
 		// Find target context
 		var ctx *model.Context
@@ -46,7 +42,10 @@ Without a name argument, uses the context matching the current directory.`,
 				return fmt.Errorf("context [%s] not found", args[0])
 			}
 		} else {
-			cwd, _ := os.Getwd()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("failed to get current directory: %w", err)
+			}
 			worktreeRoot := getWorktreeRoot(cwd)
 			if worktreeRoot != "" {
 				cwd = worktreeRoot
@@ -57,42 +56,26 @@ Without a name argument, uses the context matching the current directory.`,
 			}
 		}
 
-		// Get or create insight
-		existing := insights.Get(ctx.Name)
-		var insight model.SessionInsight
-		if existing != nil {
-			insight = *existing
-		} else {
-			insight.Name = ctx.Name
-		}
-
-		// Apply flags
-		updated := false
-		if insightGoal != "" {
-			insight.Goal = insightGoal
-			updated = true
-		}
-		if insightFocus != "" {
-			insight.CurrentFocus = insightFocus
-			updated = true
-		}
-		if insightNext != "" {
-			insight.NextStep = insightNext
-			updated = true
-		}
+		// Validate state flag early
 		if insightState != "" {
 			state := model.AttentionState(insightState)
 			switch state {
 			case model.AttentionActive, model.AttentionWaiting, model.AttentionIdle, model.AttentionBlocked:
-				insight.AttentionState = state
-				updated = true
+				// valid
 			default:
 				return fmt.Errorf("invalid attention state: %q (must be active/waiting/idle/blocked)", insightState)
 			}
 		}
 
-		if !updated {
-			// Show current insight
+		needsUpdate := insightGoal != "" || insightFocus != "" || insightNext != "" || insightState != ""
+
+		if !needsUpdate {
+			// Show current insight (read-only)
+			insights, err := s.LoadInsights()
+			if err != nil {
+				return err
+			}
+			existing := insights.Get(ctx.Name)
 			if existing == nil {
 				fmt.Printf("[%s] No insights set.\n", ctx.Name)
 				fmt.Println("Use --goal, --focus, --next, --state flags to set them.")
@@ -107,15 +90,34 @@ Without a name argument, uses the context matching the current directory.`,
 			return nil
 		}
 
-		insight.InferredAt = time.Now()
-		insights.Set(insight)
+		ctxName := ctx.Name
+		return s.UpdateInsights(func(insights *model.InsightStore) error {
+			existing := insights.Get(ctxName)
+			var insight model.SessionInsight
+			if existing != nil {
+				insight = *existing
+			} else {
+				insight.Name = ctxName
+			}
 
-		if err := s.SaveInsights(insights); err != nil {
-			return err
-		}
+			if insightGoal != "" {
+				insight.Goal = insightGoal
+			}
+			if insightFocus != "" {
+				insight.CurrentFocus = insightFocus
+			}
+			if insightNext != "" {
+				insight.NextStep = insightNext
+			}
+			if insightState != "" {
+				insight.AttentionState = model.AttentionState(insightState)
+			}
 
-		fmt.Printf("Updated insight for [%s]\n", ctx.Name)
-		return nil
+			insight.InferredAt = time.Now()
+			insights.Set(insight)
+			fmt.Printf("Updated insight for [%s]\n", ctxName)
+			return nil
+		})
 	},
 }
 

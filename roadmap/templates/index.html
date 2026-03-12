@@ -1416,6 +1416,7 @@ function graphReset() {
 async function refresh() {
   try {
     var res = await fetch('/api/roadmap-map');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     var newData = await res.json();
     // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
     if (currentView === 'graph' && cachedData && graphNetwork) {

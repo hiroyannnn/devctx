@@ -108,11 +108,13 @@ func (s *Storage) LoadInsights() (*model.InsightStore, error) {
 }
 
 func (s *Storage) SaveInsights(store *model.InsightStore) error {
-	data, err := yaml.Marshal(store)
-	if err != nil {
-		return err
-	}
-	return atomicWriteFile(s.insightsPath(), data, 0644)
+	return s.withFileLock(s.insightsPath(), func() error {
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.insightsPath(), data, 0644)
+	})
 }
 
 // UpdateInsights atomically loads, updates, and saves insights with file locking.
@@ -149,11 +151,31 @@ func (s *Storage) LoadEvents() (*model.EventStore, error) {
 }
 
 func (s *Storage) SaveEvents(store *model.EventStore) error {
-	data, err := yaml.Marshal(store)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.eventsPath(), data, 0644)
+	return s.withFileLock(s.eventsPath(), func() error {
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.eventsPath(), data, 0644)
+	})
+}
+
+// UpdateEvents atomically loads, updates, and saves events with file locking.
+func (s *Storage) UpdateEvents(fn func(*model.EventStore) error) error {
+	return s.withFileLock(s.eventsPath(), func() error {
+		store, err := s.LoadEvents()
+		if err != nil {
+			return err
+		}
+		if err := fn(store); err != nil {
+			return err
+		}
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.eventsPath(), data, 0644)
+	})
 }
 
 func (s *Storage) AppendEvent(event model.SessionEvent) error {

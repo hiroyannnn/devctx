@@ -69,8 +69,12 @@ func NewScanner() *Scanner {
 }
 
 // RefreshPhase scans and updates the Phase and PhaseCheckedAt fields on the context.
+// If the scan returns PhaseIdle (e.g. worktree not found), the existing phase is preserved.
 func (s *Scanner) RefreshPhase(ctx *model.Context, mode ScanMode) {
-	ctx.Phase = s.scanWithMode(ctx, mode)
+	phase := s.scanWithMode(ctx, mode)
+	if phase != model.PhaseIdle || ctx.Phase == "" {
+		ctx.Phase = phase
+	}
 	ctx.PhaseCheckedAt = time.Now()
 }
 

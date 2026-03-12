@@ -187,7 +187,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	for _, ctx := range active {
 		phase := ctx.Phase
 		// If no cached phase, do a fast scan for this context
-		if phase == "" && ctx.Worktree != "" {
+		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
 			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
 		}
 
@@ -276,7 +276,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 
 	for _, ctx := range active {
 		phase := ctx.Phase
-		if phase == "" && ctx.Worktree != "" {
+		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
 			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
 		}
 
