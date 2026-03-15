@@ -50,6 +50,7 @@ func init() {
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(hooksCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 func isFirstRunComplete() bool {
