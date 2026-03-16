@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
+)
+
+var (
+	updateResult  chan *UpdateCache // 非同期チェック結果
+	updateChecker *UpdateChecker
 )
 
 // UpdateChecker はアップデートの確認とキャッシュ管理を行う。
@@ -145,6 +152,105 @@ func (uc *UpdateChecker) CheckAndCache() (*UpdateCache, error) {
 	}
 
 	return cache, nil
+}
+
+// skipCmds はアップデートチェックをスキップするコマンド名。
+var skipCmds = map[string]bool{
+	"hooks":      true,
+	"completion": true,
+	"shell-init": true,
+	"version":    true,
+}
+
+// shouldSkipUpdateCheckForTest は TTY チェックを除いたスキップ判定（テスト用）。
+func shouldSkipUpdateCheckForTest(cmd *cobra.Command) bool {
+	if skipCmds[cmd.Name()] {
+		return true
+	}
+	if os.Getenv("DEVCTX_NO_UPDATE_CHECK") == "1" {
+		return true
+	}
+	if os.Getenv("CI") == "true" {
+		return true
+	}
+	return false
+}
+
+// shouldSkipUpdateCheck はコマンド名・環境変数・TTY でスキップ判定する。
+func shouldSkipUpdateCheck(cmd *cobra.Command) bool {
+	if shouldSkipUpdateCheckForTest(cmd) {
+		return true
+	}
+	if !isStderrTTY() {
+		return true
+	}
+	return false
+}
+
+// isStderrTTY は stderr が TTY かどうかを返す（テスト用に分離）。
+func isStderrTTY() bool {
+	stat, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// startUpdateCheck は非同期でアップデートチェックを開始する。
+func startUpdateCheck() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	cachePath := filepath.Join(home, ".config", "devctx", "update-check.yaml")
+
+	updateChecker = &UpdateChecker{
+		CurrentVersion: Version,
+		CachePath:      cachePath,
+		APIURL:         "https://api.github.com/repos/hiroyannnn/devctx/releases/latest",
+		SuccessTTL:     24 * time.Hour,
+		FailureTTL:     1 * time.Hour,
+	}
+
+	cache, err := updateChecker.LoadCache()
+	if err != nil {
+		return
+	}
+
+	if !updateChecker.IsStale(cache) {
+		// キャッシュが新鮮なら、そのまま使う
+		updateResult = make(chan *UpdateCache, 1)
+		updateResult <- cache
+		return
+	}
+
+	// stale なら非同期チェック
+	updateResult = make(chan *UpdateCache, 1)
+	go func() {
+		result, _ := updateChecker.CheckAndCache()
+		if result != nil {
+			updateResult <- result
+		} else {
+			updateResult <- cache // 失敗時はキャッシュを返す
+		}
+	}()
+}
+
+// showUpdateNotification はアップデート通知を表示する。
+func showUpdateNotification() {
+	if updateResult == nil || updateChecker == nil {
+		return
+	}
+
+	select {
+	case cache := <-updateResult:
+		if cache != nil && cache.LatestVersion != "" && updateChecker.IsNewer(cache.LatestVersion, updateChecker.CurrentVersion) {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, updateChecker.NotifyMessage(cache.LatestVersion))
+		}
+	default:
+		// 非同期チェックが間に合わなかった場合は何もしない
+	}
 }
 
 // NotifyMessage はアップデート通知メッセージを返す。

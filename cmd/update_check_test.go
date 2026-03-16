@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 func TestIsNewer(t *testing.T) {
@@ -240,5 +242,34 @@ func TestNotifyMessage(t *testing.T) {
 	expected := "Update available: v0.2.0 → v0.3.0\nSee https://github.com/hiroyannnn/devctx/releases/latest"
 	if msg != expected {
 		t.Errorf("NotifyMessage() = %q, want %q", msg, expected)
+	}
+}
+
+func TestShouldSkipUpdateCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmdName string
+		envKey  string
+		envVal  string
+		want    bool
+	}{
+		{"hooks command", "hooks", "", "", true},
+		{"completion command", "completion", "", "", true},
+		{"shell-init command", "shell-init", "", "", true},
+		{"version command", "version", "", "", true},
+		{"list command", "list", "", "", false},
+		{"DEVCTX_NO_UPDATE_CHECK", "list", "DEVCTX_NO_UPDATE_CHECK", "1", true},
+		{"CI=true", "list", "CI", "true", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envKey != "" {
+				t.Setenv(tt.envKey, tt.envVal)
+			}
+			cmd := &cobra.Command{Use: tt.cmdName}
+			if got := shouldSkipUpdateCheckForTest(cmd); got != tt.want {
+				t.Errorf("shouldSkipUpdateCheckForTest() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
