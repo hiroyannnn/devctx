@@ -400,7 +400,7 @@ func TestShouldSkipUpdateCheck(t *testing.T) {
 		{"completion command", "completion", "", "", true},
 		{"shell-init command", "shell-init", "", "", true},
 		{"version command", "version", "", "", true},
-		{"list command", "list", "", "", false},
+		{"list command", "list", "CI", "", false},
 		{"DEVCTX_NO_UPDATE_CHECK", "list", "DEVCTX_NO_UPDATE_CHECK", "1", true},
 		{"CI=true", "list", "CI", "true", true},
 	}
