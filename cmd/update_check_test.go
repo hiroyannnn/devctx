@@ -245,6 +245,149 @@ func TestNotifyMessage(t *testing.T) {
 	}
 }
 
+func TestNotifiedVersionPreventsRepeat(t *testing.T) {
+	uc := &UpdateChecker{CurrentVersion: "v0.2.0"}
+
+	// NotifiedVersion が latest と一致していれば通知不要
+	cache := &UpdateCache{
+		LatestVersion:   "v0.3.0",
+		NotifiedVersion: "v0.3.0",
+		CheckedOK:       true,
+	}
+	if uc.ShouldNotify(cache) {
+		t.Error("ShouldNotify() = true, want false (already notified for this version)")
+	}
+
+	// NotifiedVersion が古い（別バージョン）なら通知すべき
+	cache.NotifiedVersion = "v0.2.5"
+	if !uc.ShouldNotify(cache) {
+		t.Error("ShouldNotify() = false, want true (notified for different version)")
+	}
+
+	// NotifiedVersion が空なら通知すべき
+	cache.NotifiedVersion = ""
+	if !uc.ShouldNotify(cache) {
+		t.Error("ShouldNotify() = false, want true (never notified)")
+	}
+
+	// LatestVersion が current と同じなら通知不要
+	cache.LatestVersion = "v0.2.0"
+	cache.NotifiedVersion = ""
+	if uc.ShouldNotify(cache) {
+		t.Error("ShouldNotify() = true, want false (already on latest)")
+	}
+}
+
+func TestCheckAndCachePreservesVersionOnFailure(t *testing.T) {
+	// API が失敗しても既知の LatestVersion を保持する
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "update_cache.yaml")
+
+	uc := &UpdateChecker{
+		CurrentVersion: "v0.2.0",
+		CachePath:      cachePath,
+		APIURL:         server.URL,
+		SuccessTTL:     24 * time.Hour,
+		FailureTTL:     1 * time.Hour,
+	}
+
+	// 事前に既知のバージョンをキャッシュに書き込み
+	uc.SaveCache(&UpdateCache{
+		LastCheckedAt: time.Now().Add(-25 * time.Hour),
+		LatestVersion: "v0.3.0",
+		CheckedOK:     true,
+	})
+
+	cache, err := uc.CheckAndCache()
+	if err == nil {
+		t.Fatal("CheckAndCache() expected error, got nil")
+	}
+
+	// 失敗しても LatestVersion が保持されていることを確認
+	if cache.LatestVersion != "v0.3.0" {
+		t.Errorf("LatestVersion = %q, want %q (should be preserved from previous cache)", cache.LatestVersion, "v0.3.0")
+	}
+	if cache.CheckedOK {
+		t.Error("CheckedOK should be false after failure")
+	}
+}
+
+func TestStartAndShowUpdateNotification(t *testing.T) {
+	// startUpdateCheckWithChecker + showUpdateNotification の統合テスト
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]string{"tag_name": "v0.5.0"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "update_cache.yaml")
+
+	// 事前にキャッシュを作成（stale、新バージョンあり、未通知）
+	checker := &UpdateChecker{
+		CurrentVersion: "v0.2.0",
+		CachePath:      cachePath,
+		APIURL:         server.URL,
+		SuccessTTL:     24 * time.Hour,
+		FailureTTL:     1 * time.Hour,
+	}
+	checker.SaveCache(&UpdateCache{
+		LastCheckedAt: time.Now().Add(-25 * time.Hour),
+		LatestVersion: "v0.3.0",
+		CheckedOK:     true,
+	})
+
+	// グローバル変数をリセット
+	updateChecker = nil
+	pendingNotification = ""
+
+	startUpdateCheckWithChecker(checker)
+
+	// pendingNotification はキャッシュ済みの v0.3.0 に基づいて設定されるべき
+	if pendingNotification == "" {
+		t.Error("pendingNotification should be set from cached version")
+	}
+
+	// バックグラウンドの goroutine が完了するのを少し待つ
+	time.Sleep(100 * time.Millisecond)
+
+	// キャッシュが更新されていることを確認
+	updated, _ := checker.LoadCache()
+	if updated.LatestVersion != "v0.5.0" {
+		t.Errorf("background update should have cached v0.5.0, got %q", updated.LatestVersion)
+	}
+}
+
+func TestLoadSaveCacheWithNotifiedVersion(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "cache.yaml")
+	uc := &UpdateChecker{CachePath: cachePath}
+
+	original := &UpdateCache{
+		LastCheckedAt:   time.Now().Truncate(time.Second),
+		LatestVersion:   "v0.3.0",
+		CheckedOK:       true,
+		NotifiedVersion: "v0.3.0",
+	}
+	if err := uc.SaveCache(original); err != nil {
+		t.Fatalf("SaveCache() error = %v", err)
+	}
+
+	loaded, err := uc.LoadCache()
+	if err != nil {
+		t.Fatalf("LoadCache() error = %v", err)
+	}
+	if loaded.NotifiedVersion != "v0.3.0" {
+		t.Errorf("NotifiedVersion = %q, want %q", loaded.NotifiedVersion, "v0.3.0")
+	}
+}
+
 func TestShouldSkipUpdateCheck(t *testing.T) {
 	tests := []struct {
 		name    string

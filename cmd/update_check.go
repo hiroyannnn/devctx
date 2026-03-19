@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	updateResult  chan *UpdateCache // 非同期チェック結果
-	updateChecker *UpdateChecker
+	updateChecker       *UpdateChecker
+	pendingNotification string // 表示すべき通知メッセージ（PreRun で決定）
 )
 
 // UpdateChecker はアップデートの確認とキャッシュ管理を行う。
@@ -30,9 +30,10 @@ type UpdateChecker struct {
 
 // UpdateCache はアップデート確認結果のキャッシュ。
 type UpdateCache struct {
-	LastCheckedAt time.Time `yaml:"last_checked_at"`
-	LatestVersion string    `yaml:"latest_version"`
-	CheckedOK     bool      `yaml:"checked_ok"` // API成功ならtrue
+	LastCheckedAt   time.Time `yaml:"last_checked_at"`
+	LatestVersion   string    `yaml:"latest_version"`
+	CheckedOK       bool      `yaml:"checked_ok"`       // API成功ならtrue
+	NotifiedVersion string    `yaml:"notified_version"`  // 最後に通知したバージョン
 }
 
 // LoadCache はキャッシュファイルを読み込む。ファイルが存在しない場合は空のキャッシュを返す。
@@ -129,15 +130,34 @@ func (uc *UpdateChecker) IsNewer(latest, current string) bool {
 	return semver.Compare(latest, current) > 0
 }
 
+// ShouldNotify はキャッシュの内容に基づいて通知すべきかを判定する。
+// 新しいバージョンが存在し、かつそのバージョンについてまだ通知していない場合に true。
+func (uc *UpdateChecker) ShouldNotify(cache *UpdateCache) bool {
+	if cache.LatestVersion == "" {
+		return false
+	}
+	if !uc.IsNewer(cache.LatestVersion, uc.CurrentVersion) {
+		return false
+	}
+	// 同じバージョンについて既に通知済みなら出さない
+	return cache.NotifiedVersion != cache.LatestVersion
+}
+
 // CheckAndCache は最新バージョンを取得してキャッシュに保存する。
+// 失敗時も既知の LatestVersion を保持する。
 func (uc *UpdateChecker) CheckAndCache() (*UpdateCache, error) {
+	// 既存キャッシュを読み込んで LatestVersion を保持
+	existing, _ := uc.LoadCache()
+
 	cache := &UpdateCache{
-		LastCheckedAt: time.Now(),
+		LastCheckedAt:   time.Now(),
+		NotifiedVersion: existing.NotifiedVersion,
 	}
 
 	version, err := uc.FetchLatestVersion()
 	if err != nil {
 		cache.CheckedOK = false
+		cache.LatestVersion = existing.LatestVersion // 既知バージョンを保持
 		if saveErr := uc.SaveCache(cache); saveErr != nil {
 			return nil, fmt.Errorf("fetch failed: %w, and save failed: %v", err, saveErr)
 		}
@@ -196,7 +216,8 @@ func isStderrTTY() bool {
 	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
-// startUpdateCheck は非同期でアップデートチェックを開始する。
+// startUpdateCheck は更新チェックを開始する。
+// キャッシュから同期的に通知を決定し、stale ならバックグラウンドでキャッシュを更新する。
 func startUpdateCheck() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -204,7 +225,7 @@ func startUpdateCheck() {
 	}
 	cachePath := filepath.Join(home, ".config", "devctx", "update-check.yaml")
 
-	updateChecker = &UpdateChecker{
+	checker := &UpdateChecker{
 		CurrentVersion: Version,
 		CachePath:      cachePath,
 		APIURL:         "https://api.github.com/repos/hiroyannnn/devctx/releases/latest",
@@ -212,45 +233,41 @@ func startUpdateCheck() {
 		FailureTTL:     1 * time.Hour,
 	}
 
-	cache, err := updateChecker.LoadCache()
+	startUpdateCheckWithChecker(checker)
+}
+
+// startUpdateCheckWithChecker はテスト可能な内部実装。
+func startUpdateCheckWithChecker(checker *UpdateChecker) {
+	updateChecker = checker
+
+	cache, err := checker.LoadCache()
 	if err != nil {
 		return
 	}
 
-	if !updateChecker.IsStale(cache) {
-		// キャッシュが新鮮なら、そのまま使う
-		updateResult = make(chan *UpdateCache, 1)
-		updateResult <- cache
-		return
+	// キャッシュ済み結果から同期的に通知を決定（goroutine 待ち不要）
+	if checker.ShouldNotify(cache) {
+		pendingNotification = checker.NotifyMessage(cache.LatestVersion)
+		// 通知済みとしてキャッシュ更新
+		cache.NotifiedVersion = cache.LatestVersion
+		_ = checker.SaveCache(cache)
 	}
 
-	// stale なら非同期チェック
-	updateResult = make(chan *UpdateCache, 1)
-	go func() {
-		result, _ := updateChecker.CheckAndCache()
-		if result != nil {
-			updateResult <- result
-		} else {
-			updateResult <- cache // 失敗時はキャッシュを返す
-		}
-	}()
+	// stale ならバックグラウンドでキャッシュ更新（次回用、fire-and-forget）
+	if checker.IsStale(cache) {
+		go func() {
+			checker.CheckAndCache()
+		}()
+	}
 }
 
 // showUpdateNotification はアップデート通知を表示する。
 func showUpdateNotification() {
-	if updateResult == nil || updateChecker == nil {
+	if pendingNotification == "" {
 		return
 	}
-
-	select {
-	case cache := <-updateResult:
-		if cache != nil && cache.LatestVersion != "" && updateChecker.IsNewer(cache.LatestVersion, updateChecker.CurrentVersion) {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, updateChecker.NotifyMessage(cache.LatestVersion))
-		}
-	default:
-		// 非同期チェックが間に合わなかった場合は何もしない
-	}
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, pendingNotification)
 }
 
 // NotifyMessage はアップデート通知メッセージを返す。
