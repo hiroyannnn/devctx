@@ -34,6 +34,14 @@ git worktrees, and development context with a kanban-style interface.`,
 			promptFirstTimeSetup()
 			markFirstRunComplete()
 		}
+
+		// Update check (non-blocking)
+		if !shouldSkipUpdateCheck(cmd) {
+			startUpdateCheck()
+		}
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		showUpdateNotification()
 	},
 }
 
@@ -50,6 +58,7 @@ func init() {
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(hooksCmd)
+	rootCmd.AddCommand(versionCmd)
 }
 
 func isFirstRunComplete() bool {
