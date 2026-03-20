@@ -103,6 +103,7 @@ func (s *Server) ListenAndServe() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
 	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
+	mux.HandleFunc("/api/roadmap-graph", s.handleAPIRoadmapGraph)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
 
@@ -348,6 +349,74 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
+	store, err := s.StoreLoader.LoadStore()
+	if err != nil {
+		log.Printf("roadmap-graph: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
+
+	active := store.Active()
+
+	var insights *model.InsightStore
+	if s.InsightLoader != nil {
+		insights, _ = s.InsightLoader.LoadInsights()
+	}
+
+	// Group by project (repo root)
+	projectMap := make(map[string]*ProjectGraphGroup)
+	var projectOrder []string
+
+	for _, ctx := range active {
+		repoRoot := ctx.RepoRoot
+		if repoRoot == "" {
+			repoRoot = "__ungrouped__"
+		}
+
+		group, exists := projectMap[repoRoot]
+		if !exists {
+			name := filepath.Base(repoRoot)
+			if repoRoot == "__ungrouped__" {
+				name = "Other"
+			}
+			group = &ProjectGraphGroup{
+				Name:     name,
+				RepoRoot: repoRoot,
+			}
+			projectMap[repoRoot] = group
+			projectOrder = append(projectOrder, repoRoot)
+		}
+
+		// Build RoadmapEntry (minimal, just what BuildSessionGraph needs)
+		entry := RoadmapEntry{
+			Name:   ctx.Name,
+			Status: ctx.Status,
+			Phase:  ctx.Phase,
+		}
+
+		if insights != nil {
+			if insight := insights.Get(ctx.Name); insight != nil {
+				entry.Goal = insight.Goal
+				entry.CurrentFocus = insight.CurrentFocus
+				entry.AttentionState = insight.AttentionState
+				entry.Tasks = insight.Tasks
+			}
+		}
+
+		graph := BuildSessionGraph(entry)
+		group.Sessions = append(group.Sessions, graph)
+	}
+
+	result := make([]ProjectGraphGroup, 0, len(projectOrder))
+	for _, root := range projectOrder {
+		result = append(result, *projectMap[root])
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleAPITimeline(w http.ResponseWriter, r *http.Request) {

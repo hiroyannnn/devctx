@@ -702,6 +702,169 @@ func TestAPIRoadmapMapIncludesDAGFields(t *testing.T) {
 	}
 }
 
+func TestAPIRoadmapGraph(t *testing.T) {
+	now := time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:      "test-ctx",
+				Branch:    "feature/test",
+				Worktree:  "/tmp/repo/worktrees/test",
+				Status:    model.StatusInProgress,
+				RepoRoot:  "/test/repo",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+	insights := &model.InsightStore{
+		Insights: []model.SessionInsight{
+			{
+				Name: "test-ctx",
+				Goal: "Test goal",
+				Tasks: []model.TaskItem{
+					{
+						ID:       "task-a",
+						Title:    "Task A",
+						Status:   model.TaskDone,
+						Source:   "llm",
+						FlowsTo: "milestone",
+					},
+					{
+						ID:        "task-b",
+						Title:     "Task B",
+						Status:    model.TaskInProgress,
+						Source:    "llm",
+						DependsOn: []string{"task-a"},
+						FlowsTo:  "milestone",
+					},
+					{
+						ID:        "milestone",
+						Title:     "PR Review",
+						Status:    model.TaskPlanned,
+						Source:    "llm",
+						DependsOn: []string{"task-a", "task-b"},
+					},
+				},
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader:   &mockStoreLoader{store: store},
+		InsightLoader: &mockInsightLoader{store: insights},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap-graph", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmapGraph(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+
+	var groups []ProjectGraphGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
+	}
+
+	// projects[0].name == repo のベース名
+	if groups[0].Name != "repo" {
+		t.Errorf("groups[0].Name = %q, want %q", groups[0].Name, "repo")
+	}
+
+	if len(groups[0].Sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(groups[0].Sessions))
+	}
+	session := groups[0].Sessions[0]
+
+	// sessions[0].goal == "Test goal"
+	if session.Goal != "Test goal" {
+		t.Errorf("Goal = %q, want %q", session.Goal, "Test goal")
+	}
+
+	// sessions[0].nodes に goal, task-a, task-b, milestone が含まれる
+	nodeIDs := make(map[string]GraphNode)
+	for _, n := range session.Nodes {
+		nodeIDs[n.ID] = n
+	}
+	for _, id := range []string{"goal", "task-a", "task-b", "milestone"} {
+		if _, ok := nodeIDs[id]; !ok {
+			t.Errorf("node %q not found in nodes", id)
+		}
+	}
+
+	// milestone のノード種別が "milestone"
+	if nodeIDs["milestone"].Type != NodeMilestone {
+		t.Errorf("milestone node type = %q, want %q", nodeIDs["milestone"].Type, NodeMilestone)
+	}
+
+	// sessions[0].edges に fork, flow, dependency エッジが含まれる
+	edgeTypes := make(map[EdgeType]bool)
+	for _, e := range session.Edges {
+		edgeTypes[e.Type] = true
+	}
+	for _, et := range []EdgeType{EdgeFork, EdgeFlow, EdgeDependency} {
+		if !edgeTypes[et] {
+			t.Errorf("edge type %q not found in edges", et)
+		}
+	}
+}
+
+func TestAPIRoadmapGraph_NoInsights(t *testing.T) {
+	now := time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:      "test-ctx",
+				Branch:    "feature/test",
+				Worktree:  "/tmp/repo/worktrees/test",
+				Status:    model.StatusInProgress,
+				RepoRoot:  "/test/repo",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader:   &mockStoreLoader{store: store},
+		InsightLoader: nil, // InsightStore が nil
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap-graph", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmapGraph(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var groups []ProjectGraphGroup
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
+	}
+
+	session := groups[0].Sessions[0]
+	if len(session.Nodes) != 0 {
+		t.Errorf("Nodes len = %d, want 0", len(session.Nodes))
+	}
+	if len(session.Edges) != 0 {
+		t.Errorf("Edges len = %d, want 0", len(session.Edges))
+	}
+}
+
 func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{err: fmt.Errorf("disk error")},
