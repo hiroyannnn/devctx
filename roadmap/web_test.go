@@ -534,6 +534,174 @@ func TestHandleAPIRoadmapMap_IncludesTopicsAndTasks(t *testing.T) {
 	}
 }
 
+func TestAPIRoadmapMapIncludesDAGFields(t *testing.T) {
+	now := time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC)
+	store := &model.Store{
+		Contexts: []model.Context{
+			{
+				Name:      "test-ctx",
+				Branch:    "feature/test",
+				Worktree:  "/tmp/project/worktrees/test",
+				Status:    model.StatusInProgress,
+				RepoRoot:  "/tmp/project",
+				CreatedAt: now,
+				LastSeen:  now,
+			},
+		},
+	}
+	insights := &model.InsightStore{
+		Insights: []model.SessionInsight{
+			{
+				Name: "test-ctx",
+				Goal: "Test goal",
+				Tasks: []model.TaskItem{
+					{
+						Title:     "Task A",
+						Status:    model.TaskDone,
+						Source:    "llm",
+						ID:        "task-a",
+						DependsOn: nil,
+						FlowsTo:  "pr-review",
+					},
+					{
+						Title:     "Task B",
+						Status:    model.TaskInProgress,
+						Source:    "llm",
+						ID:        "task-b",
+						DependsOn: []string{"task-a"},
+						FlowsTo:  "pr-review",
+					},
+					{
+						Title:     "PR Review",
+						Status:    model.TaskPlanned,
+						Source:    "llm",
+						ID:        "pr-review",
+						DependsOn: []string{"task-a", "task-b"},
+					},
+					{
+						Title:  "Cleanup",
+						Status: model.TaskRejected,
+						Source: "llm",
+						ID:     "cleanup",
+					},
+				},
+			},
+		},
+	}
+
+	server := &Server{
+		StoreLoader:   &mockStoreLoader{store: store},
+		InsightLoader: &mockInsightLoader{store: insights},
+		Scanner: &Scanner{
+			Git: &mockGitRunner{results: map[string]mockResult{
+				"rev-parse --git-dir": {err: fmt.Errorf("not found")},
+			}},
+			Gh: &mockGhRunner{available: false, results: map[string]mockResult{}},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/roadmap-map", nil)
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmapMap(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Parse as raw JSON to verify field presence/absence
+	var groups []struct {
+		Sessions []struct {
+			Tasks []struct {
+				Title     string   `json:"title"`
+				Status    string   `json:"status"`
+				ID        string   `json:"id"`
+				DependsOn []string `json:"depends_on"`
+				FlowsTo  string   `json:"flows_to"`
+			} `json:"tasks"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
+	}
+	if len(groups[0].Sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(groups[0].Sessions))
+	}
+
+	tasks := groups[0].Sessions[0].Tasks
+	if len(tasks) != 4 {
+		t.Fatalf("got %d tasks, want 4", len(tasks))
+	}
+
+	// task-a: has flows_to, no depends_on
+	if tasks[0].ID != "task-a" {
+		t.Errorf("tasks[0].ID = %q, want task-a", tasks[0].ID)
+	}
+	if tasks[0].FlowsTo != "pr-review" {
+		t.Errorf("tasks[0].FlowsTo = %q, want pr-review", tasks[0].FlowsTo)
+	}
+	if tasks[0].DependsOn != nil {
+		t.Errorf("tasks[0].DependsOn = %v, want nil (omitempty)", tasks[0].DependsOn)
+	}
+
+	// task-b: has depends_on and flows_to
+	if tasks[1].ID != "task-b" {
+		t.Errorf("tasks[1].ID = %q, want task-b", tasks[1].ID)
+	}
+	if len(tasks[1].DependsOn) != 1 || tasks[1].DependsOn[0] != "task-a" {
+		t.Errorf("tasks[1].DependsOn = %v, want [task-a]", tasks[1].DependsOn)
+	}
+	if tasks[1].FlowsTo != "pr-review" {
+		t.Errorf("tasks[1].FlowsTo = %q, want pr-review", tasks[1].FlowsTo)
+	}
+
+	// pr-review: depends_on has both task-a and task-b
+	if tasks[2].ID != "pr-review" {
+		t.Errorf("tasks[2].ID = %q, want pr-review", tasks[2].ID)
+	}
+	if len(tasks[2].DependsOn) != 2 {
+		t.Fatalf("tasks[2].DependsOn len = %d, want 2", len(tasks[2].DependsOn))
+	}
+	if tasks[2].DependsOn[0] != "task-a" || tasks[2].DependsOn[1] != "task-b" {
+		t.Errorf("tasks[2].DependsOn = %v, want [task-a task-b]", tasks[2].DependsOn)
+	}
+	if tasks[2].FlowsTo != "" {
+		t.Errorf("tasks[2].FlowsTo = %q, want empty (omitempty)", tasks[2].FlowsTo)
+	}
+
+	// cleanup: rejected, no depends_on/flows_to
+	if tasks[3].ID != "cleanup" {
+		t.Errorf("tasks[3].ID = %q, want cleanup", tasks[3].ID)
+	}
+	if tasks[3].Status != "rejected" {
+		t.Errorf("tasks[3].Status = %q, want rejected", tasks[3].Status)
+	}
+	if tasks[3].DependsOn != nil {
+		t.Errorf("tasks[3].DependsOn = %v, want nil (omitempty)", tasks[3].DependsOn)
+	}
+	if tasks[3].FlowsTo != "" {
+		t.Errorf("tasks[3].FlowsTo = %q, want empty (omitempty)", tasks[3].FlowsTo)
+	}
+
+	// Also verify omitempty by checking raw JSON
+	rawJSON := w.Body.String()
+	// task-a should NOT have depends_on in JSON (omitempty)
+	// We check by looking for the task-a block
+	if strings.Contains(rawJSON, `"id":"cleanup"`) && strings.Contains(rawJSON, `"depends_on":[]`) {
+		// This would be wrong - omitempty should omit empty slices
+	}
+	// Verify flows_to appears for task-a
+	if !strings.Contains(rawJSON, `"flows_to":"pr-review"`) {
+		t.Error("raw JSON should contain flows_to:pr-review for task-a/task-b")
+	}
+	// Verify depends_on appears for task-b
+	if !strings.Contains(rawJSON, `"depends_on":["task-a"]`) {
+		t.Error("raw JSON should contain depends_on:[task-a] for task-b")
+	}
+}
+
 func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 	server := &Server{
 		StoreLoader: &mockStoreLoader{err: fmt.Errorf("disk error")},
