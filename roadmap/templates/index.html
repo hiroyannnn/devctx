@@ -869,7 +869,7 @@ function render(data) {
   if (currentView === 'project') {
     renderProjectView(data);
   } else if (currentView === 'graph') {
-    renderGraphView(data);
+    renderGraphView(data, cachedGraphData);
   } else {
     renderFlatView(data);
   }
@@ -1074,127 +1074,37 @@ function buildMindMapData(groups) {
       return; // skip detailed view for All Projects
     }
 
-    // Detailed view (single project selected)
+    // Detailed view: fallback when graph API not available
     group.sessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
-      var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
-      var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
-      // Phase integrated into session label
+      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
       var label = session.name;
-      if (pLabel) label += '\n' + pLabel;
+      if (session.current_focus) {
+        var f = session.current_focus;
+        if (f.length > 30) f = f.substring(0, 28) + '..';
+        label += '\n' + f;
+      }
 
       nodes.push({
-        id: sessionId,
-        label: label,
-        shape: 'box',
-        color: { background: phaseColor + '33', border: phaseColor },
-        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true, multi: true },
+        id: sessionId, label: label, shape: 'box',
+        color: { background: '#1a1f27', border: attnColor },
+        font: { color: '#f0f6fc', size: 13, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
-        borderWidth: 2,
-        level: sessionLevel,
-        _type: 'session',
-        _data: session
+        borderWidth: 2, level: sessionLevel, _type: 'session', _data: session
       });
       if (sessionParent) {
-        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
       }
 
-      // Goal node
-      if (session.goal) {
-        var goalId = 'goal:' + (++nid);
-        nodes.push({
-          id: goalId,
-          label: '\uD83C\uDFAF ' + session.goal,
-          shape: 'box',
-          color: { background: '#f0883e22', border: '#f0883e' },
-          font: { color: '#f0883e', size: 11, face: '-apple-system, sans-serif' },
-          margin: { top: 4, bottom: 4, left: 8, right: 8 },
-          borderWidth: 1,
-          level: detailLevel,
-          _type: 'goal'
-        });
-        edges.push({ from: sessionId, to: goalId, color: { color: '#f0883e44' }, width: 1 });
-      }
-
-      // Task nodes: sorted by status (in_progress first, then planned, blocked, done)
-      if (session.tasks && session.tasks.length > 0) {
-        var taskOrder = {in_progress: 0, planned: 1, blocked: 2, done: 3};
-        var sorted = session.tasks.slice().sort(function(a, b) {
-          return (taskOrder[a.status] || 9) - (taskOrder[b.status] || 9);
-        });
-        var doneCount = 0;
-        var doneShown = false;
-        sorted.forEach(function(task) {
-          // Collapse done tasks: show summary node instead
-          if (task.status === 'done') {
-            doneCount++;
-            if (!doneShown) {
-              doneShown = true;
-              var total = sorted.filter(function(t) { return t.status === 'done'; }).length;
-              var doneId = 'done:' + (++nid);
-              nodes.push({
-                id: doneId,
-                label: '\u2713 Done (' + total + ')',
-                shape: 'box',
-                color: { background: '#3fb95018', border: '#3fb950' },
-                font: { color: '#3fb950', size: 9, face: '-apple-system, sans-serif' },
-                margin: { top: 3, bottom: 3, left: 6, right: 6 },
-                borderWidth: 1,
-                level: detailLevel,
-                _type: 'done_summary'
-              });
-              edges.push({ from: sessionId, to: doneId, color: { color: '#3fb95044' }, width: 1 });
-            }
-            return;
-          }
-
-          var taskId = 'task:' + (++nid);
-          var tc = TASK_COLORS[task.status] || '#484f58';
-          var icon = TASK_ICONS_MAP[task.status] || '\u25CB';
-          var isActive = task.status === 'in_progress';
-
-          nodes.push({
-            id: taskId,
-            label: icon + ' ' + task.title,
-            shape: 'box',
-            color: {
-              background: isActive ? tc + '44' : tc + '18',
-              border: tc
-            },
-            font: {
-              color: isActive ? '#f0f6fc' : '#8b949e',
-              size: isActive ? 12 : 10,
-              face: '-apple-system, sans-serif',
-              bold: isActive
-            },
-            margin: { top: 3, bottom: 3, left: 8, right: 8 },
-            borderWidth: isActive ? 3 : 1,
-            level: detailLevel,
-            _type: 'task',
-            _data: task
-          });
-          edges.push({
-            from: sessionId, to: taskId,
-            color: { color: isActive ? tc : '#30363d' },
-            width: isActive ? 3 : 1
-          });
-        });
-      }
-
-      // No roadmap warning when no goal and no tasks
+      // No roadmap warning
       if (!session.goal && (!session.tasks || session.tasks.length === 0)) {
         var warnId = 'warn:' + (++nid);
         nodes.push({
-          id: warnId,
-          label: '\u26A0 No roadmap',
-          shape: 'box',
+          id: warnId, label: '\u26A0 No roadmap', shape: 'box',
           color: { background: '#f8514922', border: '#f85149' },
-          font: { color: '#f85149', size: 10, face: '-apple-system, sans-serif' },
+          font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
-          borderWidth: 1,
-          borderDashes: [4, 4],
-          level: detailLevel,
-          _type: 'warning'
+          borderWidth: 1, borderDashes: [4, 4], level: detailLevel, _type: 'warning'
         });
         edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
       }
@@ -1204,10 +1114,175 @@ function buildMindMapData(groups) {
   return { nodes: nodes, edges: edges };
 }
 
-function renderGraphView(groups) {
+// Build DAG from /api/roadmap-graph data for Single Project view
+function buildSemanticGraph(graphData) {
+  var nodes = [];
+  var edges = [];
+  var nid = 0;
+
+  var NODE_STYLES = {
+    goal:      { bg: '#f0883e22', border: '#f0883e', fontColor: '#f0883e', icon: '\uD83C\uDFAF ', fontSize: 14, borderWidth: 2 },
+    task:      { bg: '#484f5818', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    milestone: { bg: '#79c0ff22', border: '#79c0ff', fontColor: '#79c0ff', icon: '\u25C6 ', fontSize: 13, borderWidth: 2 },
+    rejected:  { bg: '#484f5811', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+  };
+  var STATUS_STYLES = {
+    in_progress: { bg: '#58a6ff44', border: '#58a6ff', fontColor: '#f0f6fc', icon: '\u25B6 ', fontSize: 13, borderWidth: 3 },
+    done:        { bg: '#3fb95022', border: '#3fb950', fontColor: '#3fb950', icon: '\u2713 ', fontSize: 12, borderWidth: 1 },
+    blocked:     { bg: '#f8514933', border: '#f85149', fontColor: '#f85149', icon: '\u2716 ', fontSize: 12, borderWidth: 2 },
+    planned:     { bg: '#484f5818', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    rejected:    { bg: '#484f5811', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+  };
+
+  var EDGE_STYLES = {
+    fork:       { color: '#484f58', width: 1.5, dashes: false },
+    flow:       { color: '#79c0ff', width: 2, dashes: false },
+    dependency: { color: '#8b949e', width: 1, dashes: [5, 5] },
+    rejected:   { color: '#484f5866', width: 1, dashes: [3, 3] }
+  };
+
+  graphData.forEach(function(projectGroup) {
+    var showProjectNode = graphData.length > 1 || projectGroup.sessions.length > 1;
+    var projectNodeId = null;
+
+    if (showProjectNode) {
+      projectNodeId = 'proj:' + (++nid);
+      nodes.push({
+        id: projectNodeId, label: projectGroup.name, shape: 'box',
+        color: { background: '#21262d', border: '#484f58' },
+        font: { color: '#f0f6fc', size: 15, bold: true },
+        margin: { top: 10, bottom: 10, left: 14, right: 14 },
+        borderWidth: 1, level: 0, _type: 'project', _data: projectGroup
+      });
+    }
+
+    projectGroup.sessions.forEach(function(session) {
+      var sessionPrefix = 's' + (++nid) + ':';
+      var baseLevel = showProjectNode ? 1 : 0;
+
+      // Session header node
+      var sessionNodeId = sessionPrefix + 'session';
+      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
+      var sessionLabel = session.name;
+      if (session.current_focus) {
+        var cf = session.current_focus;
+        if (cf.length > 35) cf = cf.substring(0, 33) + '..';
+        sessionLabel += '\n' + cf;
+      }
+      nodes.push({
+        id: sessionNodeId, label: sessionLabel, shape: 'box',
+        color: { background: '#1a1f27', border: attnColor },
+        font: { color: '#f0f6fc', size: 14, bold: true, multi: true },
+        margin: { top: 8, bottom: 8, left: 12, right: 12 },
+        borderWidth: 2, level: baseLevel, _type: 'session', _data: session
+      });
+      if (projectNodeId) {
+        edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
+      }
+
+      if (!session.nodes || session.nodes.length === 0) {
+        // No DAG data — show warning
+        var warnId = sessionPrefix + 'warn';
+        nodes.push({
+          id: warnId, label: '\u26A0 No roadmap', shape: 'box',
+          color: { background: '#f8514922', border: '#f85149' },
+          font: { color: '#f85149', size: 10 },
+          margin: { top: 3, bottom: 3, left: 8, right: 8 },
+          borderWidth: 1, borderDashes: [4, 4], level: baseLevel + 1, _type: 'warning'
+        });
+        edges.push({ from: sessionNodeId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
+        return;
+      }
+
+      // Map graph node IDs to vis-network IDs
+      var idMap = {};
+      session.nodes.forEach(function(gn) {
+        var visId = sessionPrefix + gn.id;
+        idMap[gn.id] = visId;
+
+        var style;
+        if (gn.type === 'goal') {
+          style = NODE_STYLES.goal;
+        } else if (gn.type === 'milestone') {
+          style = NODE_STYLES.milestone;
+        } else if (gn.type === 'rejected' || gn.status === 'rejected') {
+          style = STATUS_STYLES.rejected;
+        } else {
+          style = STATUS_STYLES[gn.status] || NODE_STYLES.task;
+        }
+
+        // Current focus glow effect
+        var isFocus = session.current_focus && gn.label &&
+          gn.label.indexOf(session.current_focus) !== -1;
+        var shadow = isFocus ? { enabled: true, color: '#58a6ff', size: 12, x: 0, y: 0 } : undefined;
+
+        // Determine level: goal = baseLevel+1, tasks = baseLevel+2, milestones = baseLevel+3
+        var level = baseLevel + 1;
+        if (gn.type === 'task' || gn.type === 'rejected') level = baseLevel + 2;
+        if (gn.type === 'milestone') level = baseLevel + 3;
+
+        nodes.push({
+          id: visId,
+          label: style.icon + gn.label,
+          shape: 'box',
+          color: { background: style.bg, border: style.border },
+          font: { color: style.fontColor, size: style.fontSize, bold: gn.status === 'in_progress' },
+          margin: { top: 5, bottom: 5, left: 10, right: 10 },
+          borderWidth: style.borderWidth,
+          borderDashes: (gn.type === 'rejected' || gn.status === 'rejected') ? [4, 4] : false,
+          shadow: shadow,
+          level: level,
+          _type: gn.type,
+          _data: gn
+        });
+      });
+
+      // Edges from session to goal (or first task if no goal)
+      var goalNode = session.nodes.find(function(n) { return n.type === 'goal'; });
+      if (goalNode && idMap[goalNode.id]) {
+        edges.push({ from: sessionNodeId, to: idMap[goalNode.id], color: { color: '#f0883e88' }, width: 2 });
+      }
+
+      // DAG edges
+      session.edges.forEach(function(ge) {
+        var fromVis = idMap[ge.from];
+        var toVis = idMap[ge.to];
+        if (!fromVis || !toVis) return;
+
+        var es = EDGE_STYLES[ge.type] || EDGE_STYLES.fork;
+
+        // Override edge color for active tasks
+        var toNode = session.nodes.find(function(n) { return n.id === ge.to; });
+        var edgeColor = es.color;
+        if (toNode && toNode.status === 'in_progress' && ge.type !== 'rejected') {
+          edgeColor = '#58a6ff';
+        } else if (toNode && toNode.status === 'done' && ge.type === 'flow') {
+          edgeColor = '#3fb95088';
+        }
+
+        edges.push({
+          from: fromVis, to: toVis,
+          color: { color: edgeColor },
+          width: (toNode && toNode.status === 'in_progress') ? 3 : es.width,
+          dashes: es.dashes,
+          arrows: ge.type === 'dependency' ? { to: { enabled: true, scaleFactor: 0.5 } } : undefined
+        });
+      });
+    });
+  });
+
+  return { nodes: nodes, edges: edges };
+}
+
+var cachedGraphData = null; // cached /api/roadmap-graph data
+
+function renderGraphView(groups, graphData) {
   graphGroups = groups;
   updateProjectSelect(groups);
-  var data = buildMindMapData(groups);
+
+  // Use semantic DAG for single project when graph data is available
+  var useDAG = graphData && selectedProject;
+  var data = useDAG ? buildSemanticGraph(graphData) : buildMindMapData(groups);
 
   if (graphNetwork) {
     graphNodes = new vis.DataSet(data.nodes);
@@ -1414,10 +1489,20 @@ async function refresh() {
     var res = await fetch('/api/roadmap-map');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     var newData = await res.json();
+
+    // Also fetch graph data for DAG view
+    var graphData = null;
+    if (currentView === 'graph' && selectedProject) {
+      try {
+        var gres = await fetch('/api/roadmap-graph');
+        if (gres.ok) graphData = await gres.json();
+      } catch (e) { /* graph API optional, fall back to tree */ }
+    }
+
     // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
     if (currentView === 'graph' && cachedData && graphNetwork) {
-      var newJson = JSON.stringify(newData);
-      var oldJson = JSON.stringify(cachedData);
+      var newJson = JSON.stringify(newData) + JSON.stringify(graphData);
+      var oldJson = JSON.stringify(cachedData) + JSON.stringify(cachedGraphData);
       if (newJson === oldJson) {
         var sessionCount = 0;
         newData.forEach(function(g) { sessionCount += g.sessions.length; });
@@ -1428,7 +1513,12 @@ async function refresh() {
       }
     }
     cachedData = newData;
-    render(cachedData);
+    cachedGraphData = graphData;
+    if (currentView === 'graph') {
+      renderGraphView(cachedData, cachedGraphData);
+    } else {
+      render(cachedData);
+    }
   } catch (e) {
     document.getElementById('meta').textContent = 'Error: ' + e.message;
   }
