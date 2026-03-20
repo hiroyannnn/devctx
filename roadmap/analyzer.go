@@ -43,7 +43,14 @@ func BuildAnalyzePrompt(ctx *model.Context, transcript string) string {
     {"name": "トピック名", "keywords": ["関連キーワード"]}
   ],
   "tasks": [
-    {"title": "タスク名", "status": "planned|in_progress|done|blocked", "topic": "関連トピック名"}
+    {
+      "id": "slug形式のタスクID",
+      "title": "タスク名",
+      "status": "planned|in_progress|done|blocked|rejected",
+      "depends_on": ["依存先タスクID"],
+      "flows_to": "合流先タスクID",
+      "topic": "関連トピック名"
+    }
   ]
 }
 
@@ -54,7 +61,14 @@ attention_stateの判定基準:
 - blocked: エラーや問題で詰まっている
 
 topicsはこのセッションで扱っている意味的なテーマ（2-5個程度）。
-tasksは具体的な作業項目とその状態。
+
+tasksは具体的な作業項目とその状態。以下のルールに従ってください:
+- 各タスクに一意のid（英数字とハイフンのslug形式）を付与すること
+- タスク間の依存関係をdepends_onで明示すること
+- 複数タスクの結果が合流するノード（PRレビュー等）はdepends_onに合流元を列挙すること
+- 不要と判断されたタスクはstatus: "rejected"とし、flows_toを空にすること
+- rejectedはタスクが不要になった/実施しないことを意味する
+
 JSONのみを出力してください。`)
 
 	return b.String()
@@ -76,9 +90,12 @@ type analyzeTopicResp struct {
 }
 
 type analyzeTaskResp struct {
-	Title  string `json:"title"`
-	Status string `json:"status"`
-	Topic  string `json:"topic,omitempty"`
+	Title     string   `json:"title"`
+	Status    string   `json:"status"`
+	Topic     string   `json:"topic,omitempty"`
+	ID        string   `json:"id,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"`
+	FlowsTo   string   `json:"flows_to,omitempty"`
 }
 
 var jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
@@ -141,15 +158,18 @@ func ParseAnalyzeResponse(name string, response string) (*model.SessionInsight, 
 		}
 		status := model.TaskStatus(t.Status)
 		switch status {
-		case model.TaskPlanned, model.TaskInProgress, model.TaskDone, model.TaskBlocked:
+		case model.TaskPlanned, model.TaskInProgress, model.TaskDone, model.TaskBlocked, model.TaskRejected:
 			// valid
 		default:
 			status = model.TaskPlanned
 		}
 		task := model.TaskItem{
-			Title:  t.Title,
-			Status: status,
-			Source: "llm",
+			Title:     t.Title,
+			Status:    status,
+			Source:    "llm",
+			ID:        t.ID,
+			DependsOn: t.DependsOn,
+			FlowsTo:   t.FlowsTo,
 		}
 		// Link to topic by name
 		if t.Topic != "" {

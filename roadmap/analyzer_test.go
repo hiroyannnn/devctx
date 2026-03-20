@@ -158,6 +158,127 @@ func TestParseAnalyzeResponse_InvalidTaskStatus(t *testing.T) {
 	}
 }
 
+func TestParseAnalyzeResponseWithDAGFields(t *testing.T) {
+	response := `{
+  "goal": "認証機能を実装する",
+  "current_focus": "OAuthフロー",
+  "next_step": "トークンリフレッシュ",
+  "attention_state": "active",
+  "tasks": [
+    {"id": "setup-oauth", "title": "OAuth設定", "status": "done", "depends_on": [], "flows_to": "impl-token", "topic": "認証"},
+    {"id": "impl-token", "title": "トークン取得実装", "status": "in_progress", "depends_on": ["setup-oauth"], "flows_to": "pr-review", "topic": "認証"},
+    {"id": "write-tests", "title": "テスト作成", "status": "planned", "depends_on": ["setup-oauth"], "flows_to": "pr-review", "topic": "テスト"},
+    {"id": "pr-review", "title": "PRレビュー", "status": "planned", "depends_on": ["impl-token", "write-tests"], "flows_to": "", "topic": "レビュー"}
+  ]
+}`
+	insight, err := ParseAnalyzeResponse("auth", response)
+	if err != nil {
+		t.Fatalf("ParseAnalyzeResponse() error = %v", err)
+	}
+	if len(insight.Tasks) != 4 {
+		t.Fatalf("Tasks len = %d, want 4", len(insight.Tasks))
+	}
+	// Check ID mapping
+	if insight.Tasks[0].ID != "setup-oauth" {
+		t.Errorf("Tasks[0].ID = %q, want %q", insight.Tasks[0].ID, "setup-oauth")
+	}
+	if insight.Tasks[1].ID != "impl-token" {
+		t.Errorf("Tasks[1].ID = %q, want %q", insight.Tasks[1].ID, "impl-token")
+	}
+	// Check DependsOn mapping
+	if len(insight.Tasks[1].DependsOn) != 1 || insight.Tasks[1].DependsOn[0] != "setup-oauth" {
+		t.Errorf("Tasks[1].DependsOn = %v, want [setup-oauth]", insight.Tasks[1].DependsOn)
+	}
+	if len(insight.Tasks[3].DependsOn) != 2 {
+		t.Errorf("Tasks[3].DependsOn len = %d, want 2", len(insight.Tasks[3].DependsOn))
+	}
+	// Check FlowsTo mapping
+	if insight.Tasks[0].FlowsTo != "impl-token" {
+		t.Errorf("Tasks[0].FlowsTo = %q, want %q", insight.Tasks[0].FlowsTo, "impl-token")
+	}
+	if insight.Tasks[3].FlowsTo != "" {
+		t.Errorf("Tasks[3].FlowsTo = %q, want empty", insight.Tasks[3].FlowsTo)
+	}
+}
+
+func TestParseAnalyzeResponseWithRejectedStatus(t *testing.T) {
+	response := `{
+  "goal": "リファクタリング",
+  "current_focus": "構造整理",
+  "next_step": "テスト追加",
+  "attention_state": "active",
+  "tasks": [
+    {"id": "remove-legacy", "title": "レガシーコード削除", "status": "rejected", "depends_on": [], "flows_to": ""},
+    {"id": "add-tests", "title": "テスト追加", "status": "in_progress", "depends_on": [], "flows_to": ""}
+  ]
+}`
+	insight, err := ParseAnalyzeResponse("refactor", response)
+	if err != nil {
+		t.Fatalf("ParseAnalyzeResponse() error = %v", err)
+	}
+	if len(insight.Tasks) != 2 {
+		t.Fatalf("Tasks len = %d, want 2", len(insight.Tasks))
+	}
+	if insight.Tasks[0].Status != model.TaskRejected {
+		t.Errorf("Tasks[0].Status = %q, want %q", insight.Tasks[0].Status, model.TaskRejected)
+	}
+	if insight.Tasks[1].Status != model.TaskInProgress {
+		t.Errorf("Tasks[1].Status = %q, want %q", insight.Tasks[1].Status, model.TaskInProgress)
+	}
+}
+
+func TestParseAnalyzeResponseBackwardCompatibility(t *testing.T) {
+	// id/depends_on/flows_to がないレスポンスでも問題なくパースできること
+	response := `{
+  "goal": "後方互換テスト",
+  "current_focus": "パース確認",
+  "next_step": "完了",
+  "attention_state": "active",
+  "tasks": [
+    {"title": "既存タスク", "status": "done", "topic": "テスト"},
+    {"title": "新規タスク", "status": "planned"}
+  ]
+}`
+	insight, err := ParseAnalyzeResponse("compat", response)
+	if err != nil {
+		t.Fatalf("ParseAnalyzeResponse() error = %v", err)
+	}
+	if len(insight.Tasks) != 2 {
+		t.Fatalf("Tasks len = %d, want 2", len(insight.Tasks))
+	}
+	// ID, DependsOn, FlowsTo はゼロ値のまま
+	if insight.Tasks[0].ID != "" {
+		t.Errorf("Tasks[0].ID = %q, want empty", insight.Tasks[0].ID)
+	}
+	if insight.Tasks[0].DependsOn != nil {
+		t.Errorf("Tasks[0].DependsOn = %v, want nil", insight.Tasks[0].DependsOn)
+	}
+	if insight.Tasks[0].FlowsTo != "" {
+		t.Errorf("Tasks[0].FlowsTo = %q, want empty", insight.Tasks[0].FlowsTo)
+	}
+	// 既存フィールドは正常にパースされること
+	if insight.Tasks[0].Title != "既存タスク" {
+		t.Errorf("Tasks[0].Title = %q, want %q", insight.Tasks[0].Title, "既存タスク")
+	}
+	if insight.Tasks[0].Status != model.TaskDone {
+		t.Errorf("Tasks[0].Status = %q, want %q", insight.Tasks[0].Status, model.TaskDone)
+	}
+}
+
+func TestBuildAnalyzePromptContainsDAGFields(t *testing.T) {
+	ctx := &model.Context{
+		Name: "test",
+	}
+	prompt := BuildAnalyzePrompt(ctx, "test transcript")
+
+	checks := []string{"id", "depends_on", "flows_to", "rejected"}
+	for _, keyword := range checks {
+		if !strings.Contains(prompt, keyword) {
+			t.Errorf("prompt should contain %q", keyword)
+		}
+	}
+}
+
 func TestReadTranscriptTail(t *testing.T) {
 	lines := []string{
 		`{"role":"user","content":"line1"}`,
