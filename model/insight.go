@@ -18,6 +18,7 @@ const (
 	TaskInProgress TaskStatus = "in_progress"
 	TaskDone       TaskStatus = "done"
 	TaskBlocked    TaskStatus = "blocked"
+	TaskRejected   TaskStatus = "rejected"
 )
 
 type SemanticTopic struct {
@@ -28,11 +29,14 @@ type SemanticTopic struct {
 }
 
 type TaskItem struct {
-	Title    string     `yaml:"title" json:"title"`
-	Status   TaskStatus `yaml:"status" json:"status"`
-	TopicID  string     `yaml:"topic_id,omitempty" json:"topic_id,omitempty"`
-	Evidence []string   `yaml:"evidence,omitempty" json:"evidence,omitempty"`
-	Source   string     `yaml:"source" json:"source"` // "git", "transcript", "llm", "manual"
+	Title     string     `yaml:"title" json:"title"`
+	Status    TaskStatus `yaml:"status" json:"status"`
+	TopicID   string     `yaml:"topic_id,omitempty" json:"topic_id,omitempty"`
+	Evidence  []string   `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+	Source    string     `yaml:"source" json:"source"` // "git", "transcript", "llm", "manual"
+	ID        string     `yaml:"id,omitempty" json:"id,omitempty"`
+	DependsOn []string   `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	FlowsTo   string     `yaml:"flows_to,omitempty" json:"flows_to,omitempty"`
 }
 
 type SessionInsight struct {
