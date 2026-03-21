@@ -43,18 +43,21 @@ type GraphEdge struct {
 
 // SessionGraph は1セッション内のタスクフローDAG。
 type SessionGraph struct {
-	Name           string              `json:"name"`
-	Goal           string              `json:"goal,omitempty"`
-	AttentionState model.AttentionState `json:"attention_state,omitempty"`
-	CurrentFocus   string              `json:"current_focus,omitempty"`
-	NextStep       string              `json:"next_step,omitempty"`
-	Branch         string              `json:"branch,omitempty"`
-	Status         model.Status        `json:"status,omitempty"`
-	Phase          model.Phase         `json:"phase,omitempty"`
-	PRURL          string              `json:"pr_url,omitempty"`
-	InferredAt     string              `json:"inferred_at,omitempty"`
-	Nodes          []GraphNode         `json:"nodes"`
-	Edges          []GraphEdge         `json:"edges"`
+	Name           string               `json:"name"`
+	Goal           string               `json:"goal,omitempty"`
+	AttentionState model.AttentionState  `json:"attention_state,omitempty"`
+	CurrentFocus   string               `json:"current_focus,omitempty"`
+	NextStep       string               `json:"next_step,omitempty"`
+	Branch         string               `json:"branch,omitempty"`
+	Status         model.Status         `json:"status,omitempty"`
+	Phase          model.Phase          `json:"phase,omitempty"`
+	PRURL          string               `json:"pr_url,omitempty"`
+	IssueURL       string               `json:"issue_url,omitempty"`
+	InferredAt     string               `json:"inferred_at,omitempty"`
+	Topics         []model.SemanticTopic `json:"topics,omitempty"`
+	Tasks          []model.TaskItem     `json:"tasks,omitempty"`
+	Nodes          []GraphNode          `json:"nodes"`
+	Edges          []GraphEdge          `json:"edges"`
 }
 
 // ProjectGraphGroup はプロジェクト単位のグラフグループ。
@@ -76,7 +79,10 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		Status:         entry.Status,
 		Phase:          entry.Phase,
 		PRURL:          entry.PRURL,
+		IssueURL:       entry.IssueURL,
 		InferredAt:     entry.InferredAt,
+		Topics:         entry.Topics,
+		Tasks:          entry.Tasks,
 	}
 
 	if entry.Goal == "" && len(entry.Tasks) == 0 {

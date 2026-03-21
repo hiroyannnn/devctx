@@ -391,11 +391,12 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry := RoadmapEntry{
-			Name:   ctx.Name,
-			Branch: ctx.Branch,
-			Status: ctx.Status,
-			Phase:  ctx.Phase,
-			PRURL:  ctx.PRURL,
+			Name:     ctx.Name,
+			Branch:   ctx.Branch,
+			Status:   ctx.Status,
+			Phase:    ctx.Phase,
+			PRURL:    ctx.PRURL,
+			IssueURL: ctx.IssueURL,
 		}
 
 		if insights != nil {
@@ -405,6 +406,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 				entry.NextStep = insight.NextStep
 				entry.AttentionState = insight.AttentionState
 				entry.Tasks = insight.Tasks
+				entry.Topics = insight.Topics
 				if !insight.InferredAt.IsZero() {
 					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
 				}

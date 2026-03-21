@@ -1115,21 +1115,25 @@ function buildMindMapData(groups) {
 }
 
 // Compute topological depth of a node in the DAG (longest path from root)
-function computeNodeDepth(nodeId, edges, nodes, memo) {
+function computeNodeDepth(nodeId, edges, nodes, memo, visiting) {
   if (!memo) memo = {};
+  if (!visiting) visiting = {};
   if (memo[nodeId] !== undefined) return memo[nodeId];
-  // Find all incoming edges (where this node is the target)
+  if (visiting[nodeId]) return 1; // cycle guard
+  visiting[nodeId] = true;
   var incomingEdges = edges.filter(function(e) { return e.to === nodeId; });
   if (incomingEdges.length === 0) {
     memo[nodeId] = 1;
+    delete visiting[nodeId];
     return 1;
   }
   var maxDepth = 0;
   incomingEdges.forEach(function(e) {
-    var d = computeNodeDepth(e.from, edges, nodes, memo);
+    var d = computeNodeDepth(e.from, edges, nodes, memo, visiting);
     if (d > maxDepth) maxDepth = d;
   });
   memo[nodeId] = maxDepth + 1;
+  delete visiting[nodeId];
   return memo[nodeId];
 }
 
@@ -1336,6 +1340,7 @@ function renderGraphView(groups, graphData) {
       interaction: {
         hover: true,
         tooltipDelay: 200,
+        dragNodes: true,
         multiselect: false,
         navigationButtons: false,
         keyboard: { enabled: true }
@@ -1344,8 +1349,13 @@ function renderGraphView(groups, graphData) {
         arrows: { to: false },
         color: { color: '#484f58', hover: '#8b949e' },
         width: 1.5,
-        smooth: { type: 'cubicBezier', roundness: 0.2 }
+        smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 }
       }
+    });
+
+    // After initial hierarchical layout, disable it so nodes can be dragged freely
+    graphNetwork.once('stabilizationIterationsDone', function() {
+      graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
     });
 
     graphNetwork.on('click', function(params) {
