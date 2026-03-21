@@ -390,19 +390,24 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			projectOrder = append(projectOrder, repoRoot)
 		}
 
-		// Build RoadmapEntry (minimal, just what BuildSessionGraph needs)
 		entry := RoadmapEntry{
 			Name:   ctx.Name,
+			Branch: ctx.Branch,
 			Status: ctx.Status,
 			Phase:  ctx.Phase,
+			PRURL:  ctx.PRURL,
 		}
 
 		if insights != nil {
 			if insight := insights.Get(ctx.Name); insight != nil {
 				entry.Goal = insight.Goal
 				entry.CurrentFocus = insight.CurrentFocus
+				entry.NextStep = insight.NextStep
 				entry.AttentionState = insight.AttentionState
 				entry.Tasks = insight.Tasks
+				if !insight.InferredAt.IsZero() {
+					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
+				}
 			}
 		}
 

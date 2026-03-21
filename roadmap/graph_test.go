@@ -122,20 +122,18 @@ func TestBuildSessionGraph_FullDAG(t *testing.T) {
 		t.Errorf("edge jwt-mw->refresh Type = %q, want %q", typ, EdgeDependency)
 	}
 
-	// dependency edges: jwt-mw -> pr-review, refresh -> pr-review, e2e -> pr-review (from depends_on)
-	// Note: pr-review depends_on jwt-mw, refresh, e2e
+	// dependency edges for jwt-mw/refresh/e2e -> pr-review are deduplicated with flow edges.
+	// Since flow edges already connect these pairs, no separate dependency edges are expected.
 	for _, id := range []string{"jwt-mw", "refresh", "e2e"} {
-		// These edges already exist as flow edges; dependency edges from depends_on
-		// are separate — check they exist (may overlap with flow)
-		found := false
+		// Verify that exactly one edge (flow) exists, not two (flow + dependency)
+		count := 0
 		for _, e := range sg.Edges {
-			if e.From == id && e.To == "pr-review" && e.Type == EdgeDependency {
-				found = true
-				break
+			if e.From == id && e.To == "pr-review" {
+				count++
 			}
 		}
-		if !found {
-			t.Errorf("missing dependency edge %s->pr-review", id)
+		if count != 1 {
+			t.Errorf("expected exactly 1 edge %s->pr-review, got %d", id, count)
 		}
 	}
 }

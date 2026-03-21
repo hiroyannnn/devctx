@@ -442,7 +442,7 @@ h1 {
 <div id="content"></div>
 <div id="graph-container">
   <div id="graph-toolbar">
-    <select id="project-select" onchange="renderGraphView(graphGroups)" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
+    <select id="project-select" onchange="onProjectChange()" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
   </div>
@@ -1114,6 +1114,25 @@ function buildMindMapData(groups) {
   return { nodes: nodes, edges: edges };
 }
 
+// Compute topological depth of a node in the DAG (longest path from root)
+function computeNodeDepth(nodeId, edges, nodes, memo) {
+  if (!memo) memo = {};
+  if (memo[nodeId] !== undefined) return memo[nodeId];
+  // Find all incoming edges (where this node is the target)
+  var incomingEdges = edges.filter(function(e) { return e.to === nodeId; });
+  if (incomingEdges.length === 0) {
+    memo[nodeId] = 1;
+    return 1;
+  }
+  var maxDepth = 0;
+  incomingEdges.forEach(function(e) {
+    var d = computeNodeDepth(e.from, edges, nodes, memo);
+    if (d > maxDepth) maxDepth = d;
+  });
+  memo[nodeId] = maxDepth + 1;
+  return memo[nodeId];
+}
+
 // Build DAG from /api/roadmap-graph data for Single Project view
 function buildSemanticGraph(graphData) {
   var nodes = [];
@@ -1216,14 +1235,16 @@ function buildSemanticGraph(graphData) {
           gn.label.indexOf(session.current_focus) !== -1;
         var shadow = isFocus ? { enabled: true, color: '#58a6ff', size: 12, x: 0, y: 0 } : undefined;
 
-        // Determine level: goal = baseLevel+1, tasks = baseLevel+2, milestones = baseLevel+3
-        var level = baseLevel + 1;
-        if (gn.type === 'task' || gn.type === 'rejected') level = baseLevel + 2;
-        if (gn.type === 'milestone') level = baseLevel + 3;
+        // Dynamic level based on topological position in DAG
+        var level = baseLevel + 1; // default for goal
+        if (gn.type !== 'goal') {
+          // Calculate depth from goal based on dependency chain
+          level = baseLevel + computeNodeDepth(gn.id, session.edges, session.nodes) + 1;
+        }
 
         nodes.push({
           id: visId,
-          label: style.icon + gn.label,
+          label: style.icon + (gn.label.length > 25 ? gn.label.substring(0, 23) + '..' : gn.label),
           shape: 'box',
           color: { background: style.bg, border: style.border },
           font: { color: style.fontColor, size: style.fontSize, bold: gn.status === 'in_progress' },
@@ -1282,7 +1303,11 @@ function renderGraphView(groups, graphData) {
 
   // Use semantic DAG for single project when graph data is available
   var useDAG = graphData && selectedProject;
-  var data = useDAG ? buildSemanticGraph(graphData) : buildMindMapData(groups);
+  var filteredGraph = graphData;
+  if (useDAG && selectedProject) {
+    filteredGraph = graphData.filter(function(g) { return g.repo_root === selectedProject; });
+  }
+  var data = useDAG ? buildSemanticGraph(filteredGraph) : buildMindMapData(groups);
 
   if (graphNetwork) {
     graphNodes = new vis.DataSet(data.nodes);
@@ -1299,9 +1324,9 @@ function renderGraphView(groups, graphData) {
           enabled: true,
           direction: 'LR',
           sortMethod: 'directed',
-          levelSeparation: 150,
-          nodeSpacing: 24,
-          treeSpacing: 32,
+          levelSeparation: 200,
+          nodeSpacing: 45,
+          treeSpacing: 50,
           parentCentralization: true,
           blockShifting: true,
           edgeMinimization: true
@@ -1332,7 +1357,7 @@ function renderGraphView(groups, graphData) {
           // Click "+N more" to select that project
           var sel = document.getElementById('project-select');
           sel.value = nodeData._data.repo_root;
-          renderGraphView(graphGroups);
+          onProjectChange();
         } else {
           closeInspector();
         }
@@ -1472,6 +1497,20 @@ function showInspector(session) {
 
 function closeInspector() {
   document.getElementById('graph-inspector').style.display = 'none';
+}
+
+async function onProjectChange() {
+  selectedProject = document.getElementById('project-select').value;
+  // Fetch graph data if a project is selected
+  if (selectedProject) {
+    try {
+      var gres = await fetch('/api/roadmap-graph');
+      if (gres.ok) cachedGraphData = await gres.json();
+    } catch (e) { cachedGraphData = null; }
+  } else {
+    cachedGraphData = null;
+  }
+  renderGraphView(graphGroups, cachedGraphData);
 }
 
 function graphFit() {

@@ -1,6 +1,10 @@
 package roadmap
 
-import "github.com/hiroyannnn/devctx/model"
+import (
+	"fmt"
+
+	"github.com/hiroyannnn/devctx/model"
+)
 
 // NodeType はグラフノードの種別。
 type NodeType string
@@ -43,6 +47,12 @@ type SessionGraph struct {
 	Goal           string              `json:"goal,omitempty"`
 	AttentionState model.AttentionState `json:"attention_state,omitempty"`
 	CurrentFocus   string              `json:"current_focus,omitempty"`
+	NextStep       string              `json:"next_step,omitempty"`
+	Branch         string              `json:"branch,omitempty"`
+	Status         model.Status        `json:"status,omitempty"`
+	Phase          model.Phase         `json:"phase,omitempty"`
+	PRURL          string              `json:"pr_url,omitempty"`
+	InferredAt     string              `json:"inferred_at,omitempty"`
 	Nodes          []GraphNode         `json:"nodes"`
 	Edges          []GraphEdge         `json:"edges"`
 }
@@ -61,15 +71,24 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		Goal:           entry.Goal,
 		AttentionState: entry.AttentionState,
 		CurrentFocus:   entry.CurrentFocus,
+		NextStep:       entry.NextStep,
+		Branch:         entry.Branch,
+		Status:         entry.Status,
+		Phase:          entry.Phase,
+		PRURL:          entry.PRURL,
+		InferredAt:     entry.InferredAt,
 	}
 
 	if entry.Goal == "" && len(entry.Tasks) == 0 {
 		return sg
 	}
 
+	// Assign IDs to tasks that don't have one
+	tasks := assignTaskIDs(entry.Tasks)
+
 	hasGoal := entry.Goal != ""
-	taskIDs := collectTaskIDs(entry.Tasks)
-	nodeTypes := resolveNodeTypes(entry.Tasks)
+	taskIDs := collectTaskIDs(tasks)
+	nodeTypes := resolveNodeTypes(tasks)
 
 	// Phase 1: ノード追加
 	if hasGoal {
@@ -79,7 +98,7 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 			Label: entry.Goal,
 		})
 	}
-	for _, task := range entry.Tasks {
+	for _, task := range tasks {
 		sg.Nodes = append(sg.Nodes, GraphNode{
 			ID:     task.ID,
 			Type:   nodeTypes[task.ID],
@@ -89,20 +108,18 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 	}
 
 	// Phase 2: エッジ生成
-	for _, task := range entry.Tasks {
-		// Goal → Task（fork / rejected）
-		if hasGoal {
-			sg.Edges = appendGoalEdge(sg.Edges, task)
-		}
+	// Track edges to avoid duplicates (dependency + flow to same target)
+	edgeSet := make(map[string]bool)
+	edgeKey := func(from, to string) string { return from + "->" + to }
 
-		// depends_on → dependency
-		for _, dep := range task.DependsOn {
-			sg.Edges = append(sg.Edges, GraphEdge{From: dep, To: task.ID, Type: EdgeDependency})
-		}
-
-		// flows_to → flow（rejected タスクは除外）
+	// Pass 1: flows_to → flow edges（flow は dependency より優先）
+	for _, task := range tasks {
 		if task.FlowsTo != "" && task.Status != model.TaskRejected {
-			sg.Edges = append(sg.Edges, GraphEdge{From: task.ID, To: task.FlowsTo, Type: EdgeFlow})
+			key := edgeKey(task.ID, task.FlowsTo)
+			if !edgeSet[key] {
+				sg.Edges = append(sg.Edges, GraphEdge{From: task.ID, To: task.FlowsTo, Type: EdgeFlow})
+				edgeSet[key] = true
+			}
 
 			// flows_to 先がタスクリストに存在しない場合、Milestone ノードを生成
 			if !taskIDs[task.FlowsTo] && nodeTypes[task.FlowsTo] == "" {
@@ -116,7 +133,36 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		}
 	}
 
+	// Pass 2: Goal → Task, depends_on → dependency
+	for _, task := range tasks {
+		// Goal → Task（fork / rejected）— Milestone には直接つながない
+		if hasGoal && nodeTypes[task.ID] != NodeMilestone {
+			sg.Edges = appendGoalEdge(sg.Edges, task)
+		}
+
+		// depends_on → dependency（flow と重複しない）
+		for _, dep := range task.DependsOn {
+			key := edgeKey(dep, task.ID)
+			if !edgeSet[key] {
+				sg.Edges = append(sg.Edges, GraphEdge{From: dep, To: task.ID, Type: EdgeDependency})
+				edgeSet[key] = true
+			}
+		}
+	}
+
 	return sg
+}
+
+// assignTaskIDs は ID が空のタスクに自動 ID を付与したコピーを返す。
+func assignTaskIDs(tasks []model.TaskItem) []model.TaskItem {
+	result := make([]model.TaskItem, len(tasks))
+	for i, t := range tasks {
+		result[i] = t
+		if result[i].ID == "" {
+			result[i].ID = fmt.Sprintf("task-%d", i)
+		}
+	}
+	return result
 }
 
 // collectTaskIDs はタスクリストからID集合を作成する。
