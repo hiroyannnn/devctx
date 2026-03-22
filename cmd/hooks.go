@@ -155,60 +155,47 @@ func installHooksToSettings() error {
 	}
 
 	// Merge SessionStart hooks (startup + resume)
-	sessionStartHook := map[string]interface{}{
-		"matcher": "startup",
-		"hooks": []map[string]interface{}{
-			{
-				"type":    "command",
-				"command": devctxPath + " register",
+	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"],
+		map[string]interface{}{
+			"matcher": "startup",
+			"hooks": []map[string]interface{}{
+				{"type": "command", "command": devctxPath + " register"},
 			},
 		},
-	}
-	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"], sessionStartHook, devctxPath+" register")
-
-	sessionResumeHook := map[string]interface{}{
-		"matcher": "resume",
-		"hooks": []map[string]interface{}{
-			{
-				"type":    "command",
-				"command": devctxPath + " register",
+		map[string]interface{}{
+			"matcher": "resume",
+			"hooks": []map[string]interface{}{
+				{"type": "command", "command": devctxPath + " register"},
 			},
 		},
-	}
-	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"], sessionResumeHook, "devctx register.*resume")
+	)
 
 	// Merge Notification hooks (throttled last_seen update)
-	notificationHook := map[string]interface{}{
-		"hooks": []map[string]interface{}{
-			{
-				"type":    "command",
-				"command": devctxPath + " touch --quick",
+	hooks["Notification"] = mergeHookConfigs(hooks["Notification"],
+		map[string]interface{}{
+			"hooks": []map[string]interface{}{
+				{"type": "command", "command": devctxPath + " touch --quick"},
 			},
 		},
-	}
-	hooks["Notification"] = mergeHookConfigs(hooks["Notification"], notificationHook, "devctx touch")
+	)
 
 	// Merge SessionEnd hooks
-	sessionEndHook := map[string]interface{}{
-		"hooks": []map[string]interface{}{
-			{
-				"type":    "command",
-				"command": devctxPath + " touch",
+	hooks["SessionEnd"] = mergeHookConfigs(hooks["SessionEnd"],
+		map[string]interface{}{
+			"hooks": []map[string]interface{}{
+				{"type": "command", "command": devctxPath + " touch"},
 			},
 		},
-	}
-	hooks["SessionEnd"] = mergeHookConfigs(hooks["SessionEnd"], sessionEndHook, devctxPath+" touch")
+	)
 
 	// Merge Stop hooks (background insight analysis)
-	stopHook := map[string]interface{}{
-		"hooks": []map[string]interface{}{
-			{
-				"type":    "command",
-				"command": devctxPath + " roadmap analyze --if-stale --background",
+	hooks["Stop"] = mergeHookConfigs(hooks["Stop"],
+		map[string]interface{}{
+			"hooks": []map[string]interface{}{
+				{"type": "command", "command": devctxPath + " roadmap analyze --if-stale --background"},
 			},
 		},
-	}
-	hooks["Stop"] = mergeHookConfigs(hooks["Stop"], stopHook, devctxPath+" roadmap analyze")
+	)
 
 	settings["hooks"] = hooks
 
@@ -232,9 +219,9 @@ func installHooksToSettings() error {
 	return nil
 }
 
-// mergeHookConfigs merges a new hook config into existing configs.
-// If a hook with the same command already exists, it won't be duplicated.
-func mergeHookConfigs(existing interface{}, newConfig map[string]interface{}, commandToCheck string) []interface{} {
+// mergeHookConfigs removes existing devctx hooks and appends the new configs.
+// This ensures stale paths are replaced on re-install.
+func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}) []interface{} {
 	var configs []interface{}
 
 	// Convert existing to slice if present
@@ -244,25 +231,40 @@ func mergeHookConfigs(existing interface{}, newConfig map[string]interface{}, co
 		}
 	}
 
-	// Check if devctx hook already exists
+	// Remove any existing devctx hooks
+	var filtered []interface{}
 	for _, config := range configs {
-		if configMap, ok := config.(map[string]interface{}); ok {
-			if hooksArr, ok := configMap["hooks"].([]interface{}); ok {
-				for _, hook := range hooksArr {
-					if hookMap, ok := hook.(map[string]interface{}); ok {
-						if cmd, ok := hookMap["command"].(string); ok {
-							if strings.Contains(cmd, "devctx") {
-								// Already has devctx hook, return as is
-								return configs
-							}
-						}
-					}
+		if configHasDevctx(config) {
+			continue
+		}
+		filtered = append(filtered, config)
+	}
+
+	// Append new configs
+	for _, nc := range newConfigs {
+		filtered = append(filtered, nc)
+	}
+	return filtered
+}
+
+// configHasDevctx returns true if any hook command in the config contains "devctx".
+func configHasDevctx(config interface{}) bool {
+	configMap, ok := config.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	hooksArr, ok := configMap["hooks"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, hook := range hooksArr {
+		if hookMap, ok := hook.(map[string]interface{}); ok {
+			if cmd, ok := hookMap["command"].(string); ok {
+				if strings.Contains(cmd, "devctx") {
+					return true
 				}
 			}
 		}
 	}
-
-	// Append new config
-	configs = append(configs, newConfig)
-	return configs
+	return false
 }
