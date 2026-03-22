@@ -203,8 +203,8 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			IssueURL:      ctx.IssueURL,
 			Note:          ctx.Note,
 			SessionName:   ctx.SessionName,
-			CreatedAt:     ctx.CreatedAt.Format("2006-01-02 15:04"),
-			LastSeen:      ctx.LastSeen.Format("2006-01-02 15:04"),
+			CreatedAt:     ctx.CreatedAt.Format(time.RFC3339),
+			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
 
@@ -292,8 +292,8 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			IssueURL:      ctx.IssueURL,
 			Note:          ctx.Note,
 			SessionName:   ctx.SessionName,
-			CreatedAt:     ctx.CreatedAt.Format("2006-01-02 15:04"),
-			LastSeen:      ctx.LastSeen.Format("2006-01-02 15:04"),
+			CreatedAt:     ctx.CreatedAt.Format(time.RFC3339),
+			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
 
@@ -400,7 +400,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			Phase:    ctx.Phase,
 			PRURL:    ctx.PRURL,
 			IssueURL: ctx.IssueURL,
-			LastSeen: ctx.LastSeen.Format("2006-01-02 15:04"),
+			LastSeen: ctx.LastSeen.Format(time.RFC3339),
 		}
 
 		if insights != nil {

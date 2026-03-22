@@ -762,7 +762,7 @@ function createCard(entry) {
   var footer = document.createElement('div');
   footer.className = 'card-footer';
   var timeEl = document.createElement('span');
-  timeEl.textContent = entry.last_seen;
+  timeEl.textContent = formatDateTime(entry.last_seen);
   footer.appendChild(timeEl);
 
   var links = document.createElement('span');
@@ -929,6 +929,14 @@ function groupPriority(group) {
   return max;
 }
 
+function formatDateTime(s) {
+  if (!s) return '';
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
 function summarizeGroup(group) {
   // Summarize by attention state (semantic) rather than status (mechanical)
   var counts = {};
@@ -1017,80 +1025,7 @@ function buildMindMapData(groups) {
 
     var sessionParent = showProject ? projectId : null;
 
-    // In All Projects: collapse sessions (no child nodes per session)
-    if (isAllProjects) {
-      // Sort sessions by attention urgency: blocked > active > waiting > idle > done
-      var ATTENTION_ORDER = {blocked: 0, active: 1, waiting: 2, idle: 3};
-      var STATUS_ORDER = {blocked: 0, 'in-progress': 1, review: 2, done: 3};
-      var sorted = group.sessions.slice().sort(function(a, b) {
-        var aAttn = ATTENTION_ORDER[a.attention_state] !== undefined ? ATTENTION_ORDER[a.attention_state] : 4;
-        var bAttn = ATTENTION_ORDER[b.attention_state] !== undefined ? ATTENTION_ORDER[b.attention_state] : 4;
-        if (aAttn !== bAttn) return aAttn - bAttn;
-        var aSt = STATUS_ORDER[a.status] !== undefined ? STATUS_ORDER[a.status] : 2;
-        var bSt = STATUS_ORDER[b.status] !== undefined ? STATUS_ORDER[b.status] : 2;
-        return aSt - bSt;
-      });
-
-      var sessions = sorted.slice(0, 3);
-      var truncated = group.sessions.length > 3;
-
-      // Attention state color for left accent bar
-      var ATTN_COLORS = {blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff', idle: '#484f58'};
-
-      sessions.forEach(function(session) {
-        var sessionId = 'sess:' + (++nid);
-        var attnColor = ATTN_COLORS[session.attention_state] || '#484f58';
-        var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
-
-        // Session label: name + current focus (1-line summary)
-        var label = session.name;
-        if (session.current_focus) {
-          var focus = session.current_focus;
-          if (focus.length > 30) focus = focus.substring(0, 28) + '..';
-          label += '\n' + focus;
-        } else if (pLabel) {
-          label += '\n' + pLabel;
-        }
-
-        // Neutral border, attention state shown via border-left color
-        var isUrgent = session.attention_state === 'blocked' || session.attention_state === 'active';
-        nodes.push({
-          id: sessionId,
-          label: label,
-          shape: 'box',
-          color: { background: '#1a1f27', border: isUrgent ? attnColor : '#484f58' },
-          font: { color: isUrgent ? '#f0f6fc' : '#c9d1d9', size: 13, face: '-apple-system, sans-serif', multi: true },
-          margin: { top: 6, bottom: 6, left: 10, right: 10 },
-          borderWidth: isUrgent ? 2 : 1,
-          level: sessionLevel,
-          _type: 'session',
-          _data: session
-        });
-        edges.push({ from: sessionParent, to: sessionId, color: { color: isUrgent ? attnColor + '88' : '#484f58' }, width: isUrgent ? 2 : 1.5 });
-      });
-
-      if (truncated) {
-        var moreId = 'more:' + (++nid);
-        var remaining = group.sessions.length - 3;
-        nodes.push({
-          id: moreId,
-          label: '+' + remaining + ' more...',
-          shape: 'box',
-          color: { background: '#161b22', border: '#30363d' },
-          font: { color: '#8b949e', size: 11, face: '-apple-system, sans-serif' },
-          margin: { top: 3, bottom: 3, left: 6, right: 6 },
-          borderWidth: 1,
-          borderDashes: [4, 4],
-          level: sessionLevel,
-          _type: 'more',
-          _data: group
-        });
-        edges.push({ from: sessionParent, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
-      }
-      return; // skip detailed view for All Projects
-    }
-
-    // Detailed view: fallback when graph API not available
+    // Detailed view: show all sessions with full info
     group.sessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
       var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
@@ -1538,7 +1473,7 @@ function showInspector(session) {
   }
 
   // Timestamps
-  addSection('Last Seen', session.last_seen);
+  addSection('Last Seen', formatDateTime(session.last_seen));
   if (session.inferred_at) addSection('Inferred', session.inferred_at);
 }
 
