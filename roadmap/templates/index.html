@@ -1101,7 +1101,7 @@ function buildMindMapData(groups) {
         var warnId = 'warn:' + (++nid);
         nodes.push({
           id: warnId, label: '\u26A0 No roadmap', shape: 'box',
-          color: { background: '#f8514922', border: '#f85149' },
+          color: { background: '#2a1215', border: '#f85149' },
           font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
           borderWidth: 1, borderDashes: [4, 4], level: detailLevel, _type: 'warning'
@@ -1143,18 +1143,19 @@ function buildSemanticGraph(graphData) {
   var edges = [];
   var nid = 0;
 
+  // Opaque backgrounds — edges are hidden behind nodes
   var NODE_STYLES = {
-    goal:      { bg: '#f0883e22', border: '#f0883e', fontColor: '#f0883e', icon: '\uD83C\uDFAF ', fontSize: 14, borderWidth: 2 },
-    task:      { bg: '#484f5818', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
-    milestone: { bg: '#79c0ff22', border: '#79c0ff', fontColor: '#79c0ff', icon: '\u25C6 ', fontSize: 13, borderWidth: 2 },
-    rejected:  { bg: '#484f5811', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+    goal:      { bg: '#1e1610', border: '#f0883e', fontColor: '#f0883e', icon: '\uD83C\uDFAF ', fontSize: 14, borderWidth: 2 },
+    task:      { bg: '#161b22', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    milestone: { bg: '#111d2e', border: '#79c0ff', fontColor: '#79c0ff', icon: '\u25C6 ', fontSize: 13, borderWidth: 2 },
+    rejected:  { bg: '#131618', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
   };
   var STATUS_STYLES = {
-    in_progress: { bg: '#58a6ff44', border: '#58a6ff', fontColor: '#f0f6fc', icon: '\u25B6 ', fontSize: 13, borderWidth: 3 },
-    done:        { bg: '#3fb95022', border: '#3fb950', fontColor: '#3fb950', icon: '\u2713 ', fontSize: 12, borderWidth: 1 },
-    blocked:     { bg: '#f8514933', border: '#f85149', fontColor: '#f85149', icon: '\u2716 ', fontSize: 12, borderWidth: 2 },
-    planned:     { bg: '#484f5818', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
-    rejected:    { bg: '#484f5811', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+    in_progress: { bg: '#0f2744', border: '#58a6ff', fontColor: '#f0f6fc', icon: '\u25B6 ', fontSize: 13, borderWidth: 3 },
+    done:        { bg: '#0f2018', border: '#3fb950', fontColor: '#3fb950', icon: '\u2713 ', fontSize: 12, borderWidth: 1 },
+    blocked:     { bg: '#2a1215', border: '#f85149', fontColor: '#f85149', icon: '\u2716 ', fontSize: 12, borderWidth: 2 },
+    planned:     { bg: '#161b22', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    rejected:    { bg: '#131618', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
   };
 
   var EDGE_STYLES = {
@@ -1212,7 +1213,7 @@ function buildSemanticGraph(graphData) {
         var warnId = sessionPrefix + 'warn';
         nodes.push({
           id: warnId, label: '\u26A0 No roadmap', shape: 'box',
-          color: { background: '#f8514922', border: '#f85149' },
+          color: { background: '#2a1215', border: '#f85149' },
           font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
           borderWidth: 1, borderDashes: [4, 4], level: baseLevel + 1, _type: 'warning'
