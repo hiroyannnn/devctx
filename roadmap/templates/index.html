@@ -1183,13 +1183,17 @@ function buildSemanticGraph(graphData) {
       var sessionPrefix = 's' + (++nid) + ':';
       var baseLevel = showProjectNode ? 1 : 0;
 
-      // Session header node
+      // Session header node — Goal is integrated as subtitle, not a separate node
       var sessionNodeId = sessionPrefix + 'session';
       var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
       var sessionLabel = session.name;
-      if (session.current_focus) {
+      if (session.goal) {
+        var goalText = session.goal;
+        if (goalText.length > 30) goalText = goalText.substring(0, 28) + '..';
+        sessionLabel += '\n\uD83C\uDFAF ' + goalText;
+      } else if (session.current_focus) {
         var cf = session.current_focus;
-        if (cf.length > 35) cf = cf.substring(0, 33) + '..';
+        if (cf.length > 30) cf = cf.substring(0, 28) + '..';
         sessionLabel += '\n' + cf;
       }
       nodes.push({
@@ -1217,16 +1221,19 @@ function buildSemanticGraph(graphData) {
         return;
       }
 
-      // Map graph node IDs to vis-network IDs
+      // Map graph node IDs to vis-network IDs — skip Goal nodes (integrated into session)
       var idMap = {};
+      // Filter out edges from/to goal for level computation
+      var nonGoalEdges = session.edges.filter(function(e) { return e.from !== 'goal' && e.to !== 'goal'; });
+
       session.nodes.forEach(function(gn) {
+        if (gn.type === 'goal') return; // Goal is merged into session node
+
         var visId = sessionPrefix + gn.id;
         idMap[gn.id] = visId;
 
         var style;
-        if (gn.type === 'goal') {
-          style = NODE_STYLES.goal;
-        } else if (gn.type === 'milestone') {
+        if (gn.type === 'milestone') {
           style = NODE_STYLES.milestone;
         } else if (gn.type === 'rejected' || gn.status === 'rejected') {
           style = STATUS_STYLES.rejected;
@@ -1239,16 +1246,12 @@ function buildSemanticGraph(graphData) {
           gn.label.indexOf(session.current_focus) !== -1;
         var shadow = isFocus ? { enabled: true, color: '#58a6ff', size: 12, x: 0, y: 0 } : undefined;
 
-        // Dynamic level based on topological position in DAG
-        var level = baseLevel + 1; // default for goal
-        if (gn.type !== 'goal') {
-          // Calculate depth from goal based on dependency chain
-          level = baseLevel + computeNodeDepth(gn.id, session.edges, session.nodes) + 1;
-        }
+        // Dynamic level based on topological depth (excluding goal edges)
+        var level = baseLevel + computeNodeDepth(gn.id, nonGoalEdges, session.nodes);
 
         nodes.push({
           id: visId,
-          label: style.icon + (gn.label.length > 25 ? gn.label.substring(0, 23) + '..' : gn.label),
+          label: style.icon + (gn.label.length > 20 ? gn.label.substring(0, 18) + '..' : gn.label),
           shape: 'box',
           color: { background: style.bg, border: style.border },
           font: { color: style.fontColor, size: style.fontSize, bold: gn.status === 'in_progress' },
@@ -1262,14 +1265,24 @@ function buildSemanticGraph(graphData) {
         });
       });
 
-      // Edges from session to goal (or first task if no goal)
-      var goalNode = session.nodes.find(function(n) { return n.type === 'goal'; });
-      if (goalNode && idMap[goalNode.id]) {
-        edges.push({ from: sessionNodeId, to: idMap[goalNode.id], color: { color: '#f0883e88' }, width: 2 });
-      }
-
-      // DAG edges
+      // Connect fork/rejected edges from session node instead of goal node
       session.edges.forEach(function(ge) {
+        if (ge.from === 'goal') {
+          // Remap: goal → task becomes session → task
+          var toVis = idMap[ge.to];
+          if (!toVis) return;
+          var toNode = session.nodes.find(function(n) { return n.id === ge.to; });
+          var edgeColor = '#484f58';
+          if (ge.type === 'rejected') edgeColor = '#484f5866';
+          else if (toNode && toNode.status === 'in_progress') edgeColor = '#58a6ff';
+          edges.push({
+            from: sessionNodeId, to: toVis,
+            color: { color: edgeColor },
+            width: (toNode && toNode.status === 'in_progress') ? 2.5 : 1.5,
+            dashes: ge.type === 'rejected' ? [3, 3] : false
+          });
+          return;
+        }
         var fromVis = idMap[ge.from];
         var toVis = idMap[ge.to];
         if (!fromVis || !toVis) return;
