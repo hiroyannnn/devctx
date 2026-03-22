@@ -32,11 +32,8 @@ var hooksCmd = &cobra.Command{
 This command outputs the JSON configuration to add to your Claude settings.
 Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Get devctx binary path
-		devctxPath, err := os.Executable()
-		if err != nil {
-			devctxPath = "devctx" // fallback to PATH
-		}
+		// Use PATH-based name so hooks survive binary rebuilds / user changes
+		devctxPath := "devctx"
 
 		settings := ClaudeSettings{
 			Hooks: map[string][]HookConfig{
@@ -148,10 +145,8 @@ func installHooksToSettings() error {
 		}
 	}
 
-	devctxPath, err := os.Executable()
-	if err != nil {
-		devctxPath = "devctx"
-	}
+	// Use PATH-based name so hooks survive binary rebuilds / user changes
+	devctxPath := "devctx"
 
 	// Add or update hooks
 	hooks, ok := settings["hooks"].(map[string]interface{})
