@@ -1139,10 +1139,16 @@ function buildSemanticGraph(graphData) {
     rejected:   { color: '#484f5866', width: 1, dashes: [3, 3] }
   };
 
+  var isAllProjects = !selectedProject;
+  var maxSessions = isAllProjects ? 5 : Infinity;
+
   graphData.forEach(function(projectGroup) {
     // Apply period and done filters to graph sessions
     var filteredSessions = filterSessions(projectGroup.sessions);
     if (filteredSessions.length === 0) return;
+
+    var truncated = filteredSessions.length > maxSessions;
+    filteredSessions = filteredSessions.slice(0, maxSessions);
 
     var showProjectNode = graphData.length > 1 || filteredSessions.length > 1;
     var projectNodeId = null;
@@ -1186,8 +1192,8 @@ function buildSemanticGraph(graphData) {
         edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
       }
 
-      if (!session.nodes || session.nodes.length === 0) {
-        // No DAG data — show warning
+      if (!isAllProjects && (!session.nodes || session.nodes.length === 0)) {
+        // No DAG data — show warning (skip in All Projects to reduce noise)
         var warnId = sessionPrefix + 'warn';
         nodes.push({
           id: warnId, label: '\u26A0 No roadmap', shape: 'box',
@@ -1286,6 +1292,22 @@ function buildSemanticGraph(graphData) {
         });
       });
     });
+
+    if (truncated && projectNodeId) {
+      var moreId = 'more:' + (++nid);
+      var remaining = projectGroup.sessions.length - maxSessions;
+      nodes.push({
+        id: moreId,
+        label: '+' + remaining + ' more...',
+        shape: 'box',
+        color: { background: '#161b22', border: '#30363d' },
+        font: { color: '#8b949e', size: 11, face: '-apple-system, sans-serif' },
+        margin: { top: 3, bottom: 3, left: 6, right: 6 },
+        borderWidth: 1, borderDashes: [4, 4], level: 1,
+        _type: 'more', _data: projectGroup
+      });
+      edges.push({ from: projectNodeId, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
+    }
   });
 
   return { nodes: nodes, edges: edges };
@@ -1297,11 +1319,13 @@ function renderGraphView(groups, graphData) {
   graphGroups = groups;
   updateProjectSelect(groups);
 
-  // Use semantic DAG for single project when graph data is available
-  var useDAG = graphData && selectedProject;
+  // Use semantic DAG when graph data is available
+  var useDAG = !!graphData;
   var filteredGraph = null;
   if (useDAG) {
-    filteredGraph = graphData.filter(function(g) { return g.repo_root === selectedProject; });
+    filteredGraph = selectedProject
+      ? graphData.filter(function(g) { return g.repo_root === selectedProject; })
+      : graphData;
     if (filteredGraph.length === 0) useDAG = false; // fallback to tree if no match
   }
   var data = useDAG ? buildSemanticGraph(filteredGraph) : buildMindMapData(groups);
