@@ -1321,16 +1321,22 @@ function renderGraphView(groups, graphData) {
 
   // Use semantic DAG for single project when graph data is available
   var useDAG = graphData && selectedProject;
-  var filteredGraph = graphData;
-  if (useDAG && selectedProject) {
+  var filteredGraph = null;
+  if (useDAG) {
     filteredGraph = graphData.filter(function(g) { return g.repo_root === selectedProject; });
+    if (filteredGraph.length === 0) useDAG = false; // fallback to tree if no match
   }
   var data = useDAG ? buildSemanticGraph(filteredGraph) : buildMindMapData(groups);
 
   if (graphNetwork) {
+    // Re-enable hierarchical layout for fresh layout calculation, then disable for drag
+    graphNetwork.setOptions({ layout: { hierarchical: { enabled: true } } });
     graphNodes = new vis.DataSet(data.nodes);
     graphEdges = new vis.DataSet(data.edges);
     graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
+    graphNetwork.once('afterDrawing', function() {
+      graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
+    });
     graphNetwork.fit({ animation: { duration: 300 } });
   } else {
     graphNodes = new vis.DataSet(data.nodes);
@@ -1526,7 +1532,9 @@ function closeInspector() {
   document.getElementById('graph-inspector').style.display = 'none';
 }
 
+var projectChanging = false;
 async function onProjectChange() {
+  projectChanging = true;
   selectedProject = document.getElementById('project-select').value;
   // Fetch graph data if a project is selected
   if (selectedProject) {
@@ -1538,6 +1546,7 @@ async function onProjectChange() {
     cachedGraphData = null;
   }
   renderGraphView(graphGroups, cachedGraphData);
+  projectChanging = false;
 }
 
 function graphFit() {
@@ -1551,6 +1560,7 @@ function graphReset() {
 }
 
 async function refresh() {
+  if (projectChanging) return; // skip refresh during project change
   try {
     var res = await fetch('/api/roadmap-map');
     if (!res.ok) throw new Error('HTTP ' + res.status);

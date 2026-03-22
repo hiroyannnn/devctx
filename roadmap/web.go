@@ -373,6 +373,9 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 	for _, ctx := range active {
 		repoRoot := ctx.RepoRoot
 		if repoRoot == "" {
+			repoRoot = ctx.Worktree
+		}
+		if repoRoot == "" {
 			repoRoot = "__ungrouped__"
 		}
 
