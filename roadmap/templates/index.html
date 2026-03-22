@@ -1328,77 +1328,71 @@ function renderGraphView(groups, graphData) {
   }
   var data = useDAG ? buildSemanticGraph(filteredGraph) : buildMindMapData(groups);
 
+  // Destroy and recreate network for clean hierarchical layout
   if (graphNetwork) {
-    // Re-enable hierarchical layout for fresh layout calculation, then disable for drag
-    graphNetwork.setOptions({ layout: { hierarchical: { enabled: true } } });
-    graphNodes = new vis.DataSet(data.nodes);
-    graphEdges = new vis.DataSet(data.edges);
-    graphNetwork.setData({ nodes: graphNodes, edges: graphEdges });
-    graphNetwork.once('afterDrawing', function() {
-      graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
-    });
-    graphNetwork.fit({ animation: { duration: 300 } });
-  } else {
-    graphNodes = new vis.DataSet(data.nodes);
-    graphEdges = new vis.DataSet(data.edges);
-    var container = document.getElementById('graph-canvas');
-    graphNetwork = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
-      layout: {
-        hierarchical: {
-          enabled: true,
-          direction: 'LR',
-          sortMethod: 'directed',
-          levelSeparation: 200,
-          nodeSpacing: 45,
-          treeSpacing: 50,
-          parentCentralization: true,
-          blockShifting: true,
-          edgeMinimization: true
-        }
-      },
-      physics: { enabled: false },
-      interaction: {
-        hover: true,
-        tooltipDelay: 200,
-        dragNodes: true,
-        dragView: true,
-        zoomView: true,
-        zoomSpeed: 0.3,
-        multiselect: false,
-        navigationButtons: false,
-        keyboard: { enabled: true, speed: { x: 10, y: 10, zoom: 0.03 } }
-      },
-      edges: {
-        arrows: { to: false },
-        color: { color: '#484f58', hover: '#8b949e' },
-        width: 1.5,
-        smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 }
+    graphNetwork.destroy();
+    graphNetwork = null;
+  }
+
+  graphNodes = new vis.DataSet(data.nodes);
+  graphEdges = new vis.DataSet(data.edges);
+  var container = document.getElementById('graph-canvas');
+  graphNetwork = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
+    layout: {
+      hierarchical: {
+        enabled: true,
+        direction: 'LR',
+        sortMethod: 'directed',
+        levelSeparation: 200,
+        nodeSpacing: 45,
+        treeSpacing: 50,
+        parentCentralization: true,
+        blockShifting: true,
+        edgeMinimization: true
       }
-    });
+    },
+    physics: { enabled: false },
+    interaction: {
+      hover: true,
+      tooltipDelay: 200,
+      dragNodes: true,
+      dragView: true,
+      zoomView: true,
+      zoomSpeed: 0.3,
+      multiselect: false,
+      navigationButtons: false,
+      keyboard: { enabled: true, speed: { x: 10, y: 10, zoom: 0.03 } }
+    },
+    edges: {
+      arrows: { to: false },
+      color: { color: '#484f58', hover: '#8b949e' },
+      width: 1.5,
+      smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 }
+    }
+  });
 
-    // After initial hierarchical layout, disable it so nodes can be dragged freely
-    graphNetwork.once('afterDrawing', function() {
-      graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
-    });
+  // After initial hierarchical layout, disable it so nodes can be dragged freely
+  graphNetwork.once('afterDrawing', function() {
+    graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
+  });
 
-    graphNetwork.on('click', function(params) {
-      if (params.nodes.length > 0) {
-        var nodeData = graphNodes.get(params.nodes[0]);
-        if (nodeData._type === 'session') {
-          showInspector(nodeData._data);
-        } else if (nodeData._type === 'more') {
-          // Click "+N more" to select that project
-          var sel = document.getElementById('project-select');
-          sel.value = nodeData._data.repo_root;
-          onProjectChange();
-        } else {
-          closeInspector();
-        }
+  graphNetwork.on('click', function(params) {
+    if (params.nodes.length > 0) {
+      var nodeData = graphNodes.get(params.nodes[0]);
+      if (nodeData._type === 'session') {
+        showInspector(nodeData._data);
+      } else if (nodeData._type === 'more') {
+        // Click "+N more" to select that project
+        var sel = document.getElementById('project-select');
+        sel.value = nodeData._data.repo_root;
+        onProjectChange();
       } else {
         closeInspector();
       }
-    });
-  }
+    } else {
+      closeInspector();
+    }
+  });
 
   var sessionCount = 0;
   groups.forEach(function(g) { sessionCount += g.sessions.length; });
