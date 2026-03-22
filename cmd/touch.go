@@ -20,12 +20,15 @@ type SessionEndInput struct {
 	Reason         string `json:"reason"` // "exit", "timeout", etc.
 }
 
+var touchQuick bool
+
 var touchCmd = &cobra.Command{
 	Use:   "touch [name]",
 	Short: "Update last-seen timestamp for a context",
 	Long: `Update the last-seen timestamp for a context.
 If called from a Claude Code hook, reads session info from stdin.
-If called with a name, updates that specific context.`,
+If called with a name, updates that specific context.
+Use --quick to skip phase scan and milestone collection (for high-frequency hooks).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := storage.New()
 		if err != nil {
@@ -83,15 +86,17 @@ If called with a name, updates that specific context.`,
 
 		ctx.LastSeen = now
 
-		// Auto-detect phase (fast mode for hook performance)
-		phaseScanner := roadmap.NewScanner()
-		phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
+		if !touchQuick {
+			// Auto-detect phase (fast mode for hook performance)
+			phaseScanner := roadmap.NewScanner()
+			phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
 
-		// Collect git milestones
-		collectAndSaveMilestones(s, ctx)
+			// Collect git milestones
+			collectAndSaveMilestones(s, ctx)
 
-		// Record session_end event
-		recordEvent(s, ctx.Name, model.MilestoneSessionEnd, "")
+			// Record session_end event
+			recordEvent(s, ctx.Name, model.MilestoneSessionEnd, "")
+		}
 
 		if err := s.SaveStore(store); err != nil {
 			return err
@@ -100,6 +105,10 @@ If called with a name, updates that specific context.`,
 		fmt.Printf("Updated [%s] last-seen to %s (total: %s)\n", name, ctx.LastSeen.Format(time.RFC3339), formatDuration(ctx.TotalTime))
 		return nil
 	},
+}
+
+func init() {
+	touchCmd.Flags().BoolVar(&touchQuick, "quick", false, "Quick mode: only update last-seen and total time (skip phase scan and milestones)")
 }
 
 func formatDuration(d time.Duration) string {
