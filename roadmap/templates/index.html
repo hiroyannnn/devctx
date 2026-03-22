@@ -1355,9 +1355,12 @@ function renderGraphView(groups, graphData) {
         hover: true,
         tooltipDelay: 200,
         dragNodes: true,
+        dragView: true,
+        zoomView: true,
+        zoomSpeed: 0.3,
         multiselect: false,
         navigationButtons: false,
-        keyboard: { enabled: true }
+        keyboard: { enabled: true, speed: { x: 10, y: 10, zoom: 0.03 } }
       },
       edges: {
         arrows: { to: false },
@@ -1368,7 +1371,7 @@ function renderGraphView(groups, graphData) {
     });
 
     // After initial hierarchical layout, disable it so nodes can be dragged freely
-    graphNetwork.once('stabilizationIterationsDone', function() {
+    graphNetwork.once('afterDrawing', function() {
       graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
     });
 
