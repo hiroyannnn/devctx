@@ -51,14 +51,23 @@ mv devctx ~/.local/bin/  # or /usr/local/bin/
 ## Quick Start
 
 ```bash
-# Set up Claude Code hooks
+# Set up Claude Code hooks (auto session tracking)
 devctx hooks --install
 
-# Enable shell integration (add to .bashrc / .zshrc)
-eval "$(devctx shell-init)"
+# Open the Mind Map dashboard
+devctx roadmap serve
+```
 
-# Display kanban view
-devctx list
+That's it. Start using Claude Code as usual — sessions are tracked automatically via hooks.
+
+### Optional Setup
+
+```bash
+# Install slash commands for Claude Code (/devctx-review, /devctx-done, etc.)
+devctx commands --install
+
+# Enable shell shortcuts (add to .bashrc / .zshrc)
+eval "$(devctx shell-init)"
 ```
 
 ## Kanban View Example
