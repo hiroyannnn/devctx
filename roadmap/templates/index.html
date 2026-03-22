@@ -360,7 +360,7 @@ h1 {
 #graph-canvas {
   width: 100%;
   height: 100%;
-  background: #0d1117;
+  background: radial-gradient(circle at 20% 20%, #161b22 0%, #0d1117 55%);
   border: 1px solid #30363d;
   border-radius: 8px;
 }
@@ -442,7 +442,7 @@ h1 {
 <div id="content"></div>
 <div id="graph-container">
   <div id="graph-toolbar">
-    <select id="project-select" onchange="renderGraphView(graphGroups)" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
+    <select id="project-select" onchange="onProjectChange()" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
   </div>
@@ -869,7 +869,7 @@ function render(data) {
   if (currentView === 'project') {
     renderProjectView(data);
   } else if (currentView === 'graph') {
-    renderGraphView(data);
+    renderGraphView(data, cachedGraphData);
   } else {
     renderFlatView(data);
   }
@@ -919,18 +919,24 @@ function groupPriority(group) {
 }
 
 function summarizeGroup(group) {
+  // Summarize by attention state (semantic) rather than status (mechanical)
   var counts = {};
   group.sessions.forEach(function(s) {
-    var st = s.status || 'unknown';
-    counts[st] = (counts[st] || 0) + 1;
+    var attn = s.attention_state || s.status || 'unknown';
+    counts[attn] = (counts[attn] || 0) + 1;
   });
   var parts = [];
-  if (counts['in-progress']) parts.push(counts['in-progress'] + ' active');
-  if (counts['blocked']) parts.push(counts['blocked'] + ' blocked');
-  if (counts['review']) parts.push(counts['review'] + ' review');
-  if (counts['done']) parts.push(counts['done'] + ' done');
+  if (counts['blocked']) parts.push('\u25CF ' + counts['blocked'] + ' blocked');
+  if (counts['active'] || counts['in-progress']) {
+    var n = (counts['active'] || 0) + (counts['in-progress'] || 0);
+    parts.push('\u25CF ' + n + ' active');
+  }
+  if (counts['waiting'] || counts['review']) {
+    var n = (counts['waiting'] || 0) + (counts['review'] || 0);
+    parts.push('\u25CF ' + n + ' waiting');
+  }
   if (parts.length === 0) parts.push(group.sessions.length + ' sessions');
-  return parts.join(' / ');
+  return parts.join('  ');
 }
 
 function buildMindMapData(groups) {
@@ -955,108 +961,96 @@ function buildMindMapData(groups) {
     });
   }
 
-  // Determine level offsets based on hierarchy pruning
-  var rootLevel = 0;
-  var projectLevel = 1;
-  var sessionLevel = 2;
-  var detailLevel = 3;
-  var showRoot = !isSingleProject;
+  // Determine level offsets — root node removed, projects are top-level
+  var projectLevel = 0;
+  var sessionLevel = 1;
+  var detailLevel = 2;
   var showProject = !isSingleSession;
 
   if (isSingleSession) {
-    // Skip both root and project
     sessionLevel = 0;
     detailLevel = 1;
-  } else if (isSingleProject) {
-    // Skip root only
-    projectLevel = 0;
-    sessionLevel = 1;
-    detailLevel = 2;
-  }
-
-  // Root node (only in multi-project view)
-  var rootId = 'root';
-  if (showRoot) {
-    nodes.push({
-      id: rootId,
-      label: 'Sessions',
-      shape: 'box',
-      color: { background: '#161b22', border: '#58a6ff' },
-      font: { color: '#f0f6fc', size: 16, face: '-apple-system, sans-serif', bold: true },
-      margin: { top: 10, bottom: 10, left: 16, right: 16 },
-      borderWidth: 2,
-      level: rootLevel,
-      _type: 'root'
-    });
   }
 
   filteredGroups.forEach(function(group) {
     var projectId = 'proj:' + (++nid);
-    var parentId = showRoot ? rootId : null;
 
     // Project node (skip when single session)
     if (showProject) {
       var projLabel = group.name;
       if (isAllProjects) {
-        // In All Projects: show summary instead of session count
         projLabel += '\n' + summarizeGroup(group);
       } else {
         projLabel += ' (' + group.sessions.length + ')';
       }
 
-      // Determine project border color by most urgent status
-      var projPrio = groupPriority(group);
-      var projBorder = '#30363d';
-      if (projPrio >= 5) projBorder = '#58a6ff';
-      else if (projPrio >= 4) projBorder = '#f85149';
-      else if (projPrio >= 3) projBorder = '#bc8cff';
-
+      // Project nodes are always neutral — attention shown via badges in label
       nodes.push({
         id: projectId,
         label: projLabel,
         shape: 'box',
-        color: { background: '#21262d', border: projBorder },
-        font: { color: '#f0f6fc', size: isAllProjects ? 12 : 14, face: '-apple-system, sans-serif', bold: true, multi: true },
-        margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        borderWidth: 2,
+        color: { background: '#21262d', border: '#484f58' },
+        font: { color: '#f0f6fc', size: 15, face: '-apple-system, sans-serif', bold: true, multi: true },
+        margin: { top: 10, bottom: 10, left: 14, right: 14 },
+        borderWidth: 1,
         level: projectLevel,
         _type: 'project',
         _data: group
       });
-      if (parentId) {
-        edges.push({ from: parentId, to: projectId, color: { color: '#30363d' }, width: 2 });
-      }
     }
 
     var sessionParent = showProject ? projectId : null;
 
     // In All Projects: collapse sessions (no child nodes per session)
     if (isAllProjects) {
-      // Show only sessions, no task/goal/phase expansion
-      var sessions = group.sessions.slice(0, 3);
+      // Sort sessions by attention urgency: blocked > active > waiting > idle > done
+      var ATTENTION_ORDER = {blocked: 0, active: 1, waiting: 2, idle: 3};
+      var STATUS_ORDER = {blocked: 0, 'in-progress': 1, review: 2, done: 3};
+      var sorted = group.sessions.slice().sort(function(a, b) {
+        var aAttn = ATTENTION_ORDER[a.attention_state] !== undefined ? ATTENTION_ORDER[a.attention_state] : 4;
+        var bAttn = ATTENTION_ORDER[b.attention_state] !== undefined ? ATTENTION_ORDER[b.attention_state] : 4;
+        if (aAttn !== bAttn) return aAttn - bAttn;
+        var aSt = STATUS_ORDER[a.status] !== undefined ? STATUS_ORDER[a.status] : 2;
+        var bSt = STATUS_ORDER[b.status] !== undefined ? STATUS_ORDER[b.status] : 2;
+        return aSt - bSt;
+      });
+
+      var sessions = sorted.slice(0, 3);
       var truncated = group.sessions.length > 3;
+
+      // Attention state color for left accent bar
+      var ATTN_COLORS = {blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff', idle: '#484f58'};
 
       sessions.forEach(function(session) {
         var sessionId = 'sess:' + (++nid);
-        var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
+        var attnColor = ATTN_COLORS[session.attention_state] || '#484f58';
         var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
-        // Session label: name + phase badge inline
-        var label = session.name;
-        if (pLabel) label += ' \u00B7 ' + pLabel;
 
+        // Session label: name + current focus (1-line summary)
+        var label = session.name;
+        if (session.current_focus) {
+          var focus = session.current_focus;
+          if (focus.length > 30) focus = focus.substring(0, 28) + '..';
+          label += '\n' + focus;
+        } else if (pLabel) {
+          label += '\n' + pLabel;
+        }
+
+        // Neutral border, attention state shown via border-left color
+        var isUrgent = session.attention_state === 'blocked' || session.attention_state === 'active';
         nodes.push({
           id: sessionId,
           label: label,
           shape: 'box',
-          color: { background: phaseColor + '33', border: phaseColor },
-          font: { color: '#c9d1d9', size: 10, face: '-apple-system, sans-serif' },
-          margin: { top: 4, bottom: 4, left: 8, right: 8 },
-          borderWidth: 1,
+          color: { background: '#1a1f27', border: isUrgent ? attnColor : '#484f58' },
+          font: { color: isUrgent ? '#f0f6fc' : '#c9d1d9', size: 13, face: '-apple-system, sans-serif', multi: true },
+          margin: { top: 6, bottom: 6, left: 10, right: 10 },
+          borderWidth: isUrgent ? 2 : 1,
           level: sessionLevel,
           _type: 'session',
           _data: session
         });
-        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1 });
+        edges.push({ from: sessionParent, to: sessionId, color: { color: isUrgent ? attnColor + '88' : '#484f58' }, width: isUrgent ? 2 : 1.5 });
       });
 
       if (truncated) {
@@ -1067,7 +1061,7 @@ function buildMindMapData(groups) {
           label: '+' + remaining + ' more...',
           shape: 'box',
           color: { background: '#161b22', border: '#30363d' },
-          font: { color: '#8b949e', size: 10, face: '-apple-system, sans-serif' },
+          font: { color: '#8b949e', size: 11, face: '-apple-system, sans-serif' },
           margin: { top: 3, bottom: 3, left: 6, right: 6 },
           borderWidth: 1,
           borderDashes: [4, 4],
@@ -1080,127 +1074,37 @@ function buildMindMapData(groups) {
       return; // skip detailed view for All Projects
     }
 
-    // Detailed view (single project selected)
+    // Detailed view: fallback when graph API not available
     group.sessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
-      var phaseColor = PHASE_COLORS[session.phase] || '#484f58';
-      var pLabel = PHASE_LABELS[session.phase] || session.phase || '';
-      // Phase integrated into session label
+      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
       var label = session.name;
-      if (pLabel) label += '\n' + pLabel;
+      if (session.current_focus) {
+        var f = session.current_focus;
+        if (f.length > 30) f = f.substring(0, 28) + '..';
+        label += '\n' + f;
+      }
 
       nodes.push({
-        id: sessionId,
-        label: label,
-        shape: 'box',
-        color: { background: phaseColor + '33', border: phaseColor },
-        font: { color: '#c9d1d9', size: 12, face: '-apple-system, sans-serif', bold: true, multi: true },
+        id: sessionId, label: label, shape: 'box',
+        color: { background: '#1a1f27', border: attnColor },
+        font: { color: '#f0f6fc', size: 13, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
-        borderWidth: 2,
-        level: sessionLevel,
-        _type: 'session',
-        _data: session
+        borderWidth: 2, level: sessionLevel, _type: 'session', _data: session
       });
       if (sessionParent) {
-        edges.push({ from: sessionParent, to: sessionId, color: { color: '#30363d' }, width: 1.5 });
+        edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
       }
 
-      // Goal node
-      if (session.goal) {
-        var goalId = 'goal:' + (++nid);
-        nodes.push({
-          id: goalId,
-          label: '\uD83C\uDFAF ' + session.goal,
-          shape: 'box',
-          color: { background: '#f0883e22', border: '#f0883e' },
-          font: { color: '#f0883e', size: 11, face: '-apple-system, sans-serif' },
-          margin: { top: 4, bottom: 4, left: 8, right: 8 },
-          borderWidth: 1,
-          level: detailLevel,
-          _type: 'goal'
-        });
-        edges.push({ from: sessionId, to: goalId, color: { color: '#f0883e44' }, width: 1 });
-      }
-
-      // Task nodes: sorted by status (in_progress first, then planned, blocked, done)
-      if (session.tasks && session.tasks.length > 0) {
-        var taskOrder = {in_progress: 0, planned: 1, blocked: 2, done: 3};
-        var sorted = session.tasks.slice().sort(function(a, b) {
-          return (taskOrder[a.status] || 9) - (taskOrder[b.status] || 9);
-        });
-        var doneCount = 0;
-        var doneShown = false;
-        sorted.forEach(function(task) {
-          // Collapse done tasks: show summary node instead
-          if (task.status === 'done') {
-            doneCount++;
-            if (!doneShown) {
-              doneShown = true;
-              var total = sorted.filter(function(t) { return t.status === 'done'; }).length;
-              var doneId = 'done:' + (++nid);
-              nodes.push({
-                id: doneId,
-                label: '\u2713 Done (' + total + ')',
-                shape: 'box',
-                color: { background: '#3fb95018', border: '#3fb950' },
-                font: { color: '#3fb950', size: 9, face: '-apple-system, sans-serif' },
-                margin: { top: 3, bottom: 3, left: 6, right: 6 },
-                borderWidth: 1,
-                level: detailLevel,
-                _type: 'done_summary'
-              });
-              edges.push({ from: sessionId, to: doneId, color: { color: '#3fb95044' }, width: 1 });
-            }
-            return;
-          }
-
-          var taskId = 'task:' + (++nid);
-          var tc = TASK_COLORS[task.status] || '#484f58';
-          var icon = TASK_ICONS_MAP[task.status] || '\u25CB';
-          var isActive = task.status === 'in_progress';
-
-          nodes.push({
-            id: taskId,
-            label: icon + ' ' + task.title,
-            shape: 'box',
-            color: {
-              background: isActive ? tc + '44' : tc + '18',
-              border: tc
-            },
-            font: {
-              color: isActive ? '#f0f6fc' : '#8b949e',
-              size: isActive ? 12 : 10,
-              face: '-apple-system, sans-serif',
-              bold: isActive
-            },
-            margin: { top: 3, bottom: 3, left: 8, right: 8 },
-            borderWidth: isActive ? 3 : 1,
-            level: detailLevel,
-            _type: 'task',
-            _data: task
-          });
-          edges.push({
-            from: sessionId, to: taskId,
-            color: { color: isActive ? tc : '#30363d' },
-            width: isActive ? 3 : 1
-          });
-        });
-      }
-
-      // No roadmap warning when no goal and no tasks
+      // No roadmap warning
       if (!session.goal && (!session.tasks || session.tasks.length === 0)) {
         var warnId = 'warn:' + (++nid);
         nodes.push({
-          id: warnId,
-          label: '\u26A0 No roadmap',
-          shape: 'box',
-          color: { background: '#f8514922', border: '#f85149' },
-          font: { color: '#f85149', size: 10, face: '-apple-system, sans-serif' },
+          id: warnId, label: '\u26A0 No roadmap', shape: 'box',
+          color: { background: '#2a1215', border: '#f85149' },
+          font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
-          borderWidth: 1,
-          borderDashes: [4, 4],
-          level: detailLevel,
-          _type: 'warning'
+          borderWidth: 1, borderDashes: [4, 4], level: detailLevel, _type: 'warning'
         });
         edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
       }
@@ -1210,10 +1114,218 @@ function buildMindMapData(groups) {
   return { nodes: nodes, edges: edges };
 }
 
-function renderGraphView(groups) {
+// Compute topological depth of a node in the DAG (longest path from root)
+function computeNodeDepth(nodeId, edges, nodes, memo, visiting) {
+  if (!memo) memo = {};
+  if (!visiting) visiting = {};
+  if (memo[nodeId] !== undefined) return memo[nodeId];
+  if (visiting[nodeId]) return 1; // cycle guard
+  visiting[nodeId] = true;
+  var incomingEdges = edges.filter(function(e) { return e.to === nodeId; });
+  if (incomingEdges.length === 0) {
+    memo[nodeId] = 1;
+    delete visiting[nodeId];
+    return 1;
+  }
+  var maxDepth = 0;
+  incomingEdges.forEach(function(e) {
+    var d = computeNodeDepth(e.from, edges, nodes, memo, visiting);
+    if (d > maxDepth) maxDepth = d;
+  });
+  memo[nodeId] = maxDepth + 1;
+  delete visiting[nodeId];
+  return memo[nodeId];
+}
+
+// Build DAG from /api/roadmap-graph data for Single Project view
+function buildSemanticGraph(graphData) {
+  var nodes = [];
+  var edges = [];
+  var nid = 0;
+
+  // Opaque backgrounds — edges are hidden behind nodes
+  var NODE_STYLES = {
+    goal:      { bg: '#1e1610', border: '#f0883e', fontColor: '#f0883e', icon: '\uD83C\uDFAF ', fontSize: 14, borderWidth: 2 },
+    task:      { bg: '#161b22', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    milestone: { bg: '#111d2e', border: '#79c0ff', fontColor: '#79c0ff', icon: '\u25C6 ', fontSize: 13, borderWidth: 2 },
+    rejected:  { bg: '#131618', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+  };
+  var STATUS_STYLES = {
+    in_progress: { bg: '#0f2744', border: '#58a6ff', fontColor: '#f0f6fc', icon: '\u25B6 ', fontSize: 13, borderWidth: 3 },
+    done:        { bg: '#0f2018', border: '#3fb950', fontColor: '#3fb950', icon: '\u2713 ', fontSize: 12, borderWidth: 1 },
+    blocked:     { bg: '#2a1215', border: '#f85149', fontColor: '#f85149', icon: '\u2716 ', fontSize: 12, borderWidth: 2 },
+    planned:     { bg: '#161b22', border: '#484f58', fontColor: '#8b949e', icon: '\u25CB ', fontSize: 12, borderWidth: 1 },
+    rejected:    { bg: '#131618', border: '#484f58', fontColor: '#484f58', icon: '\u2717 ', fontSize: 11, borderWidth: 1 }
+  };
+
+  var EDGE_STYLES = {
+    fork:       { color: '#484f58', width: 1.5, dashes: false },
+    flow:       { color: '#79c0ff', width: 2, dashes: false },
+    dependency: { color: '#8b949e', width: 1, dashes: [5, 5] },
+    rejected:   { color: '#484f5866', width: 1, dashes: [3, 3] }
+  };
+
+  graphData.forEach(function(projectGroup) {
+    var showProjectNode = graphData.length > 1 || projectGroup.sessions.length > 1;
+    var projectNodeId = null;
+
+    if (showProjectNode) {
+      projectNodeId = 'proj:' + (++nid);
+      nodes.push({
+        id: projectNodeId, label: projectGroup.name, shape: 'box',
+        color: { background: '#21262d', border: '#484f58' },
+        font: { color: '#f0f6fc', size: 15, bold: true },
+        margin: { top: 10, bottom: 10, left: 14, right: 14 },
+        borderWidth: 1, level: 0, _type: 'project', _data: projectGroup
+      });
+    }
+
+    projectGroup.sessions.forEach(function(session) {
+      var sessionPrefix = 's' + (++nid) + ':';
+      var baseLevel = showProjectNode ? 1 : 0;
+
+      // Session header node — Goal is integrated as subtitle, not a separate node
+      var sessionNodeId = sessionPrefix + 'session';
+      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
+      var sessionLabel = session.name;
+      if (session.goal) {
+        var goalText = session.goal;
+        if (goalText.length > 30) goalText = goalText.substring(0, 28) + '..';
+        sessionLabel += '\n\uD83C\uDFAF ' + goalText;
+      } else if (session.current_focus) {
+        var cf = session.current_focus;
+        if (cf.length > 30) cf = cf.substring(0, 28) + '..';
+        sessionLabel += '\n' + cf;
+      }
+      nodes.push({
+        id: sessionNodeId, label: sessionLabel, shape: 'box',
+        color: { background: '#1a1f27', border: attnColor },
+        font: { color: '#f0f6fc', size: 14, bold: true, multi: true },
+        margin: { top: 8, bottom: 8, left: 12, right: 12 },
+        borderWidth: 2, level: baseLevel, _type: 'session', _data: session
+      });
+      if (projectNodeId) {
+        edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
+      }
+
+      if (!session.nodes || session.nodes.length === 0) {
+        // No DAG data — show warning
+        var warnId = sessionPrefix + 'warn';
+        nodes.push({
+          id: warnId, label: '\u26A0 No roadmap', shape: 'box',
+          color: { background: '#2a1215', border: '#f85149' },
+          font: { color: '#f85149', size: 10 },
+          margin: { top: 3, bottom: 3, left: 8, right: 8 },
+          borderWidth: 1, borderDashes: [4, 4], level: baseLevel + 1, _type: 'warning'
+        });
+        edges.push({ from: sessionNodeId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
+        return;
+      }
+
+      // Map graph node IDs to vis-network IDs — skip Goal nodes (integrated into session)
+      var idMap = {};
+      // Filter out edges from/to goal for level computation
+      var nonGoalEdges = session.edges.filter(function(e) { return e.from !== 'goal' && e.to !== 'goal'; });
+
+      session.nodes.forEach(function(gn) {
+        if (gn.type === 'goal') return; // Goal is merged into session node
+
+        var visId = sessionPrefix + gn.id;
+        idMap[gn.id] = visId;
+
+        var style;
+        if (gn.type === 'milestone') {
+          style = NODE_STYLES.milestone;
+        } else if (gn.type === 'rejected' || gn.status === 'rejected') {
+          style = STATUS_STYLES.rejected;
+        } else {
+          style = STATUS_STYLES[gn.status] || NODE_STYLES.task;
+        }
+
+        // Current focus glow effect
+        var isFocus = session.current_focus && gn.label &&
+          gn.label.indexOf(session.current_focus) !== -1;
+        var shadow = isFocus ? { enabled: true, color: '#58a6ff', size: 12, x: 0, y: 0 } : undefined;
+
+        // Dynamic level based on topological depth (excluding goal edges)
+        var level = baseLevel + computeNodeDepth(gn.id, nonGoalEdges, session.nodes);
+
+        nodes.push({
+          id: visId,
+          label: style.icon + (gn.label.length > 20 ? gn.label.substring(0, 18) + '..' : gn.label),
+          shape: 'box',
+          color: { background: style.bg, border: style.border },
+          font: { color: style.fontColor, size: style.fontSize, bold: gn.status === 'in_progress' },
+          margin: { top: 5, bottom: 5, left: 10, right: 10 },
+          borderWidth: style.borderWidth,
+          borderDashes: (gn.type === 'rejected' || gn.status === 'rejected') ? [4, 4] : false,
+          shadow: shadow,
+          level: level,
+          _type: gn.type,
+          _data: gn
+        });
+      });
+
+      // Connect fork/rejected edges from session node instead of goal node
+      session.edges.forEach(function(ge) {
+        if (ge.from === 'goal') {
+          // Remap: goal → task becomes session → task
+          var toVis = idMap[ge.to];
+          if (!toVis) return;
+          var toNode = session.nodes.find(function(n) { return n.id === ge.to; });
+          var edgeColor = '#484f58';
+          if (ge.type === 'rejected') edgeColor = '#484f5866';
+          else if (toNode && toNode.status === 'in_progress') edgeColor = '#58a6ff';
+          edges.push({
+            from: sessionNodeId, to: toVis,
+            color: { color: edgeColor },
+            width: (toNode && toNode.status === 'in_progress') ? 2.5 : 1.5,
+            dashes: ge.type === 'rejected' ? [3, 3] : false
+          });
+          return;
+        }
+        var fromVis = idMap[ge.from];
+        var toVis = idMap[ge.to];
+        if (!fromVis || !toVis) return;
+
+        var es = EDGE_STYLES[ge.type] || EDGE_STYLES.fork;
+
+        // Override edge color for active tasks
+        var toNode = session.nodes.find(function(n) { return n.id === ge.to; });
+        var edgeColor = es.color;
+        if (toNode && toNode.status === 'in_progress' && ge.type !== 'rejected') {
+          edgeColor = '#58a6ff';
+        } else if (toNode && toNode.status === 'done' && ge.type === 'flow') {
+          edgeColor = '#3fb95088';
+        }
+
+        edges.push({
+          from: fromVis, to: toVis,
+          color: { color: edgeColor },
+          width: (toNode && toNode.status === 'in_progress') ? 3 : es.width,
+          dashes: es.dashes,
+          arrows: ge.type === 'dependency' ? { to: { enabled: true, scaleFactor: 0.5 } } : undefined
+        });
+      });
+    });
+  });
+
+  return { nodes: nodes, edges: edges };
+}
+
+var cachedGraphData = null; // cached /api/roadmap-graph data
+
+function renderGraphView(groups, graphData) {
   graphGroups = groups;
   updateProjectSelect(groups);
-  var data = buildMindMapData(groups);
+
+  // Use semantic DAG for single project when graph data is available
+  var useDAG = graphData && selectedProject;
+  var filteredGraph = graphData;
+  if (useDAG && selectedProject) {
+    filteredGraph = graphData.filter(function(g) { return g.repo_root === selectedProject; });
+  }
+  var data = useDAG ? buildSemanticGraph(filteredGraph) : buildMindMapData(groups);
 
   if (graphNetwork) {
     graphNodes = new vis.DataSet(data.nodes);
@@ -1230,9 +1342,9 @@ function renderGraphView(groups) {
           enabled: true,
           direction: 'LR',
           sortMethod: 'directed',
-          levelSeparation: 220,
-          nodeSpacing: 40,
-          treeSpacing: 60,
+          levelSeparation: 200,
+          nodeSpacing: 45,
+          treeSpacing: 50,
           parentCentralization: true,
           blockShifting: true,
           edgeMinimization: true
@@ -1242,14 +1354,22 @@ function renderGraphView(groups) {
       interaction: {
         hover: true,
         tooltipDelay: 200,
+        dragNodes: true,
         multiselect: false,
         navigationButtons: false,
         keyboard: { enabled: true }
       },
       edges: {
         arrows: { to: false },
-        smooth: { type: 'cubicBezier', roundness: 0.5 }
+        color: { color: '#484f58', hover: '#8b949e' },
+        width: 1.5,
+        smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 }
       }
+    });
+
+    // After initial hierarchical layout, disable it so nodes can be dragged freely
+    graphNetwork.once('stabilizationIterationsDone', function() {
+      graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
     });
 
     graphNetwork.on('click', function(params) {
@@ -1261,7 +1381,7 @@ function renderGraphView(groups) {
           // Click "+N more" to select that project
           var sel = document.getElementById('project-select');
           sel.value = nodeData._data.repo_root;
-          renderGraphView(graphGroups);
+          onProjectChange();
         } else {
           closeInspector();
         }
@@ -1403,6 +1523,20 @@ function closeInspector() {
   document.getElementById('graph-inspector').style.display = 'none';
 }
 
+async function onProjectChange() {
+  selectedProject = document.getElementById('project-select').value;
+  // Fetch graph data if a project is selected
+  if (selectedProject) {
+    try {
+      var gres = await fetch('/api/roadmap-graph');
+      if (gres.ok) cachedGraphData = await gres.json();
+    } catch (e) { cachedGraphData = null; }
+  } else {
+    cachedGraphData = null;
+  }
+  renderGraphView(graphGroups, cachedGraphData);
+}
+
 function graphFit() {
   if (graphNetwork) graphNetwork.fit({ animation: true });
 }
@@ -1418,10 +1552,20 @@ async function refresh() {
     var res = await fetch('/api/roadmap-map');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     var newData = await res.json();
+
+    // Also fetch graph data for DAG view
+    var graphData = null;
+    if (currentView === 'graph' && selectedProject) {
+      try {
+        var gres = await fetch('/api/roadmap-graph');
+        if (gres.ok) graphData = await gres.json();
+      } catch (e) { /* graph API optional, fall back to tree */ }
+    }
+
     // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
     if (currentView === 'graph' && cachedData && graphNetwork) {
-      var newJson = JSON.stringify(newData);
-      var oldJson = JSON.stringify(cachedData);
+      var newJson = JSON.stringify(newData) + JSON.stringify(graphData);
+      var oldJson = JSON.stringify(cachedData) + JSON.stringify(cachedGraphData);
       if (newJson === oldJson) {
         var sessionCount = 0;
         newData.forEach(function(g) { sessionCount += g.sessions.length; });
@@ -1432,7 +1576,12 @@ async function refresh() {
       }
     }
     cachedData = newData;
-    render(cachedData);
+    cachedGraphData = graphData;
+    if (currentView === 'graph') {
+      renderGraphView(cachedData, cachedGraphData);
+    } else {
+      render(cachedData);
+    }
   } catch (e) {
     document.getElementById('meta').textContent = 'Error: ' + e.message;
   }

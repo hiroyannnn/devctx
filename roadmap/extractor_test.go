@@ -165,6 +165,38 @@ func TestExtractTasks(t *testing.T) {
 	}
 }
 
+func TestExtractTasksNewFieldsEmpty(t *testing.T) {
+	bundle := EvidenceBundle{
+		CommitSubjects: []string{
+			"feat: implement login",
+			"fix: session timeout",
+		},
+	}
+
+	tasks := ExtractTasks(bundle)
+
+	if len(tasks) != 2 {
+		t.Fatalf("tasks len = %d, want 2", len(tasks))
+	}
+
+	for i, task := range tasks {
+		// Source must be "git"
+		if task.Source != "git" {
+			t.Errorf("tasks[%d].Source = %q, want \"git\"", i, task.Source)
+		}
+		// New fields must be empty (zero values)
+		if task.ID != "" {
+			t.Errorf("tasks[%d].ID = %q, want empty", i, task.ID)
+		}
+		if len(task.DependsOn) != 0 {
+			t.Errorf("tasks[%d].DependsOn = %v, want empty", i, task.DependsOn)
+		}
+		if task.FlowsTo != "" {
+			t.Errorf("tasks[%d].FlowsTo = %q, want empty", i, task.FlowsTo)
+		}
+	}
+}
+
 func TestExtractBranchTopic(t *testing.T) {
 	tests := []struct {
 		branch string
