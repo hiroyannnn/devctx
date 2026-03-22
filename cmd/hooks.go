@@ -221,8 +221,9 @@ func installHooksToSettings() error {
 	return nil
 }
 
-// mergeHookConfigs removes existing devctx hooks and appends the new configs.
-// This ensures stale paths are replaced on re-install.
+// mergeHookConfigs appends devctx hooks that don't already exist.
+// If an existing config already has a devctx command with the same
+// subcommand, it is left untouched. Never removes or modifies existing entries.
 func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}) []interface{} {
 	var configs []interface{}
 
@@ -233,40 +234,70 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 		}
 	}
 
-	// Remove any existing devctx hooks
-	var filtered []interface{}
-	for _, config := range configs {
-		if configHasDevctx(config) {
+	for _, nc := range newConfigs {
+		newCmd := extractDevctxCommand(nc)
+		if newCmd == "" {
+			configs = append(configs, nc)
 			continue
 		}
-		filtered = append(filtered, config)
-	}
+		newSub := devctxSubcommand(newCmd)
 
-	// Append new configs
-	for _, nc := range newConfigs {
-		filtered = append(filtered, nc)
+		// Check if a devctx hook with the same subcommand + matcher already exists
+		newMatcher, _ := nc["matcher"].(string)
+		found := false
+		for _, config := range configs {
+			existCmd := extractDevctxCommand(config)
+			if existCmd == "" || devctxSubcommand(existCmd) != newSub {
+				continue
+			}
+			if configMap, ok := config.(map[string]interface{}); ok {
+				existMatcher, _ := configMap["matcher"].(string)
+				if existMatcher == newMatcher {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			configs = append(configs, nc)
+		}
 	}
-	return filtered
+	return configs
 }
 
-// configHasDevctx returns true if any hook command in the config contains "devctx".
-func configHasDevctx(config interface{}) bool {
+// extractDevctxCommand returns the first devctx command from a hook config, or "".
+func extractDevctxCommand(config interface{}) string {
 	configMap, ok := config.(map[string]interface{})
 	if !ok {
-		return false
+		return ""
 	}
 	hooksArr, ok := configMap["hooks"].([]interface{})
 	if !ok {
-		return false
+		return ""
 	}
 	for _, hook := range hooksArr {
 		if hookMap, ok := hook.(map[string]interface{}); ok {
 			if cmd, ok := hookMap["command"].(string); ok {
 				if strings.Contains(cmd, "devctx") {
-					return true
+					return cmd
 				}
 			}
 		}
 	}
-	return false
+	return ""
+}
+
+// devctxSubcommand extracts the subcommand from a devctx command string.
+// e.g. "/path/to/devctx register" → "register", "devctx touch --quick" → "touch"
+func devctxSubcommand(cmd string) string {
+	idx := strings.Index(cmd, "devctx")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(cmd[idx+len("devctx"):])
+	parts := strings.Fields(rest)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
 }

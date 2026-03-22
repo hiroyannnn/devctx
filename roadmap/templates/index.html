@@ -1025,8 +1025,12 @@ function buildMindMapData(groups) {
 
     var sessionParent = showProject ? projectId : null;
 
-    // Detailed view: show all sessions with full info
-    group.sessions.forEach(function(session) {
+    // In All Projects, limit sessions per project to keep the graph readable
+    var maxSessions = isAllProjects ? 5 : Infinity;
+    var visibleSessions = group.sessions.slice(0, maxSessions);
+    var truncated = group.sessions.length > maxSessions;
+
+    visibleSessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
       var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
       var label = session.name;
@@ -1047,8 +1051,8 @@ function buildMindMapData(groups) {
         edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
       }
 
-      // No roadmap warning
-      if (!session.goal && (!session.tasks || session.tasks.length === 0)) {
+      // No roadmap warning (skip in All Projects to reduce noise)
+      if (!isAllProjects && !session.goal && (!session.tasks || session.tasks.length === 0)) {
         var warnId = 'warn:' + (++nid);
         nodes.push({
           id: warnId, label: '\u26A0 No roadmap', shape: 'box',
@@ -1060,6 +1064,25 @@ function buildMindMapData(groups) {
         edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
       }
     });
+
+    if (truncated && sessionParent) {
+      var moreId = 'more:' + (++nid);
+      var remaining = group.sessions.length - maxSessions;
+      nodes.push({
+        id: moreId,
+        label: '+' + remaining + ' more...',
+        shape: 'box',
+        color: { background: '#161b22', border: '#30363d' },
+        font: { color: '#8b949e', size: 11, face: '-apple-system, sans-serif' },
+        margin: { top: 3, bottom: 3, left: 6, right: 6 },
+        borderWidth: 1,
+        borderDashes: [4, 4],
+        level: sessionLevel,
+        _type: 'more',
+        _data: group
+      });
+      edges.push({ from: sessionParent, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
+    }
   });
 
   return { nodes: nodes, edges: edges };
