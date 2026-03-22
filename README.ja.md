@@ -6,25 +6,32 @@
 
 [English](README.md)
 
-Claude Code セッションと git worktree をカンバン形式で管理する CLI ツール
+Claude Code セッションと git worktree を**マインドマップ**で管理する CLI ツール
+
+全セッションの全体像を一目で把握 — 何がアクティブで、何がブロックされていて、各タスクがどこに向かっているか。
+
+![Mind Map - 全体表示](assets/screenshot-mindmap-all.png)
+
+プロジェクトにドリルインすると、**セマンティックタスクフロー**が見える — 分岐・合流・棄却を DAG として可視化。
+
+![Mind Map - DAG 詳細](assets/screenshot-mindmap-detail.png)
 
 ![devctx list](assets/list.gif)
 
 ## 機能
 
+- **マインドマップ** - セマンティック DAG によるタスクフロー可視化（分岐・合流・棄却）
 - **カンバンビュー** - セッションの状態を一覧で把握
+- **AI インサイト** - Claude がセッションの目標・フォーカス・次のステップ・状態を推定
 - **自動セッション追跡** - Claude Code hooks による自動登録
 - **ステータス管理** - in-progress / review / blocked / done
-- **チェックリスト** - ステータス移行時の確認項目
 - **シェル統合** - ワンコマンドでコンテキスト切り替え
 - **fzf 連携** - 対話的なコンテキスト選択
 - **TUI ダッシュボード** - Bubble Tea による対話的 UI
 - **作業時間記録** - セッションごとの累計作業時間
-- **メモ機能** - コンテキストにメモを追加
 - **GitHub 連携** - Issue/PR の自動検出・リンク
 - **worktree 自動作成** - ブランチ作成から Claude 起動まで一発
-- **セッションロードマップ** - 開発フェーズの自動検出（idle → impl → committed → pushed → PR → done）
-- **AI インサイト** - Claude がセッションの目標・フォーカス・次のステップ・状態を推定
+- **セッションロードマップ** - 開発フェーズの自動検出
 
 ## インストール
 
@@ -343,11 +350,9 @@ devctx roadmap serve
 - **トピック＆タスク** - セッション毎のセマンティックトピックとタスクリスト
 - **イベントタイムライン** - カードクリックでイベント履歴を展開
 - **Project / Flat / Mind Map 表示** - グループ化・フラット・マインドマップ表示を切り替え
-- **マインドマップビュー** - 階層ツリー表示（Project → Session → Goal/Tasks/Phase）、要対応順ソート、単一プロジェクト時の階層省略、「No roadmap」警告、inspector パネル
+- **マインドマップビュー** - セマンティック DAG でタスクの分岐・合流・棄却を可視化。ノードをドラッグで配置調整可能
 
 ![Project View](assets/screenshot-project.png)
-![Mind Map - 全体表示](assets/screenshot-mindmap-all.png)
-![Mind Map - 詳細表示](assets/screenshot-mindmap-detail.png)
 
 ## トラブルシューティング
 

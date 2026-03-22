@@ -6,25 +6,32 @@
 
 [日本語](README.ja.md)
 
-A CLI tool for managing Claude Code sessions and git worktrees in a kanban-style interface.
+A CLI tool for managing Claude Code sessions and git worktrees with **Mind Map visualization**.
+
+See all your sessions at a glance — what's active, what's blocked, and where each task is heading.
+
+![Mind Map - All Projects](assets/screenshot-mindmap-all.png)
+
+Drill into a project to see the **semantic task flow** — branching, merging, and rejected tasks visualized as a DAG.
+
+![Mind Map - DAG Detail](assets/screenshot-mindmap-detail.png)
 
 ![devctx list](assets/list.gif)
 
 ## Features
 
+- **Mind Map View** - Semantic DAG visualization of task flows (branching, merging, rejection)
 - **Kanban View** - Visualize session states at a glance
+- **AI Insights** - Claude infers goal, focus, next step, and attention state for each session
 - **Auto Session Tracking** - Automatic registration via Claude Code hooks
 - **Status Management** - in-progress / review / blocked / done
-- **Checklists** - Confirmation items during status transitions
 - **Shell Integration** - One-command context switching
 - **fzf Integration** - Interactive context selection
 - **TUI Dashboard** - Interactive UI powered by Bubble Tea
 - **Time Tracking** - Accumulated work time per session
-- **Notes** - Add memos to contexts
 - **GitHub Integration** - Auto-detect and link Issues/PRs
 - **Worktree Creation** - Create branch to Claude launch in one command
-- **Session Roadmap** - Auto-detect development phases (idle → impl → committed → pushed → PR → done)
-- **AI Insights** - Claude infers goal, focus, next step, and attention state for each session
+- **Session Roadmap** - Auto-detect development phases
 
 ## Installation
 
@@ -324,11 +331,9 @@ Opens a web dashboard at `http://localhost:3333` with:
 - **Topics & Tasks** - Semantic topics and task lists per session
 - **Event timeline** - Click a card to expand its full event history
 - **Project / Flat / Mind Map view** - Switch between grouped, flat, and mind map layouts
-- **Mind Map view** - Hierarchical tree visualization (Project → Session → Goal/Tasks/Phase) with priority sorting, hierarchy pruning for single projects, "No roadmap" warnings, and inspector panel
+- **Mind Map view** - Semantic DAG visualization with task branching, merging, and rejection. Drag nodes to rearrange.
 
 ![Project View](assets/screenshot-project.png)
-![Mind Map - All Projects](assets/screenshot-mindmap-all.png)
-![Mind Map - Detail](assets/screenshot-mindmap-detail.png)
 
 ## Troubleshooting
 
