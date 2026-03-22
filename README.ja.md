@@ -51,14 +51,23 @@ mv devctx ~/.local/bin/  # または /usr/local/bin/
 ## クイックスタート
 
 ```bash
-# Claude Code hooks を設定
+# Claude Code hooks を設定（セッション自動追跡）
 devctx hooks --install
 
-# シェル統合を有効化（.bashrc / .zshrc に追加）
-eval "$(devctx shell-init)"
+# Mind Map ダッシュボードを開く
+devctx roadmap serve
+```
 
-# カンバン表示
-devctx list
+あとは普段通り Claude Code を使うだけ。セッションは hooks で自動追跡されます。
+
+### オプション設定
+
+```bash
+# Claude Code スラッシュコマンドをインストール（/devctx-review, /devctx-done 等）
+devctx commands --install
+
+# シェルショートカットを有効化（.bashrc / .zshrc に追加）
+eval "$(devctx shell-init)"
 ```
 
 ## カンバン表示例
