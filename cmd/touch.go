@@ -75,6 +75,13 @@ Use --quick to skip phase scan and milestone collection (for high-frequency hook
 
 		now := time.Now()
 
+		// Quick mode: skip if last_seen is within 5 minutes (throttle)
+		if touchQuick && !ctx.LastSeen.IsZero() {
+			if now.Sub(ctx.LastSeen) < 5*time.Minute {
+				return nil // silently skip
+			}
+		}
+
 		// Calculate session time and add to total
 		// Only count if last seen was within the last hour (active session)
 		if !ctx.LastSeen.IsZero() {

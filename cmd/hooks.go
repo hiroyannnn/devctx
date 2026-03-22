@@ -50,10 +50,28 @@ Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 							},
 						},
 					},
+					{
+						Matcher: "resume",
+						Hooks: []Hook{
+							{
+								Type:    "command",
+								Command: devctxPath + " register",
+							},
+						},
+					},
+				},
+				"Notification": {
+					{
+						Hooks: []Hook{
+							{
+								Type:    "command",
+								Command: devctxPath + " touch --quick",
+							},
+						},
+					},
 				},
 				"SessionEnd": {
 					{
-						Matcher: "",
 						Hooks: []Hook{
 							{
 								Type:    "command",
@@ -64,7 +82,6 @@ Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 				},
 				"Stop": {
 					{
-						Matcher: "",
 						Hooks: []Hook{
 							{
 								Type:    "command",
@@ -142,7 +159,7 @@ func installHooksToSettings() error {
 		hooks = make(map[string]interface{})
 	}
 
-	// Merge SessionStart hooks
+	// Merge SessionStart hooks (startup + resume)
 	sessionStartHook := map[string]interface{}{
 		"matcher": "startup",
 		"hooks": []map[string]interface{}{
@@ -153,6 +170,28 @@ func installHooksToSettings() error {
 		},
 	}
 	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"], sessionStartHook, devctxPath+" register")
+
+	sessionResumeHook := map[string]interface{}{
+		"matcher": "resume",
+		"hooks": []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": devctxPath + " register",
+			},
+		},
+	}
+	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"], sessionResumeHook, "devctx register.*resume")
+
+	// Merge Notification hooks (throttled last_seen update)
+	notificationHook := map[string]interface{}{
+		"hooks": []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": devctxPath + " touch --quick",
+			},
+		},
+	}
+	hooks["Notification"] = mergeHookConfigs(hooks["Notification"], notificationHook, "devctx touch")
 
 	// Merge SessionEnd hooks
 	sessionEndHook := map[string]interface{}{
