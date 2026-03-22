@@ -1558,15 +1558,11 @@ var projectChanging = false;
 async function onProjectChange() {
   projectChanging = true;
   selectedProject = document.getElementById('project-select').value;
-  // Fetch graph data if a project is selected
-  if (selectedProject) {
-    try {
-      var gres = await fetch('/api/roadmap-graph');
-      if (gres.ok) cachedGraphData = await gres.json();
-    } catch (e) { cachedGraphData = null; }
-  } else {
-    cachedGraphData = null;
-  }
+  // Fetch graph data for DAG view
+  try {
+    var gres = await fetch('/api/roadmap-graph');
+    if (gres.ok) cachedGraphData = await gres.json();
+  } catch (e) { cachedGraphData = null; }
   renderGraphView(graphGroups, cachedGraphData);
   projectChanging = false;
 }
@@ -1590,7 +1586,7 @@ async function refresh() {
 
     // Also fetch graph data for DAG view
     var graphData = null;
-    if (currentView === 'graph' && selectedProject) {
+    if (currentView === 'graph') {
       try {
         var gres = await fetch('/api/roadmap-graph');
         if (gres.ok) graphData = await gres.json();
