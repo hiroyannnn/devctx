@@ -400,6 +400,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			Phase:    ctx.Phase,
 			PRURL:    ctx.PRURL,
 			IssueURL: ctx.IssueURL,
+			LastSeen: ctx.LastSeen.Format("2006-01-02 15:04"),
 		}
 
 		if insights != nil {

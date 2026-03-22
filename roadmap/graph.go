@@ -53,6 +53,7 @@ type SessionGraph struct {
 	Phase          model.Phase          `json:"phase,omitempty"`
 	PRURL          string               `json:"pr_url,omitempty"`
 	IssueURL       string               `json:"issue_url,omitempty"`
+	LastSeen       string               `json:"last_seen,omitempty"`
 	InferredAt     string               `json:"inferred_at,omitempty"`
 	Topics         []model.SemanticTopic `json:"topics,omitempty"`
 	Tasks          []model.TaskItem     `json:"tasks,omitempty"`
@@ -80,6 +81,7 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		Phase:          entry.Phase,
 		PRURL:          entry.PRURL,
 		IssueURL:       entry.IssueURL,
+		LastSeen:       entry.LastSeen,
 		InferredAt:     entry.InferredAt,
 		Topics:         entry.Topics,
 		Tasks:          entry.Tasks,

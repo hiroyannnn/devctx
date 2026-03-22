@@ -443,6 +443,17 @@ h1 {
 <div id="graph-container">
   <div id="graph-toolbar">
     <select id="project-select" onchange="onProjectChange()" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;"></select>
+    <select id="period-filter" onchange="onFilterChange()" style="padding:4px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:0.82rem;">
+      <option value="1">1 day</option>
+      <option value="3" selected>3 days</option>
+      <option value="7">7 days</option>
+      <option value="30">30 days</option>
+      <option value="0">All</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:4px;color:#8b949e;font-size:0.78rem;cursor:pointer;">
+      <input type="checkbox" id="hide-done" onchange="onFilterChange()" style="accent-color:#58a6ff;cursor:pointer;">
+      Hide done
+    </label>
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
   </div>
@@ -950,9 +961,14 @@ function buildMindMapData(groups) {
     filteredGroups = groups.filter(function(g) { return g.repo_root === selectedProject; });
   }
 
+  // Apply period and done filters
+  filteredGroups = filteredGroups.map(function(g) {
+    return Object.assign({}, g, { sessions: filterSessions(g.sessions) });
+  }).filter(function(g) { return g.sessions.length > 0; });
+
   var isAllProjects = !selectedProject;
   var isSingleProject = filteredGroups.length === 1;
-  var isSingleSession = isSingleProject && filteredGroups[0].sessions.length === 1;
+  var isSingleSession = isSingleProject && filteredGroups[0] && filteredGroups[0].sessions.length === 1;
 
   // Sort groups by priority (most urgent first) in All Projects view
   if (isAllProjects) {
@@ -1166,7 +1182,11 @@ function buildSemanticGraph(graphData) {
   };
 
   graphData.forEach(function(projectGroup) {
-    var showProjectNode = graphData.length > 1 || projectGroup.sessions.length > 1;
+    // Apply period and done filters to graph sessions
+    var filteredSessions = filterSessions(projectGroup.sessions);
+    if (filteredSessions.length === 0) return;
+
+    var showProjectNode = graphData.length > 1 || filteredSessions.length > 1;
     var projectNodeId = null;
 
     if (showProjectNode) {
@@ -1180,7 +1200,7 @@ function buildSemanticGraph(graphData) {
       });
     }
 
-    projectGroup.sessions.forEach(function(session) {
+    filteredSessions.forEach(function(session) {
       var sessionPrefix = 's' + (++nid) + ':';
       var baseLevel = showProjectNode ? 1 : 0;
 
@@ -1524,6 +1544,32 @@ function showInspector(session) {
 
 function closeInspector() {
   document.getElementById('graph-inspector').style.display = 'none';
+}
+
+function onFilterChange() {
+  if (currentView === 'graph' && graphGroups) {
+    renderGraphView(graphGroups, cachedGraphData);
+  }
+}
+
+// Filter sessions by period and done status
+function filterSessions(sessions) {
+  var periodDays = parseInt(document.getElementById('period-filter').value, 10);
+  var hideDone = document.getElementById('hide-done').checked;
+  var now = Date.now();
+
+  return sessions.filter(function(s) {
+    // Hide done
+    if (hideDone && s.status === 'done') return false;
+
+    // Period filter (0 = all)
+    if (periodDays > 0 && s.last_seen) {
+      var lastSeen = new Date(s.last_seen).getTime();
+      if (now - lastSeen > periodDays * 86400000) return false;
+    }
+
+    return true;
+  });
 }
 
 var projectChanging = false;
