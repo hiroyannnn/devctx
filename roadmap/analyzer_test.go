@@ -317,3 +317,116 @@ func TestReadTranscriptTail_WithOffset(t *testing.T) {
 		t.Error("should contain lines after offset")
 	}
 }
+
+func TestReadTranscriptTail_FiltersNonConversational(t *testing.T) {
+	// Regression: queue-operation / file-history-snapshot / progress entries
+	// must be skipped. Embedding their `content` back into the analyze prompt
+	// is what caused the exponential JSON-escape blowup.
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"始めよう"}}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"\\\\\\\\\\\\\\\\ noisy escaped blob"}`,
+		`{"type":"file-history-snapshot","snapshot":{"trackedFileBackups":{}}}`,
+		`{"type":"progress","status":"running"}`,
+		`{"type":"last-prompt","content":"…"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"了解"}]}}`,
+	}
+	content := strings.Join(lines, "\n")
+
+	got, _ := ReadTranscriptTail(content, 50, 0)
+
+	if strings.Contains(got, "queue-operation") || strings.Contains(got, "noisy escaped blob") {
+		t.Errorf("queue-operation entry must not appear in output: %q", got)
+	}
+	if strings.Contains(got, "file-history-snapshot") || strings.Contains(got, "trackedFileBackups") {
+		t.Errorf("file-history-snapshot entry must not appear: %q", got)
+	}
+	if strings.Contains(got, `\\`) {
+		t.Errorf("output must not carry escape sequences: %q", got)
+	}
+	if !strings.Contains(got, "user: 始めよう") {
+		t.Errorf("user message missing from output: %q", got)
+	}
+	if !strings.Contains(got, "assistant: 了解") {
+		t.Errorf("assistant text part missing from output: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_SidechainSkipped(t *testing.T) {
+	// Sub-agent sidechain turns are noise for the parent session's analysis.
+	lines := []string{
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":"sub-agent prompt"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"main reply"}]}}`,
+	}
+	got, _ := ReadTranscriptTail(strings.Join(lines, "\n"), 50, 0)
+
+	if strings.Contains(got, "sub-agent prompt") {
+		t.Errorf("sidechain content must be filtered: %q", got)
+	}
+	if !strings.Contains(got, "main reply") {
+		t.Errorf("main reply missing: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_ToolUseAndResult(t *testing.T) {
+	// tool_use → short marker, tool_result → dropped (large/noisy).
+	line := `{"type":"assistant","message":{"role":"assistant","content":[` +
+		`{"type":"text","text":"調べます"},` +
+		`{"type":"tool_use","name":"Bash","input":{"command":"git status"}},` +
+		`{"type":"tool_result","content":"on branch main\nnothing to commit"}` +
+		`]}}`
+
+	got, _ := ReadTranscriptTail(line, 50, 0)
+
+	if !strings.Contains(got, "調べます") {
+		t.Errorf("text part missing: %q", got)
+	}
+	if !strings.Contains(got, "[tool: Bash]") {
+		t.Errorf("tool_use marker missing: %q", got)
+	}
+	if strings.Contains(got, "nothing to commit") {
+		t.Errorf("tool_result body must not leak into output: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_TruncatesLongMessage(t *testing.T) {
+	// A single huge user paste must not dominate the prompt.
+	huge := strings.Repeat("あ", 5000)
+	line := `{"type":"user","message":{"role":"user","content":` +
+		jsonString(huge) + `}}`
+
+	got, _ := ReadTranscriptTail(line, 50, 0)
+
+	runes := []rune(got)
+	if len(runes) > maxTranscriptMessageRunes+200 {
+		t.Errorf("message not truncated: %d runes", len(runes))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncation marker missing: %q", got[len(got)-30:])
+	}
+}
+
+// jsonString quotes s as a JSON string literal for embedding in raw JSONL
+// fixtures. Equivalent to encoding/json's string encoding for ASCII/Unicode
+// content (no need for HTML-safe escaping in tests).
+func jsonString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
