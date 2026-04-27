@@ -3,6 +3,8 @@ package roadmap
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -10,8 +12,14 @@ import (
 	"github.com/hiroyannnn/devctx/model"
 )
 
+// maxAnalyzeTranscriptRunes caps the transcript portion of the prompt as a
+// final safety net. Beyond per-message truncation in ReadTranscriptTail, this
+// guarantees the transcript block can never dominate the prompt or LLM context.
+const maxAnalyzeTranscriptRunes = 32000
+
 // BuildAnalyzePrompt creates a prompt for Claude to analyze a session.
 func BuildAnalyzePrompt(ctx *model.Context, transcript string) string {
+	transcript = truncateRunes(transcript, maxAnalyzeTranscriptRunes)
 	var b strings.Builder
 
 	b.WriteString("以下の開発セッションの状態を分析して、JSON形式で回答してください。\n\n")
@@ -320,4 +328,58 @@ func truncateRunes(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "…"
+}
+
+// AnalyzeMaxReadBytes is the file-size threshold above which the transcript
+// is tail-read instead of fully loaded. Anything bigger is either a very
+// long-running session (where the recent tail is what we care about anyway)
+// or a corrupted file from a past escape blowup.
+const AnalyzeMaxReadBytes = 10 * 1024 * 1024 // 10MB
+
+// AnalyzeTailReadBytes is how many bytes from the end of an oversized
+// transcript we read. Generous enough to capture the last several dozen
+// turns of a normal session.
+const AnalyzeTailReadBytes = 1 * 1024 * 1024 // 1MB
+
+// ReadTranscriptForAnalyze loads a Claude Code JSONL transcript from disk and
+// returns a compact human-readable excerpt suitable for the analyze prompt.
+//
+// Files at or below AnalyzeMaxReadBytes are loaded fully and incrementally
+// processed via prevOffset. Larger files are tail-read (last
+// AnalyzeTailReadBytes only); in that case prevOffset is ignored and the
+// returned offset is the full file size. tailed=true tells the caller to
+// surface a warning. fullSize is always the on-disk file size for diagnostics.
+func ReadTranscriptForAnalyze(path string, maxMessages int, prevOffset int64) (excerpt string, newOffset int64, tailed bool, fullSize int64, err error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return "", 0, false, 0, statErr
+	}
+	fullSize = info.Size()
+
+	if fullSize <= AnalyzeMaxReadBytes {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return "", 0, false, fullSize, readErr
+		}
+		excerpt, newOffset = ReadTranscriptTail(string(data), maxMessages, prevOffset)
+		return excerpt, newOffset, false, fullSize, nil
+	}
+
+	f, openErr := os.Open(path)
+	if openErr != nil {
+		return "", 0, false, fullSize, openErr
+	}
+	defer f.Close()
+
+	if _, seekErr := f.Seek(fullSize-AnalyzeTailReadBytes, io.SeekStart); seekErr != nil {
+		return "", 0, false, fullSize, seekErr
+	}
+	data, readErr := io.ReadAll(f)
+	if readErr != nil {
+		return "", 0, false, fullSize, readErr
+	}
+	// Tail-read invalidates absolute byte offsets; ignore prevOffset and
+	// hand back fullSize so the next call starts fresh from end-of-file.
+	excerpt, _ = ReadTranscriptTail(string(data), maxMessages, 0)
+	return excerpt, fullSize, true, fullSize, nil
 }

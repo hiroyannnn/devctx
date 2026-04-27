@@ -1,6 +1,8 @@
 package roadmap
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -402,6 +404,98 @@ func TestReadTranscriptTail_TruncatesLongMessage(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Errorf("truncation marker missing: %q", got[len(got)-30:])
+	}
+}
+
+func TestBuildAnalyzePrompt_TruncatesLongTranscript(t *testing.T) {
+	ctx := &model.Context{Name: "huge"}
+	transcript := strings.Repeat("user: あ\n", 20000) // ~ 40k lines, way over the cap
+
+	prompt := BuildAnalyzePrompt(ctx, transcript)
+
+	// transcript portion is bounded; prompt has fixed header/footer (<2k runes).
+	runes := []rune(prompt)
+	if len(runes) > maxAnalyzeTranscriptRunes+2000 {
+		t.Errorf("prompt not bounded: %d runes (cap %d)", len(runes), maxAnalyzeTranscriptRunes+2000)
+	}
+	// JSON instructions at the end must still be present.
+	if !strings.Contains(prompt, "JSONのみを出力してください") {
+		t.Error("trailing JSON-output instruction was lost — transcript truncation must not eat the suffix")
+	}
+}
+
+func TestReadTranscriptForAnalyze_SmallFileFullRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "small.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	excerpt, newOffset, tailed, fullSize, err := ReadTranscriptForAnalyze(path, 50, 0)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if tailed {
+		t.Error("small file must not be tail-read")
+	}
+	if fullSize == 0 {
+		t.Error("fullSize should be > 0")
+	}
+	if newOffset != fullSize {
+		t.Errorf("newOffset = %d, want fullSize %d", newOffset, fullSize)
+	}
+	if !strings.Contains(excerpt, "hi") || !strings.Contains(excerpt, "hello") {
+		t.Errorf("excerpt missing content: %q", excerpt)
+	}
+}
+
+func TestReadTranscriptForAnalyze_LargeFileTailed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.jsonl")
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pad with junk past the threshold, then a valid line at the very end.
+	pad := strings.Repeat("x", AnalyzeMaxReadBytes+100)
+	if _, err := f.WriteString(pad); err != nil {
+		t.Fatal(err)
+	}
+	tailLine := "\n" + `{"type":"user","message":{"role":"user","content":"end-of-file marker"}}` + "\n"
+	if _, err := f.WriteString(tailLine); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	excerpt, newOffset, tailed, fullSize, err := ReadTranscriptForAnalyze(path, 50, 12345)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !tailed {
+		t.Fatal("oversized file must be tail-read")
+	}
+	if newOffset != fullSize {
+		t.Errorf("newOffset = %d, want fullSize %d (offset must be reset on tail-read)", newOffset, fullSize)
+	}
+	if !strings.Contains(excerpt, "end-of-file marker") {
+		t.Errorf("tail content missing from excerpt: %q", excerpt)
+	}
+	// The leading junk must not appear — it was outside the tail window AND
+	// wouldn't parse anyway. Both layers should reject it.
+	if strings.Contains(excerpt, "xxxx") {
+		t.Errorf("junk leaked into excerpt: %q", excerpt[:200])
+	}
+}
+
+func TestReadTranscriptForAnalyze_MissingFile(t *testing.T) {
+	_, _, _, _, err := ReadTranscriptForAnalyze("/nonexistent/path.jsonl", 50, 0)
+	if err == nil {
+		t.Error("missing file should return error")
 	}
 }
 
