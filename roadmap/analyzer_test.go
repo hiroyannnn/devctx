@@ -1,6 +1,8 @@
 package roadmap
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -316,4 +318,209 @@ func TestReadTranscriptTail_WithOffset(t *testing.T) {
 	if !strings.Contains(got, "newest") {
 		t.Error("should contain lines after offset")
 	}
+}
+
+func TestReadTranscriptTail_FiltersNonConversational(t *testing.T) {
+	// Regression: queue-operation / file-history-snapshot / progress entries
+	// must be skipped. Embedding their `content` back into the analyze prompt
+	// is what caused the exponential JSON-escape blowup.
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"始めよう"}}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"\\\\\\\\\\\\\\\\ noisy escaped blob"}`,
+		`{"type":"file-history-snapshot","snapshot":{"trackedFileBackups":{}}}`,
+		`{"type":"progress","status":"running"}`,
+		`{"type":"last-prompt","content":"…"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"了解"}]}}`,
+	}
+	content := strings.Join(lines, "\n")
+
+	got, _ := ReadTranscriptTail(content, 50, 0)
+
+	if strings.Contains(got, "queue-operation") || strings.Contains(got, "noisy escaped blob") {
+		t.Errorf("queue-operation entry must not appear in output: %q", got)
+	}
+	if strings.Contains(got, "file-history-snapshot") || strings.Contains(got, "trackedFileBackups") {
+		t.Errorf("file-history-snapshot entry must not appear: %q", got)
+	}
+	if strings.Contains(got, `\\`) {
+		t.Errorf("output must not carry escape sequences: %q", got)
+	}
+	if !strings.Contains(got, "user: 始めよう") {
+		t.Errorf("user message missing from output: %q", got)
+	}
+	if !strings.Contains(got, "assistant: 了解") {
+		t.Errorf("assistant text part missing from output: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_SidechainSkipped(t *testing.T) {
+	// Sub-agent sidechain turns are noise for the parent session's analysis.
+	lines := []string{
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":"sub-agent prompt"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"main reply"}]}}`,
+	}
+	got, _ := ReadTranscriptTail(strings.Join(lines, "\n"), 50, 0)
+
+	if strings.Contains(got, "sub-agent prompt") {
+		t.Errorf("sidechain content must be filtered: %q", got)
+	}
+	if !strings.Contains(got, "main reply") {
+		t.Errorf("main reply missing: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_ToolUseAndResult(t *testing.T) {
+	// tool_use → short marker, tool_result → dropped (large/noisy).
+	line := `{"type":"assistant","message":{"role":"assistant","content":[` +
+		`{"type":"text","text":"調べます"},` +
+		`{"type":"tool_use","name":"Bash","input":{"command":"git status"}},` +
+		`{"type":"tool_result","content":"on branch main\nnothing to commit"}` +
+		`]}}`
+
+	got, _ := ReadTranscriptTail(line, 50, 0)
+
+	if !strings.Contains(got, "調べます") {
+		t.Errorf("text part missing: %q", got)
+	}
+	if !strings.Contains(got, "[tool: Bash]") {
+		t.Errorf("tool_use marker missing: %q", got)
+	}
+	if strings.Contains(got, "nothing to commit") {
+		t.Errorf("tool_result body must not leak into output: %q", got)
+	}
+}
+
+func TestReadTranscriptTail_TruncatesLongMessage(t *testing.T) {
+	// A single huge user paste must not dominate the prompt.
+	huge := strings.Repeat("あ", 5000)
+	line := `{"type":"user","message":{"role":"user","content":` +
+		jsonString(huge) + `}}`
+
+	got, _ := ReadTranscriptTail(line, 50, 0)
+
+	runes := []rune(got)
+	if len(runes) > maxTranscriptMessageRunes+200 {
+		t.Errorf("message not truncated: %d runes", len(runes))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncation marker missing: %q", got[len(got)-30:])
+	}
+}
+
+func TestBuildAnalyzePrompt_TruncatesLongTranscript(t *testing.T) {
+	ctx := &model.Context{Name: "huge"}
+	transcript := strings.Repeat("user: あ\n", 20000) // ~ 40k lines, way over the cap
+
+	prompt := BuildAnalyzePrompt(ctx, transcript)
+
+	// transcript portion is bounded; prompt has fixed header/footer (<2k runes).
+	runes := []rune(prompt)
+	if len(runes) > maxAnalyzeTranscriptRunes+2000 {
+		t.Errorf("prompt not bounded: %d runes (cap %d)", len(runes), maxAnalyzeTranscriptRunes+2000)
+	}
+	// JSON instructions at the end must still be present.
+	if !strings.Contains(prompt, "JSONのみを出力してください") {
+		t.Error("trailing JSON-output instruction was lost — transcript truncation must not eat the suffix")
+	}
+}
+
+func TestReadTranscriptForAnalyze_SmallFileFullRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "small.jsonl")
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	excerpt, newOffset, tailed, fullSize, err := ReadTranscriptForAnalyze(path, 50, 0)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if tailed {
+		t.Error("small file must not be tail-read")
+	}
+	if fullSize == 0 {
+		t.Error("fullSize should be > 0")
+	}
+	if newOffset != fullSize {
+		t.Errorf("newOffset = %d, want fullSize %d", newOffset, fullSize)
+	}
+	if !strings.Contains(excerpt, "hi") || !strings.Contains(excerpt, "hello") {
+		t.Errorf("excerpt missing content: %q", excerpt)
+	}
+}
+
+func TestReadTranscriptForAnalyze_LargeFileTailed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.jsonl")
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pad with junk past the threshold, then a valid line at the very end.
+	pad := strings.Repeat("x", AnalyzeMaxReadBytes+100)
+	if _, err := f.WriteString(pad); err != nil {
+		t.Fatal(err)
+	}
+	tailLine := "\n" + `{"type":"user","message":{"role":"user","content":"end-of-file marker"}}` + "\n"
+	if _, err := f.WriteString(tailLine); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	excerpt, newOffset, tailed, fullSize, err := ReadTranscriptForAnalyze(path, 50, 12345)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !tailed {
+		t.Fatal("oversized file must be tail-read")
+	}
+	if newOffset != fullSize {
+		t.Errorf("newOffset = %d, want fullSize %d (offset must be reset on tail-read)", newOffset, fullSize)
+	}
+	if !strings.Contains(excerpt, "end-of-file marker") {
+		t.Errorf("tail content missing from excerpt: %q", excerpt)
+	}
+	// The leading junk must not appear — it was outside the tail window AND
+	// wouldn't parse anyway. Both layers should reject it.
+	if strings.Contains(excerpt, "xxxx") {
+		t.Errorf("junk leaked into excerpt: %q", excerpt[:200])
+	}
+}
+
+func TestReadTranscriptForAnalyze_MissingFile(t *testing.T) {
+	_, _, _, _, err := ReadTranscriptForAnalyze("/nonexistent/path.jsonl", 50, 0)
+	if err == nil {
+		t.Error("missing file should return error")
+	}
+}
+
+// jsonString quotes s as a JSON string literal for embedding in raw JSONL
+// fixtures. Equivalent to encoding/json's string encoding for ASCII/Unicode
+// content (no need for HTML-safe escaping in tests).
+func jsonString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }

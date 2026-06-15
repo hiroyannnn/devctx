@@ -348,13 +348,6 @@ With --background, forks to background and returns immediately.`,
 				}
 			}
 
-			// Read transcript
-			data, err := os.ReadFile(ctx.TranscriptPath)
-			if err != nil {
-				fmt.Printf("  Skipped: cannot read transcript: %v\n", err)
-				continue
-			}
-
 			// Get previous offset for incremental processing (read-only)
 			var prevOffset int64
 			if insights, _ := s.LoadInsights(); insights != nil {
@@ -363,7 +356,15 @@ With --background, forks to background and returns immediately.`,
 				}
 			}
 
-			transcript, newOffset := roadmap.ReadTranscriptTail(string(data), 50, prevOffset)
+			transcript, newOffset, tailed, fullSize, err := roadmap.ReadTranscriptForAnalyze(ctx.TranscriptPath, 50, prevOffset)
+			if err != nil {
+				fmt.Printf("  Skipped: cannot read transcript: %v\n", err)
+				continue
+			}
+			if tailed {
+				fmt.Printf("  Warning: transcript is %.1fMB; analyzing last %dMB only (large or corrupted)\n",
+					float64(fullSize)/(1024*1024), roadmap.AnalyzeTailReadBytes/(1024*1024))
+			}
 			if transcript == "" {
 				fmt.Printf("  Skipped: no new transcript content\n")
 				continue
