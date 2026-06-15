@@ -439,14 +439,14 @@ func execAnalyzeBackground(args []string) error {
 	return nil
 }
 
+// TODO: claude -p 廃止により無効化。代替手段を検討
+// 旧実装は `claude --print --model claude-sonnet-4-20250514 -p -` を呼び出していたが、
+// claude CLI の print モード (-p / --print) が廃止予定であり、かつモデル ID
+// claude-sonnet-4-20250514 も廃止済み (新 ID: claude-sonnet-4-6) のため無効化した。
+// LLM 解析を復活させる場合は Claude API/SDK 経由など別の代替手段を検討すること。
 func runClaude(prompt string) (string, error) {
-	cmd := exec.Command("claude", "--print", "--model", "claude-sonnet-4-20250514", "-p", "-")
-	cmd.Stdin = strings.NewReader(prompt)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("claude CLI failed: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
+	_ = prompt
+	return "", fmt.Errorf("roadmap analyze は無効化されています: claude CLI の print モード (-p) 廃止により利用できません")
 }
 
 // --- roadmap refresh ---
