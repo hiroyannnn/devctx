@@ -105,7 +105,7 @@ eval "$(devctx shell-init)"
 | `devctx list` | カンバン形式で一覧表示 |
 | `devctx tui` | 対話的 TUI ダッシュボード |
 | `devctx show <name>` | コンテキストの詳細表示 |
-| `devctx register <name>` | コンテキストを登録（通常は hook で自動） |
+| `devctx register <name>` | コンテキストを登録（通常は hook で自動）。`--provider codex` で Claude 以外のエージェントを同じ worktree に別コンテキストとして登録 |
 | `devctx resume <name>` | コンテキストを再開 |
 | `devctx move <name> <status>` | ステータスを変更 |
 | `devctx touch <name>` | コンテキストの最終アクティブ時刻を更新 |

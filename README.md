@@ -105,7 +105,7 @@ eval "$(devctx shell-init)"
 | `devctx list` | Display contexts in kanban view |
 | `devctx tui` | Open interactive TUI dashboard |
 | `devctx show <name>` | Show context details |
-| `devctx register <name>` | Register a context (usually auto via hook) |
+| `devctx register <name>` | Register a context (usually auto via hook). Use `--provider codex` to register a non-Claude agent as a separate context in the same worktree |
 | `devctx resume <name>` | Resume a context |
 | `devctx move <name> <status>` | Change status |
 | `devctx touch <name>` | Update context's last-seen timestamp |

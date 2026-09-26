@@ -25,7 +25,7 @@ type SessionStartInput struct {
 
 var registerCmd = &cobra.Command{
 	Use:   "register [name]",
-	Short: "Register current worktree with a Claude session",
+	Short: "Register current worktree with an agent session",
 	Long: `Register the current directory as a development context.
 If called from a Claude Code hook, reads session info from stdin.
 If called manually, uses current directory and prompts for name.`,
@@ -70,91 +70,57 @@ If called manually, uses current directory and prompts for name.`,
 		// Detect repo root for project grouping
 		repoRoot := detectRepoRoot(cwd)
 
-		// Check if already registered by worktree
-		existing := store.FindByWorktree(cwd)
-		if existing != nil {
-			// Update existing context
-			if input.SessionID != "" {
-				existing.SessionID = input.SessionID
-				existing.TranscriptPath = input.TranscriptPath
-				// Try to extract session name from transcript
-				if input.TranscriptPath != "" {
-					if sessionName := extractSessionName(input.TranscriptPath); sessionName != "" {
-						existing.SessionName = sessionName
-					}
-				}
-			}
-			existing.LastSeen = time.Now()
-			if branch != "" {
-				existing.Branch = branch
-			}
-			if repoRoot != "" {
-				existing.RepoRoot = repoRoot
-			}
-			// Auto-detect phase (fast mode for hook performance)
-			phaseScanner := roadmap.NewScanner()
-			phaseScanner.RefreshPhase(existing, roadmap.ScanModeFast)
-
-			// Collect git milestones
-			collectAndSaveMilestones(s, existing)
-
-			// Record session_start event
-			recordEvent(s, existing.Name, model.MilestoneSessionStart, "")
-
-			if err := s.SaveStore(store); err != nil {
-				return err
-			}
-			fmt.Printf("Updated context [%s]\n", existing.Name)
-			return nil
+		provider, err := model.ParseProvider(registerProvider)
+		if err != nil {
+			return err
 		}
 
-		// Determine name
+		// Determine name hint (used only when a new context is created)
 		if len(args) > 0 {
 			name = args[0]
 		} else {
-			// Generate name from branch or directory
 			name = generateName(branch, cwd)
 		}
 
-		// Check for name collision
-		if store.FindByName(name) != nil {
-			name = name + "-" + time.Now().Format("0102")
-		}
-
-		// Extract session name if transcript is available
+		// Session name is extracted from Claude Code transcripts only
 		sessionName := ""
-		if input.TranscriptPath != "" {
+		if provider == model.ProviderClaude && input.TranscriptPath != "" {
 			sessionName = extractSessionName(input.TranscriptPath)
 		}
 
-		// Create new context
-		ctx := model.Context{
+		ctx, created := upsertRegistration(store, registration{
 			Name:           name,
 			Worktree:       cwd,
 			Branch:         branch,
+			RepoRoot:       repoRoot,
+			Provider:       provider,
 			SessionID:      input.SessionID,
 			SessionName:    sessionName,
 			TranscriptPath: input.TranscriptPath,
-			Status:         model.StatusInProgress,
-			CreatedAt:      time.Now(),
-			LastSeen:       time.Now(),
-			Checklist:      make(map[string]bool),
-			RepoRoot:       repoRoot,
-		}
+		}, time.Now())
 
 		// Auto-detect phase (fast mode for hook performance)
 		phaseScanner := roadmap.NewScanner()
-		phaseScanner.RefreshPhase(&ctx, roadmap.ScanModeFast)
+		phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
 
-		store.Add(ctx)
+		if !created {
+			// Collect git milestones
+			collectAndSaveMilestones(s, ctx)
+		}
 
 		// Record session_start event
-		recordEvent(s, name, model.MilestoneSessionStart, "")
+		recordEvent(s, ctx.Name, model.MilestoneSessionStart, "")
+
 		if err := s.SaveStore(store); err != nil {
 			return err
 		}
 
-		fmt.Printf("Registered new context [%s]\n", name)
+		if !created {
+			fmt.Printf("Updated context [%s]\n", ctx.Name)
+			return nil
+		}
+
+		fmt.Printf("Registered new context [%s] (%s)\n", ctx.Name, provider)
 		fmt.Printf("  Worktree: %s\n", cwd)
 		fmt.Printf("  Branch: %s\n", branch)
 		if input.SessionID != "" {
@@ -163,6 +129,83 @@ If called manually, uses current directory and prompts for name.`,
 
 		return nil
 	},
+}
+
+var registerProvider string
+
+func init() {
+	registerCmd.Flags().StringVar(&registerProvider, "provider", "claude", "Agent provider (claude/codex/manual)")
+}
+
+// registration は register コマンドが context に反映する入力。
+type registration struct {
+	Name           string // 新規作成時の名前の候補
+	Worktree       string
+	Branch         string
+	RepoRoot       string
+	Provider       model.Provider
+	SessionID      string
+	SessionName    string
+	TranscriptPath string
+}
+
+// upsertRegistration は (worktree, provider) が一致する context を更新し、なければ作成する。
+// 同じ worktree でも provider が違えば別の context として扱う。
+func upsertRegistration(store *model.Store, reg registration, now time.Time) (*model.Context, bool) {
+	if existing := store.FindByWorktreeAndProvider(reg.Worktree, reg.Provider); existing != nil {
+		if reg.SessionID != "" {
+			existing.SessionID = reg.SessionID
+			existing.TranscriptPath = reg.TranscriptPath
+			if reg.SessionName != "" {
+				existing.SessionName = reg.SessionName
+			}
+		}
+		existing.LastSeen = now
+		if reg.Branch != "" {
+			existing.Branch = reg.Branch
+		}
+		if reg.RepoRoot != "" {
+			existing.RepoRoot = reg.RepoRoot
+		}
+		return existing, false
+	}
+
+	ctx := model.Context{
+		Name:           uniqueContextName(store, reg.Name, reg.Provider, now),
+		Worktree:       reg.Worktree,
+		Branch:         reg.Branch,
+		SessionID:      reg.SessionID,
+		SessionName:    reg.SessionName,
+		TranscriptPath: reg.TranscriptPath,
+		Status:         model.StatusInProgress,
+		CreatedAt:      now,
+		LastSeen:       now,
+		Checklist:      make(map[string]bool),
+		RepoRoot:       reg.RepoRoot,
+	}
+	// claude は既存データと同じく provider を空のまま保存する
+	if reg.Provider != model.ProviderClaude {
+		ctx.Provider = reg.Provider
+	}
+	store.Add(ctx)
+	return &store.Contexts[len(store.Contexts)-1], true
+}
+
+// uniqueContextName は既存の context と衝突しない名前を返す。
+// 衝突時は claude なら日付、それ以外は provider 名を付け、それでも衝突すれば連番を足す。
+func uniqueContextName(store *model.Store, base string, provider model.Provider, now time.Time) string {
+	if store.FindByName(base) == nil {
+		return base
+	}
+	suffix := now.Format("0102")
+	if provider != model.ProviderClaude {
+		suffix = string(provider)
+	}
+	candidate := base + "-" + suffix
+	for i := 2; store.FindByName(candidate) != nil; i++ {
+		candidate = fmt.Sprintf("%s-%s-%d", base, suffix, i)
+	}
+	return candidate
 }
 
 func getGitBranch(dir string) string {
