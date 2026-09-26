@@ -70,26 +70,15 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 			return nil
 		}
 
-		var name string
-		if len(args) > 0 {
-			name = args[0]
-		} else {
-			// Find by current directory
-			cwd := getWorktreeRoot(".")
-			if cwd == "" {
-				return fmt.Errorf("not in a git repository")
-			}
-			ctx := store.FindByWorktree(cwd)
-			if ctx == nil {
-				return fmt.Errorf("no context found for current directory")
-			}
-			name = ctx.Name
+		cwd := getWorktreeRoot(".")
+		if cwd == "" && len(args) == 0 {
+			return fmt.Errorf("not in a git repository")
 		}
-
-		ctx := store.FindByName(name)
-		if ctx == nil {
-			return fmt.Errorf("context [%s] not found", name)
+		ctx, err := resolveContext(store, args, cwd)
+		if err != nil {
+			return err
 		}
+		name := ctx.Name
 
 		// Check if gh is available
 		if _, err := exec.LookPath("gh"); err != nil {

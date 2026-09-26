@@ -35,25 +35,16 @@ Without a name argument, uses the context matching the current directory.`,
 		}
 
 		// Find target context
-		var ctx *model.Context
-		if len(args) > 0 {
-			ctx = store.FindByName(args[0])
-			if ctx == nil {
-				return fmt.Errorf("context [%s] not found", args[0])
-			}
-		} else {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("failed to get current directory: %w", err)
-			}
-			worktreeRoot := getWorktreeRoot(cwd)
-			if worktreeRoot != "" {
-				cwd = worktreeRoot
-			}
-			ctx = store.FindByWorktree(cwd)
-			if ctx == nil {
-				return fmt.Errorf("no context found for current directory\nSpecify a name as argument")
-			}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+		if worktreeRoot := getWorktreeRoot(cwd); worktreeRoot != "" {
+			cwd = worktreeRoot
+		}
+		ctx, err := resolveContext(store, args, cwd)
+		if err != nil {
+			return err
 		}
 
 		// Validate state flag early

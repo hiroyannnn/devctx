@@ -96,15 +96,6 @@ func (s *Store) FindByName(name string) *Context {
 	return nil
 }
 
-func (s *Store) FindByWorktree(worktree string) *Context {
-	for i := range s.Contexts {
-		if s.Contexts[i].Worktree == worktree {
-			return &s.Contexts[i]
-		}
-	}
-	return nil
-}
-
 func (s *Store) Active() []Context {
 	return s.ActiveWithRetention(0)
 }

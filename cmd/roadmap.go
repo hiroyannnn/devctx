@@ -72,16 +72,9 @@ Examples:
 			worktree = root
 		}
 
-		ctx := store.FindByWorktree(worktree)
-		if ctx == nil {
-			// Try finding by name from args
-			if len(args) > 0 {
-				ctx = store.FindByName(args[0])
-			}
-		}
-
-		if ctx == nil {
-			return fmt.Errorf("no context found for worktree %s\nRegister a context first with 'devctx register'", worktree)
+		ctx, err := resolveContext(store, args, worktree)
+		if err != nil {
+			return err
 		}
 
 		ctx.InitialPrompt = roadmapInitPrompt
@@ -298,12 +291,6 @@ With --background, forks to background and returns immediately.`,
 					targets = append(targets, &store.Contexts[i])
 				}
 			}
-		} else if len(args) > 0 {
-			ctx := store.FindByName(args[0])
-			if ctx == nil {
-				return fmt.Errorf("context [%s] not found", args[0])
-			}
-			targets = append(targets, ctx)
 		} else {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -313,9 +300,9 @@ With --background, forks to background and returns immediately.`,
 			if worktreeRoot != "" {
 				cwd = worktreeRoot
 			}
-			ctx := store.FindByWorktree(cwd)
-			if ctx == nil {
-				return fmt.Errorf("no context found for current directory\nSpecify a name or use --all")
+			ctx, err := resolveContext(store, args, cwd)
+			if err != nil {
+				return err
 			}
 			targets = append(targets, ctx)
 		}
