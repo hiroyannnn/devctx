@@ -524,18 +524,12 @@ func (m kanbanModel) selectedContext() *model.Context {
 	return nil
 }
 
-func (m kanbanModel) getResumeCommand() string {
+func (m kanbanModel) getResumeCommand() (string, error) {
 	ctx := m.selectedContext()
 	if ctx == nil {
-		return ""
+		return "", nil
 	}
-	cmd := fmt.Sprintf("cd '%s'", ctx.Worktree)
-	if ctx.SessionID != "" {
-		cmd += fmt.Sprintf(" && claude --resume '%s'", ctx.SessionID)
-	} else {
-		cmd += " && claude"
-	}
-	return cmd
+	return resumeShellCommand(*ctx)
 }
 
 func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -606,8 +600,10 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter", "c":
 			// Copy resume command to clipboard
-			cmd := m.getResumeCommand()
-			if cmd != "" {
+			cmd, err := m.getResumeCommand()
+			if err != nil {
+				m.message = "❌ " + err.Error()
+			} else if cmd != "" {
 				if err := clipboard.WriteAll(cmd); err == nil {
 					m.message = "📋 Copied to clipboard!"
 				} else {
@@ -620,7 +616,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Open in new terminal
 			ctx := m.selectedContext()
 			if ctx != nil {
-				if err := openInNewTerminal(ctx.Worktree, ctx.SessionID); err == nil {
+				if err := openInNewTerminal(*ctx); err == nil {
 					m.message = "🚀 Opened in new terminal!"
 				} else {
 					m.message = "❌ Failed to open: " + err.Error()
@@ -733,12 +729,10 @@ func (m kanbanModel) View() string {
 	return header + selectedInfo + msgLine + kanban
 }
 
-func openInNewTerminal(worktree, sessionID string) error {
-	var cmd string
-	if sessionID != "" {
-		cmd = fmt.Sprintf("cd '%s' && claude --resume '%s'", worktree, sessionID)
-	} else {
-		cmd = fmt.Sprintf("cd '%s' && claude", worktree)
+func openInNewTerminal(ctx model.Context) error {
+	cmd, err := resumeShellCommand(ctx)
+	if err != nil {
+		return err
 	}
 
 	switch runtime.GOOS {

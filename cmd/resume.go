@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -35,16 +36,16 @@ var resumeCmd = &cobra.Command{
 			return fmt.Errorf("worktree directory does not exist: %s", ctx.Worktree)
 		}
 
+		agentCmd, err := agentResumeCommand(*ctx)
+		if err != nil {
+			return err
+		}
+
 		// Print instructions for shell integration
 		// The actual cd must happen in the shell, so we output commands
 		fmt.Printf("# Run the following commands:\n")
 		fmt.Printf("cd %s\n", ctx.Worktree)
-		
-		if ctx.SessionID != "" {
-			fmt.Printf("claude --resume %s\n", ctx.SessionID)
-		} else {
-			fmt.Printf("claude\n")
-		}
+		fmt.Println(agentCmd)
 
 		return nil
 	},
@@ -74,13 +75,11 @@ var resumeShellCmd = &cobra.Command{
 		}
 
 		// Output commands that can be eval'd
-		fmt.Printf("cd '%s'", ctx.Worktree)
-		if ctx.SessionID != "" {
-			fmt.Printf(" && claude --resume '%s'", ctx.SessionID)
-		} else {
-			fmt.Printf(" && claude")
+		shellCmd, err := resumeShellCommand(*ctx)
+		if err != nil {
+			return err
 		}
-		fmt.Println()
+		fmt.Println(shellCmd)
 
 		return nil
 	},
@@ -106,4 +105,27 @@ func LaunchInNewTerminal(worktree, sessionID string) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
+}
+
+// agentResumeCommand は context のエージェントを再開するコマンドを返す。
+// 再開方法が未実装の provider はエラーにする（誤って claude --resume を出さないため）。
+func agentResumeCommand(ctx model.Context) (string, error) {
+	switch p := ctx.EffectiveProvider(); p {
+	case model.ProviderClaude:
+		if ctx.SessionID != "" {
+			return fmt.Sprintf("claude --resume '%s'", ctx.SessionID), nil
+		}
+		return "claude", nil
+	default:
+		return "", fmt.Errorf("resume is not supported for provider %q yet", p)
+	}
+}
+
+// resumeShellCommand は worktree へ移動してエージェントを再開する shell コマンドを返す。
+func resumeShellCommand(ctx model.Context) (string, error) {
+	agentCmd, err := agentResumeCommand(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("cd '%s' && %s", ctx.Worktree, agentCmd), nil
 }

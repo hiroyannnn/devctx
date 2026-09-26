@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -51,7 +52,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 			updated := 0
 			for i := range store.Contexts {
 				ctx := &store.Contexts[i]
-				if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+				if needsSessionNameRefresh(*ctx) {
 					if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
 						ctx.SessionName = sessionName
 						fmt.Printf("✓ [%s] %s\n", ctx.Name, sessionName)
@@ -277,4 +278,9 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(prCmd)
 	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Refresh session names for all contexts")
+}
+
+// needsSessionNameRefresh は Claude Code の transcript からセッション名を補完すべきかを返す。
+func needsSessionNameRefresh(ctx model.Context) bool {
+	return ctx.EffectiveProvider() == model.ProviderClaude && ctx.TranscriptPath != "" && ctx.SessionName == ""
 }
