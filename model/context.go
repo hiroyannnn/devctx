@@ -96,15 +96,6 @@ func (s *Store) FindByName(name string) *Context {
 	return nil
 }
 
-func (s *Store) FindBySessionID(sessionID string) *Context {
-	for i := range s.Contexts {
-		if s.Contexts[i].SessionID == sessionID {
-			return &s.Contexts[i]
-		}
-	}
-	return nil
-}
-
 func (s *Store) FindByWorktree(worktree string) *Context {
 	for i := range s.Contexts {
 		if s.Contexts[i].Worktree == worktree {

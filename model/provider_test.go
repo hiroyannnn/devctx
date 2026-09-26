@@ -63,3 +63,50 @@ func TestContextYAMLKeepsLegacyFormat(t *testing.T) {
 		t.Fatalf("loaded provider = %q, want %q", loaded.Provider, ProviderCodex)
 	}
 }
+
+func TestStoreProviderAwareFinders(t *testing.T) {
+	store := &Store{
+		Contexts: []Context{
+			{Name: "feat-x", SessionID: "s1", Worktree: "/tmp/feat-x"},
+			{Name: "feat-x-0926", SessionID: "s1", Worktree: "/tmp/feat-x", Provider: ProviderCodex},
+			{Name: "other", SessionID: "s2", Worktree: "/tmp/other"},
+		},
+	}
+
+	all := store.FindAllByWorktree("/tmp/feat-x")
+	if len(all) != 2 || all[0].Name != "feat-x" || all[1].Name != "feat-x-0926" {
+		t.Fatalf("FindAllByWorktree = %v, want [feat-x feat-x-0926]", names(all))
+	}
+	all[1].Note = "mutated"
+	if store.Contexts[1].Note != "mutated" {
+		t.Fatalf("FindAllByWorktree should return pointers into the store")
+	}
+
+	if got := store.FindByWorktreeAndProvider("/tmp/feat-x", ProviderClaude); got == nil || got.Name != "feat-x" {
+		t.Fatalf("FindByWorktreeAndProvider(claude) = %v, want feat-x", got)
+	}
+	if got := store.FindByWorktreeAndProvider("/tmp/feat-x", ProviderCodex); got == nil || got.Name != "feat-x-0926" {
+		t.Fatalf("FindByWorktreeAndProvider(codex) = %v, want feat-x-0926", got)
+	}
+	if got := store.FindByWorktreeAndProvider("/tmp/other", ProviderCodex); got != nil {
+		t.Fatalf("FindByWorktreeAndProvider(other, codex) = %v, want nil", got.Name)
+	}
+
+	if got := store.FindByProviderSession(ProviderCodex, "s1"); got == nil || got.Name != "feat-x-0926" {
+		t.Fatalf("FindByProviderSession(codex, s1) = %v, want feat-x-0926", got)
+	}
+	if got := store.FindByProviderSession(ProviderClaude, "s1"); got == nil || got.Name != "feat-x" {
+		t.Fatalf("FindByProviderSession(claude, s1) = %v, want feat-x", got)
+	}
+	if got := store.FindByProviderSession(ProviderClaude, ""); got != nil {
+		t.Fatalf("FindByProviderSession with empty id = %v, want nil", got.Name)
+	}
+}
+
+func names(contexts []*Context) []string {
+	var result []string
+	for _, c := range contexts {
+		result = append(result, c.Name)
+	}
+	return result
+}

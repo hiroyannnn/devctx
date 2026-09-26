@@ -135,7 +135,7 @@ func discoverSessions(store *model.Store) ([]DiscoveredSession, error) {
 			sessionName := extractSessionName(transcriptPath)
 
 			// Check if already registered
-			isRegistered := store.FindBySessionID(sessionID) != nil
+			isRegistered := store.FindByProviderSession(model.ProviderClaude, sessionID) != nil
 
 			// Count messages
 			msgCount := countMessages(transcriptPath)
