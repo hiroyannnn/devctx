@@ -49,24 +49,25 @@ func (p Phase) Label() string {
 }
 
 type Context struct {
-	Name           string            `yaml:"name"`
-	Worktree       string            `yaml:"worktree"`
-	Branch         string            `yaml:"branch"`
-	SessionID      string            `yaml:"session_id"`
-	SessionName    string            `yaml:"session_name,omitempty"` // Claude Code's auto-generated session name (slug)
-	TranscriptPath string            `yaml:"transcript_path,omitempty"`
-	Status         Status            `yaml:"status"`
-	CreatedAt      time.Time         `yaml:"created_at"`
-	LastSeen       time.Time         `yaml:"last_seen"`
-	Checklist      map[string]bool   `yaml:"checklist,omitempty"`
-	Note           string            `yaml:"note,omitempty"`
-	TotalTime      time.Duration     `yaml:"total_time,omitempty"`
-	IssueURL       string            `yaml:"issue_url,omitempty"`
-	PRURL          string            `yaml:"pr_url,omitempty"`
-	InitialPrompt  string            `yaml:"initial_prompt,omitempty"`
-	Phase          Phase             `yaml:"phase,omitempty"`
-	PhaseCheckedAt time.Time         `yaml:"phase_checked_at,omitempty"`
-	RepoRoot       string            `yaml:"repo_root,omitempty"` // Git repo root path for project grouping
+	Name           string          `yaml:"name"`
+	Worktree       string          `yaml:"worktree"`
+	Branch         string          `yaml:"branch"`
+	SessionID      string          `yaml:"session_id"`
+	SessionName    string          `yaml:"session_name,omitempty"` // Claude Code's auto-generated session name (slug)
+	TranscriptPath string          `yaml:"transcript_path,omitempty"`
+	Status         Status          `yaml:"status"`
+	CreatedAt      time.Time       `yaml:"created_at"`
+	LastSeen       time.Time       `yaml:"last_seen"`
+	Checklist      map[string]bool `yaml:"checklist,omitempty"`
+	Note           string          `yaml:"note,omitempty"`
+	TotalTime      time.Duration   `yaml:"total_time,omitempty"`
+	IssueURL       string          `yaml:"issue_url,omitempty"`
+	PRURL          string          `yaml:"pr_url,omitempty"`
+	InitialPrompt  string          `yaml:"initial_prompt,omitempty"`
+	Phase          Phase           `yaml:"phase,omitempty"`
+	PhaseCheckedAt time.Time       `yaml:"phase_checked_at,omitempty"`
+	RepoRoot       string          `yaml:"repo_root,omitempty"` // Git repo root path for project grouping
+	Provider       Provider        `yaml:"provider,omitempty"`  // 空は claude（EffectiveProvider を使う）
 }
 
 type Config struct {
