@@ -269,9 +269,10 @@ With --all, analyzes all active contexts.
 With --if-stale, skips analysis if last insight is fresh (default: 5 min cooldown).
 With --background, forks to background and returns immediately.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Background mode: re-exec self as detached process
-		if roadmapAnalyzeBackground {
-			return execAnalyzeBackground(args)
+		// Called from a Claude Code hook (Stop): identify the session from stdin
+		hookSessionID := ""
+		if len(args) == 0 && !roadmapAnalyzeAll && stdinIsPipe() {
+			hookSessionID = readHookSessionID(os.Stdin)
 		}
 
 		s, err := storage.New()
@@ -281,6 +282,15 @@ With --background, forks to background and returns immediately.`,
 		store, err := s.LoadStore()
 		if err != nil {
 			return err
+		}
+
+		// Background mode: re-exec self as detached process
+		if roadmapAnalyzeBackground {
+			// The child has no stdin, so pass the hook session's context by name
+			if ctx := store.FindByProviderSession(model.ProviderClaude, hookSessionID); ctx != nil && len(args) == 0 {
+				args = []string{ctx.Name}
+			}
+			return execAnalyzeBackground(args)
 		}
 
 		var targets []*model.Context
@@ -300,7 +310,7 @@ With --background, forks to background and returns immediately.`,
 			if worktreeRoot != "" {
 				cwd = worktreeRoot
 			}
-			ctx, err := resolveContext(store, args, cwd)
+			ctx, err := resolveHookContext(store, args, hookSessionID, cwd)
 			if err != nil {
 				return err
 			}

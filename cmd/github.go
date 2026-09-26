@@ -110,7 +110,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		}
 
 		// Refresh session name from transcript if available
-		if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+		if needsSessionNameRefresh(*ctx) {
 			if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
 				ctx.SessionName = sessionName
 				fmt.Printf("✓ Found session name: %s\n", sessionName)

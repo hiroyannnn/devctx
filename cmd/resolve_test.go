@@ -60,3 +60,49 @@ func TestResolveContext_AmbiguousWorktree(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveHookContext_PrefersClaudeSession(t *testing.T) {
+	store := resolveTestStore()
+	store.Contexts[1].SessionID = "c1"
+	ctx, err := resolveHookContext(store, nil, "c1", "/w/feat-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Name != "feat-x" {
+		t.Fatalf("got %q, want claude context resolved by session id despite ambiguous worktree", ctx.Name)
+	}
+}
+
+func TestResolveHookContext_FallsBackToWorktree(t *testing.T) {
+	ctx, err := resolveHookContext(resolveTestStore(), nil, "unknown", "/w/solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Name != "solo" {
+		t.Fatalf("got %q, want solo", ctx.Name)
+	}
+}
+
+func TestResolveHookContext_ExplicitNameWins(t *testing.T) {
+	store := resolveTestStore()
+	store.Contexts[1].SessionID = "c1"
+	ctx, err := resolveHookContext(store, []string{"solo"}, "c1", "/w/feat-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Name != "solo" {
+		t.Fatalf("got %q, want explicit name solo", ctx.Name)
+	}
+}
+
+func TestReadHookSessionID(t *testing.T) {
+	if got := readHookSessionID(strings.NewReader(`{"session_id":"c1","cwd":"/w"}` + "\n")); got != "c1" {
+		t.Fatalf("readHookSessionID = %q, want c1", got)
+	}
+	if got := readHookSessionID(strings.NewReader("not json")); got != "" {
+		t.Fatalf("readHookSessionID(invalid) = %q, want empty", got)
+	}
+	if got := readHookSessionID(strings.NewReader("")); got != "" {
+		t.Fatalf("readHookSessionID(empty) = %q, want empty", got)
+	}
+}
