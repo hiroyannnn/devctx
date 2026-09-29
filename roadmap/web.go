@@ -76,6 +76,18 @@ type RoadmapEntry struct {
 	Milestones     *model.MilestoneSummary `json:"milestones,omitempty"`
 	Topics         []model.SemanticTopic  `json:"topics,omitempty"`
 	Tasks          []model.TaskItem       `json:"tasks,omitempty"`
+	Provider       model.Provider         `json:"provider"`
+	AgentState     model.AgentState       `json:"agent_state,omitempty"`
+	AgentStateAt   string                 `json:"agent_state_at,omitempty"`
+}
+
+// applyAgentFields は provider（空なら claude）と hook 由来のエージェント状態を entry に写す。
+func applyAgentFields(entry *RoadmapEntry, ctx model.Context) {
+	entry.Provider = ctx.EffectiveProvider()
+	entry.AgentState = ctx.AgentState
+	if !ctx.AgentStateAt.IsZero() {
+		entry.AgentStateAt = ctx.AgentStateAt.Format(time.RFC3339)
+	}
 }
 
 // Server serves the roadmap web UI.
@@ -207,6 +219,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
+		applyAgentFields(&entry, ctx)
 
 		// Merge milestone data
 		if events != nil {
@@ -296,6 +309,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
+		applyAgentFields(&entry, ctx)
 
 		if events != nil {
 			summary := events.Summarize(ctx.Name)
@@ -402,6 +416,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			IssueURL: ctx.IssueURL,
 			LastSeen: ctx.LastSeen.Format(time.RFC3339),
 		}
+		applyAgentFields(&entry, ctx)
 
 		if insights != nil {
 			if insight := insights.Get(ctx.Name); insight != nil {

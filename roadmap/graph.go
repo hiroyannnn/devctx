@@ -57,6 +57,9 @@ type SessionGraph struct {
 	InferredAt     string               `json:"inferred_at,omitempty"`
 	Topics         []model.SemanticTopic `json:"topics,omitempty"`
 	Tasks          []model.TaskItem     `json:"tasks,omitempty"`
+	Provider       model.Provider       `json:"provider"`
+	AgentState     model.AgentState     `json:"agent_state,omitempty"`
+	AgentStateAt   string               `json:"agent_state_at,omitempty"`
 	Nodes          []GraphNode          `json:"nodes"`
 	Edges          []GraphEdge          `json:"edges"`
 }
@@ -85,6 +88,9 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		InferredAt:     entry.InferredAt,
 		Topics:         entry.Topics,
 		Tasks:          entry.Tasks,
+		Provider:       entry.Provider,
+		AgentState:     entry.AgentState,
+		AgentStateAt:   entry.AgentStateAt,
 	}
 
 	if entry.Goal == "" && len(entry.Tasks) == 0 {
