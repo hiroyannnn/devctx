@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,15 +36,10 @@ If called manually, uses current directory and prompts for name.`,
 		var input SessionStartInput
 		var name string
 
-		// Check if stdin has data (called from hook)
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			// Reading from pipe (hook mode)
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
-					return fmt.Errorf("failed to parse hook input: %w", err)
-				}
+		// Called from a hook: read session info from stdin
+		if stdinIsPipe() {
+			if err := decodeHookInput(os.Stdin, &input); err != nil {
+				return err
 			}
 		}
 

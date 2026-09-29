@@ -69,3 +69,21 @@ func TestApplyHookState_SameStateIsNotAChange(t *testing.T) {
 		t.Fatalf("running -> running should not be reported as a change (avoids rewriting the store on every prompt)")
 	}
 }
+
+func TestParseHookInput_LongLine(t *testing.T) {
+	long := strings.Repeat("x", 100*1024)
+	in, err := parseHookInput(strings.NewReader(`{"session_id":"c1","hook_event_name":"Stop","message":"` + long + `"}` + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.SessionID != "c1" || in.HookEventName != "Stop" {
+		t.Fatalf("hook input over 64KB should still be parsed: %+v", in)
+	}
+}
+
+func TestParseHookInput_Empty(t *testing.T) {
+	in, err := parseHookInput(strings.NewReader(""))
+	if err != nil || in != (hookInput{}) {
+		t.Fatalf("empty input = %+v, %v; want zero value and nil", in, err)
+	}
+}

@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -105,14 +103,8 @@ Use --track-state to record the agent state from the hook event (running / needs
 // parseHookInput は hook の stdin JSON（1 行）を読む。空入力はゼロ値を返す。
 func parseHookInput(r io.Reader) (hookInput, error) {
 	var input hookInput
-	scanner := bufio.NewScanner(r)
-	if !scanner.Scan() {
-		return input, nil
-	}
-	if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
-		return input, fmt.Errorf("failed to parse hook input: %w", err)
-	}
-	return input, nil
+	err := decodeHookInput(r, &input)
+	return input, err
 }
 
 // applyLastSeen は last_seen と累計時間を更新する。quick のときは 5 分以内の更新を間引き、false を返す。
