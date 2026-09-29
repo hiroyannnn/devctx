@@ -39,7 +39,8 @@ Use --track-state to record the agent state from the hook event (running / needs
 
 		// Read hook input before taking the store lock
 		var input hookInput
-		if stdinIsPipe() {
+		fromHook := stdinIsPipe()
+		if fromHook {
 			input, err = parseHookInput(os.Stdin)
 			if err != nil {
 				return err
@@ -95,7 +96,10 @@ Use --track-state to record the agent state from the hook event (running / needs
 			recordEvent(s, updated.Name, model.MilestoneSessionEnd, "")
 		}
 
-		fmt.Printf("Updated [%s] last-seen to %s (total: %s)\n", updated.Name, updated.LastSeen.Format(time.RFC3339), formatDuration(updated.TotalTime))
+		// Why not print from hooks: Claude Code adds UserPromptSubmit stdout to the model's context
+		if !fromHook {
+			fmt.Printf("Updated [%s] last-seen to %s (total: %s)\n", updated.Name, updated.LastSeen.Format(time.RFC3339), formatDuration(updated.TotalTime))
+		}
 		return nil
 	},
 }
