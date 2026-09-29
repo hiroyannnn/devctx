@@ -158,6 +158,26 @@ h1 {
 .attention-waiting { background: #8957e533; color: #bc8cff; }
 .attention-idle { background: #30363d; color: #8b949e; }
 .attention-blocked { background: #da363333; color: #f85149; }
+.card.agent-waiting { border-color: #d29922; }
+.provider-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 8px;
+  background: #30363d;
+  color: #c9d1d9;
+}
+.provider-codex { background: #1a4d3a; color: #56d4a8; }
+.provider-claude { background: #4d2a1a; color: #f0a07b; }
+.agent-state-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 8px;
+  background: #30363d;
+  color: #8b949e;
+}
+.agent-state-badge.waiting { background: #3d2e0a; color: #e3b341; }
 .pipeline {
   display: flex;
   gap: 4px;
@@ -506,6 +526,28 @@ function phaseIndex(phase) {
   return idx >= 0 ? idx : 0;
 }
 
+// Agent state observed from hooks. needs_input / turn_done mean the agent is waiting for the user.
+var AGENT_STATE_LABELS = { running: 'running', needs_input: 'needs input', turn_done: 'turn done', ended: 'ended' };
+var AGENT_WAITING_COLOR = { border: '#d29922', background: '#2d2208' };
+
+function agentIsWaiting(item) {
+  return item.agent_state === 'needs_input' || item.agent_state === 'turn_done';
+}
+
+// "codex · needs input" line for Mind Map session nodes
+function agentLine(item) {
+  var line = item.provider || 'claude';
+  if (AGENT_STATE_LABELS[item.agent_state]) line += ' · ' + AGENT_STATE_LABELS[item.agent_state];
+  return line;
+}
+
+// Session node colors: waiting for the user overrides the attention color
+function sessionNodeColor(session) {
+  if (agentIsWaiting(session)) return AGENT_WAITING_COLOR;
+  var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
+  return { background: '#1a1f27', border: attnColor };
+}
+
 function createInsightRow(label, value) {
   var row = document.createElement('div');
   row.className = 'insight-row';
@@ -672,6 +714,17 @@ function createCard(entry) {
   status.className = 'card-status status-' + (entry.status || '').replace(/[^a-z-]/g, '');
   status.textContent = entry.status;
   header.appendChild(name);
+  var provider = document.createElement('span');
+  provider.className = 'provider-badge provider-' + (entry.provider || 'claude').replace(/[^a-z]/g, '');
+  provider.textContent = entry.provider || 'claude';
+  header.appendChild(provider);
+  if (AGENT_STATE_LABELS[entry.agent_state]) {
+    var agentState = document.createElement('span');
+    agentState.className = 'agent-state-badge' + (agentIsWaiting(entry) ? ' waiting' : '');
+    agentState.textContent = AGENT_STATE_LABELS[entry.agent_state];
+    header.appendChild(agentState);
+  }
+  if (agentIsWaiting(entry)) card.classList.add('agent-waiting');
   header.appendChild(status);
   card.appendChild(header);
 
@@ -1032,8 +1085,7 @@ function buildMindMapData(groups) {
 
     visibleSessions.forEach(function(session) {
       var sessionId = 'sess:' + (++nid);
-      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
-      var label = session.name;
+      var label = session.name + '\n' + agentLine(session);
       if (session.current_focus) {
         var f = session.current_focus;
         if (f.length > 30) f = f.substring(0, 28) + '..';
@@ -1042,10 +1094,10 @@ function buildMindMapData(groups) {
 
       nodes.push({
         id: sessionId, label: label, shape: 'box',
-        color: { background: '#1a1f27', border: attnColor },
+        color: sessionNodeColor(session),
         font: { color: '#f0f6fc', size: 13, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
-        borderWidth: 2, level: sessionLevel, _type: 'session', _data: session
+        borderWidth: agentIsWaiting(session) ? 3 : 2, level: sessionLevel, _type: 'session', _data: session
       });
       if (sessionParent) {
         edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
@@ -1170,8 +1222,7 @@ function buildSemanticGraph(graphData) {
 
       // Session header node — Goal is integrated as subtitle, not a separate node
       var sessionNodeId = sessionPrefix + 'session';
-      var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
-      var sessionLabel = session.name;
+      var sessionLabel = session.name + '\n' + agentLine(session);
       if (session.goal) {
         var goalText = session.goal;
         if (goalText.length > 30) goalText = goalText.substring(0, 28) + '..';
@@ -1183,10 +1234,10 @@ function buildSemanticGraph(graphData) {
       }
       nodes.push({
         id: sessionNodeId, label: sessionLabel, shape: 'box',
-        color: { background: '#1a1f27', border: attnColor },
+        color: sessionNodeColor(session),
         font: { color: '#f0f6fc', size: 14, bold: true, multi: true },
         margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        borderWidth: 2, level: baseLevel, _type: 'session', _data: session
+        borderWidth: agentIsWaiting(session) ? 3 : 2, level: baseLevel, _type: 'session', _data: session
       });
       if (projectNodeId) {
         edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
