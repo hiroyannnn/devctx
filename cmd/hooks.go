@@ -215,9 +215,10 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 			continue
 		}
 		existCmd, _ := existHook["command"].(string)
-		existBinary, _, _ := splitDevctxCommand(existCmd)
-		_, newArgs, _ := splitDevctxCommand(newCmd)
-		existHook["command"] = strings.Join(append([]string{existBinary}, newArgs...), " ")
+		existBinary, _, existRest, _ := splitDevctxCommand(existCmd)
+		_, newArgs, _, _ := splitDevctxCommand(newCmd)
+		// Keep anything the user chained after the devctx command (e.g. "&& say done")
+		existHook["command"] = strings.Join(append(append([]string{existBinary}, newArgs...), existRest...), " ")
 	}
 	return configs
 }
@@ -248,7 +249,7 @@ func findDevctxHooks(config interface{}) []map[string]interface{} {
 	for _, h := range hooks {
 		hook, _ := h.(map[string]interface{})
 		if cmd, ok := hook["command"].(string); ok {
-			if _, _, ok := splitDevctxCommand(cmd); ok {
+			if _, _, _, ok := splitDevctxCommand(cmd); ok {
 				result = append(result, hook)
 			}
 		}
@@ -256,23 +257,31 @@ func findDevctxHooks(config interface{}) []map[string]interface{} {
 	return result
 }
 
-// splitDevctxCommand splits a hook command into the devctx binary part and its arguments.
-// e.g. "/path/to/devctx touch --quick" → ("/path/to/devctx", ["touch", "--quick"], true)
-func splitDevctxCommand(cmd string) (binary string, args []string, ok bool) {
+// splitDevctxCommand splits a hook command into the devctx binary part, its arguments,
+// and the rest of a shell chain after it.
+// e.g. "/path/to/devctx touch --quick && say hi" → ("/path/to/devctx", ["touch", "--quick"], ["&&", "say", "hi"], true)
+func splitDevctxCommand(cmd string) (binary string, args, rest []string, ok bool) {
 	fields := strings.Fields(cmd)
 	for i, field := range fields {
-		if filepath.Base(field) == "devctx" {
-			return strings.Join(fields[:i+1], " "), fields[i+1:], true
+		if filepath.Base(field) != "devctx" {
+			continue
 		}
+		args = fields[i+1:]
+		for j, arg := range args {
+			if arg == "&&" || arg == "||" || arg == ";" || arg == "|" {
+				return strings.Join(fields[:i+1], " "), args[:j], args[j:], true
+			}
+		}
+		return strings.Join(fields[:i+1], " "), args, nil, true
 	}
-	return "", nil, false
+	return "", nil, nil, false
 }
 
 // devctxCommandPath returns the devctx subcommand path before the first flag.
 // e.g. "/path/to/devctx roadmap analyze --if-stale" → "roadmap analyze", "devctx touch --quick" → "touch"
 // Why not the first word only: "roadmap analyze" and "roadmap serve" are different hooks.
 func devctxCommandPath(cmd string) string {
-	_, args, ok := splitDevctxCommand(cmd)
+	_, args, _, ok := splitDevctxCommand(cmd)
 	if !ok {
 		return ""
 	}

@@ -171,3 +171,9 @@ func TestDevctxCommandPath(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeHookConfigs_UpgradeKeepsChainedCommands(t *testing.T) {
+	existing := existingHooks(t, hookConfig("", "devctx touch --quick && say done"))
+	got := mergeHookConfigs(existing, hookConfig("", "devctx touch --quick --track-state"))
+	assertCommands(t, commandsOf(t, got), "devctx touch --quick --track-state && say done")
+}
