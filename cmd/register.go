@@ -34,10 +34,6 @@ If called manually, uses current directory and prompts for name.`,
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
-		if err != nil {
-			return err
-		}
 
 		var input SessionStartInput
 		var name string
@@ -88,30 +84,36 @@ If called manually, uses current directory and prompts for name.`,
 			sessionName = extractSessionName(input.TranscriptPath)
 		}
 
-		ctx, created := upsertRegistration(store, registration{
-			Name:           name,
-			Worktree:       cwd,
-			Branch:         branch,
-			RepoRoot:       repoRoot,
-			Provider:       provider,
-			SessionID:      input.SessionID,
-			SessionName:    sessionName,
-			TranscriptPath: input.TranscriptPath,
-		}, time.Now())
+		var ctx model.Context
+		var created bool
+		err = s.UpdateStore(func(store *model.Store) error {
+			registered, isNew := upsertRegistration(store, registration{
+				Name:           name,
+				Worktree:       cwd,
+				Branch:         branch,
+				RepoRoot:       repoRoot,
+				Provider:       provider,
+				SessionID:      input.SessionID,
+				SessionName:    sessionName,
+				TranscriptPath: input.TranscriptPath,
+			}, time.Now())
 
-		// Auto-detect phase (fast mode for hook performance)
-		phaseScanner := roadmap.NewScanner()
-		phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
+			// Auto-detect phase (fast mode for hook performance)
+			phaseScanner := roadmap.NewScanner()
+			phaseScanner.RefreshPhase(registered, roadmap.ScanModeFast)
 
-		if !created {
-			// Collect git milestones
-			collectAndSaveMilestones(s, ctx)
-		}
+			if !isNew {
+				// Collect git milestones
+				collectAndSaveMilestones(s, registered)
+			}
 
-		// Record session_start event
-		recordEvent(s, ctx.Name, model.MilestoneSessionStart, "")
+			// Record session_start event
+			recordEvent(s, registered.Name, model.MilestoneSessionStart, "")
 
-		if err := s.SaveStore(store); err != nil {
+			ctx, created = *registered, isNew
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 
