@@ -3,14 +3,12 @@ package cmd
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
 	"github.com/hiroyannnn/devctx/model"
-	"github.com/hiroyannnn/devctx/roadmap"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -21,9 +19,6 @@ type hookInput struct {
 	HookEventName    string `json:"hook_event_name"`
 	NotificationType string `json:"notification_type"`
 }
-
-// errNoChange は UpdateStore に保存不要を伝えるための番兵エラー。
-var errNoChange = errors.New("no change")
 
 var (
 	touchQuick      bool
@@ -54,6 +49,7 @@ Use --track-state to record the agent state from the hook event (running / needs
 		}
 
 		var updated model.Context
+		var seen bool
 		err = s.UpdateStore(func(store *model.Store) error {
 			var name string
 			if ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID); ctx != nil {
@@ -76,30 +72,29 @@ Use --track-state to record the agent state from the hook event (running / needs
 
 			// State changes are saved even when last_seen is throttled
 			stateChanged := touchTrackState && applyHookState(ctx, input, now)
-			seen := applyLastSeen(ctx, now, touchQuick)
+			seen = applyLastSeen(ctx, now, touchQuick)
 			if !seen && !stateChanged {
-				return errNoChange
-			}
-
-			if seen && !touchQuick {
-				// Auto-detect phase (fast mode for hook performance)
-				phaseScanner := roadmap.NewScanner()
-				phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
-
-				// Collect git milestones
-				collectAndSaveMilestones(s, ctx)
-
-				// Record session_end event
-				recordEvent(s, ctx.Name, model.MilestoneSessionEnd, "")
+				return storage.ErrSkipSave
 			}
 			updated = *ctx
 			return nil
 		})
-		if errors.Is(err, errNoChange) {
-			return nil // silently skip
-		}
 		if err != nil {
 			return err
+		}
+		if updated.Name == "" {
+			return nil // silently skip: nothing changed
+		}
+
+		if seen && !touchQuick {
+			if err := refreshPhaseOutsideLock(s, updated); err != nil {
+				return err
+			}
+			// Collect git milestones
+			collectAndSaveMilestones(s, &updated)
+
+			// Record session_end event
+			recordEvent(s, updated.Name, model.MilestoneSessionEnd, "")
 		}
 
 		fmt.Printf("Updated [%s] last-seen to %s (total: %s)\n", updated.Name, updated.LastSeen.Format(time.RFC3339), formatDuration(updated.TotalTime))

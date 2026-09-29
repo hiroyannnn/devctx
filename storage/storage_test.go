@@ -336,3 +336,24 @@ func TestUpdateStoreDoesNotSaveOnError(t *testing.T) {
 		t.Fatalf("store was modified despite error: %+v", store.Contexts)
 	}
 }
+
+func TestUpdateStoreSkipSave(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+	if err := s.SaveStore(&model.Store{Contexts: []model.Context{{Name: "keep"}}}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.UpdateStore(func(store *model.Store) error {
+		store.Contexts = nil
+		return ErrSkipSave
+	})
+	if err != nil {
+		t.Fatalf("ErrSkipSave should be reported as success, got %v", err)
+	}
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Contexts) != 1 {
+		t.Fatalf("store should not be written on ErrSkipSave: %+v", store.Contexts)
+	}
+}

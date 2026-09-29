@@ -97,25 +97,23 @@ If called manually, uses current directory and prompts for name.`,
 				SessionName:    sessionName,
 				TranscriptPath: input.TranscriptPath,
 			}, time.Now())
-
-			// Auto-detect phase (fast mode for hook performance)
-			phaseScanner := roadmap.NewScanner()
-			phaseScanner.RefreshPhase(registered, roadmap.ScanModeFast)
-
-			if !isNew {
-				// Collect git milestones
-				collectAndSaveMilestones(s, registered)
-			}
-
-			// Record session_start event
-			recordEvent(s, registered.Name, model.MilestoneSessionStart, "")
-
 			ctx, created = *registered, isNew
 			return nil
 		})
 		if err != nil {
 			return err
 		}
+
+		if err := refreshPhaseOutsideLock(s, ctx); err != nil {
+			return err
+		}
+		if !created {
+			// Collect git milestones
+			collectAndSaveMilestones(s, &ctx)
+		}
+
+		// Record session_start event
+		recordEvent(s, ctx.Name, model.MilestoneSessionStart, "")
 
 		if !created {
 			fmt.Printf("Updated context [%s]\n", ctx.Name)
@@ -263,6 +261,21 @@ func detectRepoRoot(dir string) string {
 	}
 	// Fallback: use toplevel
 	return getWorktreeRoot(dir)
+}
+
+// refreshPhaseOutsideLock は git を使う phase 判定を contexts.yaml のロック外で行い、
+// 結果の Phase / PhaseCheckedAt だけを短いロックで書き戻す。
+// Why not UpdateStore の中で判定する: git の起動（最大数回）の間、高頻度の hook（touch）が待たされる。
+func refreshPhaseOutsideLock(s *storage.Storage, ctx model.Context) error {
+	roadmap.NewScanner().RefreshPhase(&ctx, roadmap.ScanModeFast)
+	return s.UpdateStore(func(store *model.Store) error {
+		stored := store.FindByName(ctx.Name)
+		if stored == nil {
+			return storage.ErrSkipSave
+		}
+		stored.Phase, stored.PhaseCheckedAt = ctx.Phase, ctx.PhaseCheckedAt
+		return nil
+	})
 }
 
 func collectAndSaveMilestones(s *storage.Storage, ctx *model.Context) {
