@@ -6,7 +6,7 @@ import (
 )
 
 func hookConfig(matcher string, commands ...string) map[string]interface{} {
-	var hooks []map[string]interface{}
+	var hooks []interface{}
 	for _, c := range commands {
 		hooks = append(hooks, map[string]interface{}{"type": "command", "command": c})
 	}

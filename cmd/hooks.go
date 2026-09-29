@@ -101,13 +101,12 @@ func installHooksToSettings() error {
 		hooks = make(map[string]interface{})
 	}
 
-	configs := devctxHookConfigs(devctxPath)
-	for _, event := range devctxHookEvents {
+	for _, spec := range devctxHookSpecs(devctxPath) {
 		var newConfigs []map[string]interface{}
-		for _, c := range configs[event] {
+		for _, c := range spec.Configs {
 			newConfigs = append(newConfigs, hookConfigMap(c))
 		}
-		hooks[event] = mergeHookConfigs(hooks[event], newConfigs...)
+		hooks[spec.Event] = mergeHookConfigs(hooks[spec.Event], newConfigs...)
 	}
 
 	settings["hooks"] = hooks
@@ -134,34 +133,46 @@ func installHooksToSettings() error {
 	return nil
 }
 
-// devctxHookEvents は devctx が hook を登録するイベント（インストール順）。
-var devctxHookEvents = []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"}
+// hookEventSpec は 1 イベント分の devctx hook 定義。
+type hookEventSpec struct {
+	Event   string
+	Configs []HookConfig
+}
 
-// devctxHookConfigs は devctx が Claude Code に登録する hook 定義。
+// devctxHookSpecs は devctx が Claude Code に登録する hook 定義（インストール順）。
 // 表示（devctx hooks）とインストール（--install）の両方がこれを使う。
-func devctxHookConfigs(devctxPath string) map[string][]HookConfig {
+func devctxHookSpecs(devctxPath string) []hookEventSpec {
 	command := func(args string) []Hook {
 		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
 	}
-	return map[string][]HookConfig{
-		"SessionStart": {
+	return []hookEventSpec{
+		{"SessionStart", []HookConfig{
 			{Matcher: "startup", Hooks: command("register")},
 			{Matcher: "resume", Hooks: command("register")},
-		},
+		}},
 		// Agent state: running on prompt, waiting on notification / turn end
-		"UserPromptSubmit": {{Hooks: command("touch --quick --track-state")}},
-		"Notification":     {{Hooks: command("touch --quick --track-state")}},
-		"Stop": {
+		{"UserPromptSubmit", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
+		{"Notification", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
+		{"Stop", []HookConfig{
 			{Hooks: command("roadmap analyze --if-stale --background")},
 			{Hooks: command("touch --quick --track-state")},
-		},
-		"SessionEnd": {{Hooks: command("touch --track-state")}},
+		}},
+		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state")}}},
 	}
 }
 
-// hookConfigMap は HookConfig を settings.json の汎用マップ表現に変換する。
+// devctxHookConfigs は devctxHookSpecs をイベント名で引けるようにしたもの（表示用）。
+func devctxHookConfigs(devctxPath string) map[string][]HookConfig {
+	configs := make(map[string][]HookConfig)
+	for _, spec := range devctxHookSpecs(devctxPath) {
+		configs[spec.Event] = spec.Configs
+	}
+	return configs
+}
+
+// hookConfigMap は HookConfig を settings.json から読んだのと同じ汎用表現に変換する。
 func hookConfigMap(c HookConfig) map[string]interface{} {
-	hooks := make([]map[string]interface{}, len(c.Hooks))
+	hooks := make([]interface{}, len(c.Hooks))
 	for i, h := range c.Hooks {
 		hooks[i] = map[string]interface{}{"type": h.Type, "command": h.Command}
 	}
@@ -206,7 +217,7 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 		existCmd, _ := existHook["command"].(string)
 		existBinary, _, _ := splitDevctxCommand(existCmd)
 		_, newArgs, _ := splitDevctxCommand(newCmd)
-		existHook["command"] = existBinary + " " + newArgs
+		existHook["command"] = strings.Join(append([]string{existBinary}, newArgs...), " ")
 	}
 	return configs
 }
@@ -229,26 +240,13 @@ func findMatchingDevctxHook(configs []interface{}, path, matcher string) map[str
 }
 
 // findDevctxHooks returns the hook entries running devctx in a hook config.
-// Configs read from settings.json hold []interface{}, while configs built in code hold
-// []map[string]interface{}; both must be handled or new configs are never recognized.
+// Configs must use the settings.json shape ([]interface{}); hookConfigMap builds that shape.
 func findDevctxHooks(config interface{}) []map[string]interface{} {
-	configMap, ok := config.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	var hooks []map[string]interface{}
-	switch arr := configMap["hooks"].(type) {
-	case []map[string]interface{}:
-		hooks = arr
-	case []interface{}:
-		for _, h := range arr {
-			if hookMap, ok := h.(map[string]interface{}); ok {
-				hooks = append(hooks, hookMap)
-			}
-		}
-	}
+	configMap, _ := config.(map[string]interface{})
+	hooks, _ := configMap["hooks"].([]interface{})
 	var result []map[string]interface{}
-	for _, hook := range hooks {
+	for _, h := range hooks {
+		hook, _ := h.(map[string]interface{})
 		if cmd, ok := hook["command"].(string); ok {
 			if _, _, ok := splitDevctxCommand(cmd); ok {
 				result = append(result, hook)
@@ -259,18 +257,15 @@ func findDevctxHooks(config interface{}) []map[string]interface{} {
 }
 
 // splitDevctxCommand splits a hook command into the devctx binary part and its arguments.
-// e.g. "/path/to/devctx touch --quick" → ("/path/to/devctx", "touch --quick", true)
-func splitDevctxCommand(cmd string) (binary, args string, ok bool) {
-	offset := 0
-	for _, field := range strings.Fields(cmd) {
-		idx := strings.Index(cmd[offset:], field) + offset
-		end := idx + len(field)
+// e.g. "/path/to/devctx touch --quick" → ("/path/to/devctx", ["touch", "--quick"], true)
+func splitDevctxCommand(cmd string) (binary string, args []string, ok bool) {
+	fields := strings.Fields(cmd)
+	for i, field := range fields {
 		if filepath.Base(field) == "devctx" {
-			return cmd[:end], strings.TrimSpace(cmd[end:]), true
+			return strings.Join(fields[:i+1], " "), fields[i+1:], true
 		}
-		offset = end
 	}
-	return "", "", false
+	return "", nil, false
 }
 
 // devctxCommandPath returns the devctx subcommand path before the first flag.
@@ -282,7 +277,7 @@ func devctxCommandPath(cmd string) string {
 		return ""
 	}
 	var path []string
-	for _, part := range strings.Fields(args) {
+	for _, part := range args {
 		if strings.HasPrefix(part, "-") {
 			break
 		}
