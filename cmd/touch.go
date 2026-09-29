@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -13,14 +14,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type SessionEndInput struct {
-	SessionID      string `json:"session_id"`
-	TranscriptPath string `json:"transcript_path"`
-	Cwd            string `json:"cwd"`
-	Reason         string `json:"reason"` // "exit", "timeout", etc.
+// hookInput は Claude Code hook が stdin に渡す JSON のうち touch が使う項目。
+type hookInput struct {
+	SessionID        string `json:"session_id"`
+	HookEventName    string `json:"hook_event_name"`
+	NotificationType string `json:"notification_type"`
 }
 
-var touchQuick bool
+var (
+	touchQuick      bool
+	touchTrackState bool
+)
 
 var touchCmd = &cobra.Command{
 	Use:   "touch [name]",
@@ -28,7 +32,8 @@ var touchCmd = &cobra.Command{
 	Long: `Update the last-seen timestamp for a context.
 If called from a Claude Code hook, reads session info from stdin.
 If called with a name, updates that specific context.
-Use --quick to skip phase scan and milestone collection (for high-frequency hooks).`,
+Use --quick to skip phase scan and milestone collection (for high-frequency hooks).
+Use --track-state to record the agent state from the hook event (running / needs_input / turn_done / ended).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := storage.New()
 		if err != nil {
@@ -40,22 +45,15 @@ Use --quick to skip phase scan and milestone collection (for high-frequency hook
 		}
 
 		var name string
+		var input hookInput
 
-		// Check if stdin has data (called from hook)
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			// Reading from pipe (hook mode)
-			var input SessionEndInput
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
-					return fmt.Errorf("failed to parse hook input: %w", err)
-				}
-				// Find by session ID
-				ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID)
-				if ctx != nil {
-					name = ctx.Name
-				}
+		if stdinIsPipe() {
+			input, err = parseHookInput(os.Stdin)
+			if err != nil {
+				return err
+			}
+			if ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID); ctx != nil {
+				name = ctx.Name
 			}
 		}
 
@@ -75,25 +73,14 @@ Use --quick to skip phase scan and milestone collection (for high-frequency hook
 
 		now := time.Now()
 
-		// Quick mode: skip if last_seen is within 5 minutes (throttle)
-		if touchQuick && !ctx.LastSeen.IsZero() {
-			if now.Sub(ctx.LastSeen) < 5*time.Minute {
-				return nil // silently skip
-			}
+		// State changes are saved even when last_seen is throttled
+		stateChanged := touchTrackState && applyHookState(ctx, input, now)
+		seen := applyLastSeen(ctx, now, touchQuick)
+		if !seen && !stateChanged {
+			return nil // silently skip
 		}
 
-		// Calculate session time and add to total
-		// Only count if last seen was within the last hour (active session)
-		if !ctx.LastSeen.IsZero() {
-			elapsed := now.Sub(ctx.LastSeen)
-			if elapsed > 0 && elapsed < time.Hour {
-				ctx.TotalTime += elapsed
-			}
-		}
-
-		ctx.LastSeen = now
-
-		if !touchQuick {
+		if seen && !touchQuick {
 			// Auto-detect phase (fast mode for hook performance)
 			phaseScanner := roadmap.NewScanner()
 			phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
@@ -114,8 +101,50 @@ Use --quick to skip phase scan and milestone collection (for high-frequency hook
 	},
 }
 
+// parseHookInput は hook の stdin JSON（1 行）を読む。空入力はゼロ値を返す。
+func parseHookInput(r io.Reader) (hookInput, error) {
+	var input hookInput
+	scanner := bufio.NewScanner(r)
+	if !scanner.Scan() {
+		return input, nil
+	}
+	if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
+		return input, fmt.Errorf("failed to parse hook input: %w", err)
+	}
+	return input, nil
+}
+
+// applyLastSeen は last_seen と累計時間を更新する。quick のときは 5 分以内の更新を間引き、false を返す。
+func applyLastSeen(ctx *model.Context, now time.Time, quick bool) bool {
+	if quick && !ctx.LastSeen.IsZero() && now.Sub(ctx.LastSeen) < 5*time.Minute {
+		return false
+	}
+
+	// Only count if last seen was within the last hour (active session)
+	if !ctx.LastSeen.IsZero() {
+		elapsed := now.Sub(ctx.LastSeen)
+		if elapsed > 0 && elapsed < time.Hour {
+			ctx.TotalTime += elapsed
+		}
+	}
+	ctx.LastSeen = now
+	return true
+}
+
+// applyHookState は hook イベントからエージェント状態を更新する。状態が変わらなければ false を返す。
+// 同じ状態の再記録を避けるのは、UserPromptSubmit など高頻度の hook で毎回 store を書き換えないため。
+func applyHookState(ctx *model.Context, input hookInput, now time.Time) bool {
+	next, ok := model.AgentStateFromHook(input.HookEventName, input.NotificationType, ctx.AgentState)
+	if !ok || next == ctx.AgentState {
+		return false
+	}
+	ctx.SetAgentState(next, now)
+	return true
+}
+
 func init() {
 	touchCmd.Flags().BoolVar(&touchQuick, "quick", false, "Quick mode: only update last-seen and total time (skip phase scan and milestones)")
+	touchCmd.Flags().BoolVar(&touchTrackState, "track-state", false, "Record agent state from the hook event read from stdin")
 }
 
 func formatDuration(d time.Duration) string {
