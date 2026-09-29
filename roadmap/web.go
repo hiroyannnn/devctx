@@ -79,12 +79,17 @@ type RoadmapEntry struct {
 	Provider       model.Provider         `json:"provider"`
 	AgentState     model.AgentState       `json:"agent_state,omitempty"`
 	AgentStateAt   string                 `json:"agent_state_at,omitempty"`
+	// 表示用。待ち判定とラベルは model 側を正とし、Web で判定を再実装しない
+	AgentStateLabel string                `json:"agent_state_label,omitempty"`
+	AgentWaiting    bool                  `json:"agent_waiting,omitempty"`
 }
 
 // applyAgentFields は provider（空なら claude）と hook 由来のエージェント状態を entry に写す。
 func applyAgentFields(entry *RoadmapEntry, ctx model.Context) {
 	entry.Provider = ctx.EffectiveProvider()
 	entry.AgentState = ctx.AgentState
+	entry.AgentStateLabel = ctx.AgentState.Label()
+	entry.AgentWaiting = ctx.AgentState.WaitsForUser()
 	if !ctx.AgentStateAt.IsZero() {
 		entry.AgentStateAt = ctx.AgentStateAt.Format(time.RFC3339)
 	}

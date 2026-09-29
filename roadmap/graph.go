@@ -60,6 +60,8 @@ type SessionGraph struct {
 	Provider       model.Provider       `json:"provider"`
 	AgentState     model.AgentState     `json:"agent_state,omitempty"`
 	AgentStateAt   string               `json:"agent_state_at,omitempty"`
+	AgentStateLabel string              `json:"agent_state_label,omitempty"`
+	AgentWaiting    bool                `json:"agent_waiting,omitempty"`
 	Nodes          []GraphNode          `json:"nodes"`
 	Edges          []GraphEdge          `json:"edges"`
 }
@@ -91,6 +93,8 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		Provider:       entry.Provider,
 		AgentState:     entry.AgentState,
 		AgentStateAt:   entry.AgentStateAt,
+		AgentStateLabel: entry.AgentStateLabel,
+		AgentWaiting:    entry.AgentWaiting,
 	}
 
 	if entry.Goal == "" && len(entry.Tasks) == 0 {

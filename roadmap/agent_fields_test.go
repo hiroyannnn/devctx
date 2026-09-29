@@ -40,6 +40,8 @@ func TestAPIsExposeProviderAndAgentState(t *testing.T) {
 				`"provider":"codex"`,
 				`"agent_state":"turn_done"`,
 				`"agent_state_at":"2026-09-30T09:00:00Z"`,
+				`"agent_state_label":"turn done"`,
+				`"agent_waiting":true`,
 			} {
 				if !strings.Contains(body, want) {
 					t.Fatalf("%s response lacks %s:\n%s", path, want, body)

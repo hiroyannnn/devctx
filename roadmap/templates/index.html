@@ -147,29 +147,7 @@ h1 {
   text-align: right;
   margin-top: 4px;
 }
-.attention-badge {
-  font-size: 0.7rem;
-  padding: 1px 6px;
-  border-radius: 8px;
-  font-weight: 500;
-  margin-left: 8px;
-}
-.attention-active { background: #1f6feb33; color: #58a6ff; }
-.attention-waiting { background: #8957e533; color: #bc8cff; }
-.attention-idle { background: #30363d; color: #8b949e; }
-.attention-blocked { background: #da363333; color: #f85149; }
-.card.agent-waiting { border-color: #d29922; }
-.provider-badge {
-  font-size: 0.7rem;
-  padding: 1px 6px;
-  border-radius: 8px;
-  margin-left: 8px;
-  background: #30363d;
-  color: #c9d1d9;
-}
-.provider-codex { background: #1a4d3a; color: #56d4a8; }
-.provider-claude { background: #4d2a1a; color: #f0a07b; }
-.agent-state-badge {
+.badge, .attention-badge {
   font-size: 0.7rem;
   padding: 1px 6px;
   border-radius: 8px;
@@ -177,7 +155,16 @@ h1 {
   background: #30363d;
   color: #8b949e;
 }
-.agent-state-badge.waiting { background: #3d2e0a; color: #e3b341; }
+.attention-badge { font-weight: 500; }
+.attention-active { background: #1f6feb33; color: #58a6ff; }
+.attention-waiting { background: #8957e533; color: #bc8cff; }
+.attention-idle { background: #30363d; color: #8b949e; }
+.attention-blocked { background: #da363333; color: #f85149; }
+/* Waiting-for-user amber; keep in sync with AGENT_WAITING_STYLE in the script */
+.card.agent-waiting { border-color: #d29922; }
+.provider-codex { background: #1a4d3a; color: #56d4a8; }
+.provider-claude { background: #4d2a1a; color: #f0a07b; }
+.agent-state.waiting { background: #3d2e0a; color: #e3b341; }
 .pipeline {
   display: flex;
   gap: 4px;
@@ -526,26 +513,20 @@ function phaseIndex(phase) {
   return idx >= 0 ? idx : 0;
 }
 
-// Agent state observed from hooks. needs_input / turn_done mean the agent is waiting for the user.
-var AGENT_STATE_LABELS = { running: 'running', needs_input: 'needs input', turn_done: 'turn done', ended: 'ended' };
-var AGENT_WAITING_COLOR = { border: '#d29922', background: '#2d2208' };
-
-function agentIsWaiting(item) {
-  return item.agent_state === 'needs_input' || item.agent_state === 'turn_done';
-}
+// Agent state comes from the server (agent_state_label / agent_waiting); do not re-derive it here.
+// Waiting-for-user amber; keep in sync with .card.agent-waiting in the stylesheet.
+var AGENT_WAITING_STYLE = { color: { border: '#d29922', background: '#2d2208' }, borderWidth: 3 };
 
 // "codex · needs input" line for Mind Map session nodes
 function agentLine(item) {
-  var line = item.provider || 'claude';
-  if (AGENT_STATE_LABELS[item.agent_state]) line += ' · ' + AGENT_STATE_LABELS[item.agent_state];
-  return line;
+  return item.agent_state_label ? item.provider + ' \u00B7 ' + item.agent_state_label : item.provider;
 }
 
-// Session node colors: waiting for the user overrides the attention color
-function sessionNodeColor(session) {
-  if (agentIsWaiting(session)) return AGENT_WAITING_COLOR;
+// Session node style: waiting for the user overrides the attention color
+function sessionNodeStyle(session) {
+  if (session.agent_waiting) return AGENT_WAITING_STYLE;
   var attnColor = ({blocked: '#f85149', active: '#58a6ff', waiting: '#bc8cff'})[session.attention_state] || '#484f58';
-  return { background: '#1a1f27', border: attnColor };
+  return { color: { background: '#1a1f27', border: attnColor }, borderWidth: 2 };
 }
 
 function createInsightRow(label, value) {
@@ -715,16 +696,16 @@ function createCard(entry) {
   status.textContent = entry.status;
   header.appendChild(name);
   var provider = document.createElement('span');
-  provider.className = 'provider-badge provider-' + (entry.provider || 'claude').replace(/[^a-z]/g, '');
-  provider.textContent = entry.provider || 'claude';
+  provider.className = 'badge provider-' + entry.provider.replace(/[^a-z]/g, '');
+  provider.textContent = entry.provider;
   header.appendChild(provider);
-  if (AGENT_STATE_LABELS[entry.agent_state]) {
+  if (entry.agent_state_label) {
     var agentState = document.createElement('span');
-    agentState.className = 'agent-state-badge' + (agentIsWaiting(entry) ? ' waiting' : '');
-    agentState.textContent = AGENT_STATE_LABELS[entry.agent_state];
+    agentState.className = 'badge agent-state' + (entry.agent_waiting ? ' waiting' : '');
+    agentState.textContent = entry.agent_state_label;
     header.appendChild(agentState);
   }
-  if (agentIsWaiting(entry)) card.classList.add('agent-waiting');
+  if (entry.agent_waiting) card.classList.add('agent-waiting');
   header.appendChild(status);
   card.appendChild(header);
 
@@ -1094,10 +1075,10 @@ function buildMindMapData(groups) {
 
       nodes.push({
         id: sessionId, label: label, shape: 'box',
-        color: sessionNodeColor(session),
+        color: sessionNodeStyle(session).color,
         font: { color: '#f0f6fc', size: 13, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
-        borderWidth: agentIsWaiting(session) ? 3 : 2, level: sessionLevel, _type: 'session', _data: session
+        borderWidth: sessionNodeStyle(session).borderWidth, level: sessionLevel, _type: 'session', _data: session
       });
       if (sessionParent) {
         edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
@@ -1234,10 +1215,10 @@ function buildSemanticGraph(graphData) {
       }
       nodes.push({
         id: sessionNodeId, label: sessionLabel, shape: 'box',
-        color: sessionNodeColor(session),
+        color: sessionNodeStyle(session).color,
         font: { color: '#f0f6fc', size: 14, bold: true, multi: true },
         margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        borderWidth: agentIsWaiting(session) ? 3 : 2, level: baseLevel, _type: 'session', _data: session
+        borderWidth: sessionNodeStyle(session).borderWidth, level: baseLevel, _type: 'session', _data: session
       });
       if (projectNodeId) {
         edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
