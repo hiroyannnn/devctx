@@ -189,31 +189,16 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 	}
 
 	for _, nc := range newConfigs {
-		newHook := findDevctxHook(nc)
-		if newHook == nil {
+		newHooks := findDevctxHooks(nc)
+		if len(newHooks) == 0 {
 			configs = append(configs, nc)
 			continue
 		}
-		newCmd, _ := newHook["command"].(string)
-		newSub := devctxSubcommand(newCmd)
+		newCmd, _ := newHooks[0]["command"].(string)
+		newPath := devctxCommandPath(newCmd)
 		newMatcher, _ := nc["matcher"].(string)
 
-		var existHook map[string]interface{}
-		for _, config := range configs {
-			hook := findDevctxHook(config)
-			if hook == nil {
-				continue
-			}
-			existCmd, _ := hook["command"].(string)
-			if devctxSubcommand(existCmd) != newSub {
-				continue
-			}
-			configMap, _ := config.(map[string]interface{})
-			if existMatcher, _ := configMap["matcher"].(string); existMatcher == newMatcher {
-				existHook = hook
-				break
-			}
-		}
+		existHook := findMatchingDevctxHook(configs, newPath, newMatcher)
 		if existHook == nil {
 			configs = append(configs, nc)
 			continue
@@ -226,10 +211,27 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 	return configs
 }
 
-// findDevctxHook returns the first hook entry running devctx in a hook config, or nil.
+// findMatchingDevctxHook returns the devctx hook entry with the same command path
+// (e.g. "roadmap analyze") under the same matcher, searching every hook in every config.
+func findMatchingDevctxHook(configs []interface{}, path, matcher string) map[string]interface{} {
+	for _, config := range configs {
+		configMap, _ := config.(map[string]interface{})
+		if existMatcher, _ := configMap["matcher"].(string); existMatcher != matcher {
+			continue
+		}
+		for _, hook := range findDevctxHooks(config) {
+			if cmd, _ := hook["command"].(string); devctxCommandPath(cmd) == path {
+				return hook
+			}
+		}
+	}
+	return nil
+}
+
+// findDevctxHooks returns the hook entries running devctx in a hook config.
 // Configs read from settings.json hold []interface{}, while configs built in code hold
 // []map[string]interface{}; both must be handled or new configs are never recognized.
-func findDevctxHook(config interface{}) map[string]interface{} {
+func findDevctxHooks(config interface{}) []map[string]interface{} {
 	configMap, ok := config.(map[string]interface{})
 	if !ok {
 		return nil
@@ -245,14 +247,15 @@ func findDevctxHook(config interface{}) map[string]interface{} {
 			}
 		}
 	}
+	var result []map[string]interface{}
 	for _, hook := range hooks {
 		if cmd, ok := hook["command"].(string); ok {
 			if _, _, ok := splitDevctxCommand(cmd); ok {
-				return hook
+				result = append(result, hook)
 			}
 		}
 	}
-	return nil
+	return result
 }
 
 // splitDevctxCommand splits a hook command into the devctx binary part and its arguments.
@@ -270,16 +273,20 @@ func splitDevctxCommand(cmd string) (binary, args string, ok bool) {
 	return "", "", false
 }
 
-// devctxSubcommand extracts the subcommand from a devctx command string.
-// e.g. "/path/to/devctx register" → "register", "devctx touch --quick" → "touch"
-func devctxSubcommand(cmd string) string {
+// devctxCommandPath returns the devctx subcommand path before the first flag.
+// e.g. "/path/to/devctx roadmap analyze --if-stale" → "roadmap analyze", "devctx touch --quick" → "touch"
+// Why not the first word only: "roadmap analyze" and "roadmap serve" are different hooks.
+func devctxCommandPath(cmd string) string {
 	_, args, ok := splitDevctxCommand(cmd)
 	if !ok {
 		return ""
 	}
-	parts := strings.Fields(args)
-	if len(parts) == 0 {
-		return ""
+	var path []string
+	for _, part := range strings.Fields(args) {
+		if strings.HasPrefix(part, "-") {
+			break
+		}
+		path = append(path, part)
 	}
-	return parts[0]
+	return strings.Join(path, " ")
 }

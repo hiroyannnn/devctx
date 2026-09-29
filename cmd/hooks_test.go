@@ -102,20 +102,6 @@ func TestMergeHookConfigs_DifferentMatcherIsSeparate(t *testing.T) {
 	assertCommands(t, commandsOf(t, got), "devctx register", "devctx register")
 }
 
-func TestDevctxSubcommand(t *testing.T) {
-	tests := map[string]string{
-		"devctx touch --quick":                     "touch",
-		"/opt/bin/devctx register":                 "register",
-		"/Users/me/GitHub/devctx/devctx roadmap x": "roadmap",
-		"echo devctx-free":                         "",
-	}
-	for in, want := range tests {
-		if got := devctxSubcommand(in); got != want {
-			t.Fatalf("devctxSubcommand(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 	configs := devctxHookConfigs("devctx")
 	want := map[string][]string{
@@ -142,9 +128,46 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 func TestInstallConfigsAreRecognizedAsDevctx(t *testing.T) {
 	for event, configs := range devctxHookConfigs("devctx") {
 		for _, c := range configs {
-			if findDevctxHook(hookConfigMap(c)) == nil {
+			if len(findDevctxHooks(hookConfigMap(c))) == 0 {
 				t.Fatalf("%s config %+v is not recognized as a devctx hook", event, c)
 			}
+		}
+	}
+}
+
+func TestMergeHookConfigs_DoesNotRewriteDifferentRoadmapOperation(t *testing.T) {
+	existing := existingHooks(t, hookConfig("", "devctx roadmap serve --port 4000"))
+	got := mergeHookConfigs(existing, hookConfig("", "devctx roadmap analyze --if-stale --background"))
+	assertCommands(t, commandsOf(t, got),
+		"devctx roadmap serve --port 4000",
+		"devctx roadmap analyze --if-stale --background",
+	)
+}
+
+func TestMergeHookConfigs_MatchesAnyDevctxHookInConfig(t *testing.T) {
+	existing := existingHooks(t, hookConfig("", "devctx touch --quick", "devctx roadmap analyze --if-stale"))
+	got := mergeHookConfigs(existing,
+		hookConfig("", "devctx roadmap analyze --if-stale --background"),
+		hookConfig("", "devctx touch --quick --track-state"),
+	)
+	assertCommands(t, commandsOf(t, got),
+		"devctx touch --quick --track-state",
+		"devctx roadmap analyze --if-stale --background",
+	)
+}
+
+func TestDevctxCommandPath(t *testing.T) {
+	tests := map[string]string{
+		"devctx touch --quick":                      "touch",
+		"devctx roadmap analyze --if-stale":         "roadmap analyze",
+		"/opt/bin/devctx roadmap serve --port 4000": "roadmap serve",
+		"devctx register":                           "register",
+		"/Users/me/GitHub/devctx/devctx touch -q":   "touch",
+		"echo hi": "",
+	}
+	for in, want := range tests {
+		if got := devctxCommandPath(in); got != want {
+			t.Fatalf("devctxCommandPath(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
