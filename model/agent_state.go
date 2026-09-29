@@ -47,3 +47,15 @@ func (c *Context) SetAgentState(state AgentState, now time.Time) {
 	c.AgentState = state
 	c.AgentStateAt = now
 }
+
+// Label は表示用の短いラベルを返す。未観測（空）は空文字。
+func (s AgentState) Label() string {
+	switch s {
+	case AgentNeedsInput:
+		return "needs input"
+	case AgentTurnDone:
+		return "turn done"
+	default:
+		return string(s)
+	}
+}
