@@ -44,10 +44,12 @@ func newLiveViews(minInterval time.Duration) *liveViews {
 	return &liveViews{minInterval: minInterval, toplevel: memoToplevel(), now: time.Now}
 }
 
-func (l *liveViews) views(contexts []model.Context) map[string]agentview.View {
+// views は all（表示対象に絞らない store の全 context）に overlay を適用し、名前で引ける map を返す。
+// 表示側は自分が描画する context だけを名前で引く。
+func (l *liveViews) views(all []model.Context) map[string]agentview.View {
 	if !l.fetched || l.now().Sub(l.snap.FetchedAt) >= l.minInterval {
 		l.snap = fetchAgentSnapshot()
 		l.fetched = true
 	}
-	return agentview.Overlay(contexts, l.snap, l.toplevel)
+	return agentview.Overlay(all, l.snap, l.toplevel)
 }

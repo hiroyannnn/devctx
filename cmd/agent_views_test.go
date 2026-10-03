@@ -186,3 +186,22 @@ func TestGetLiveStatusesPrecedence(t *testing.T) {
 		t.Errorf("none: %+v", g)
 	}
 }
+
+// Done の context A が所有する live セッションを、同じ worktree の B に当てはめない。
+func TestTuiItemsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "a", Status: model.StatusDone, Worktree: "/w/x", SessionID: "live-a"},
+		{Name: "b", Status: model.StatusInProgress, Worktree: "/w/x", SessionID: "old-b",
+			AgentState: model.AgentTurnDone, AgentStateAt: time.Now().Add(-time.Hour)},
+	}}
+	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "live-a", Cwd: "/w/x", Status: "busy"}))
+	live := newLiveViews(0)
+	live.toplevel = func(string) string { return "/w/x" }
+
+	for _, it := range buildItems(store, live) {
+		ci := it.(contextItem)
+		if ci.ctx.Name == "b" && ci.view.Source == agentview.SourceLive {
+			t.Errorf("b が Done の a の live セッションを奪った: %+v", ci.view)
+		}
+	}
+}

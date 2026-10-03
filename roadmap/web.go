@@ -121,13 +121,15 @@ type Server struct {
 
 const cacheTTL = 5 * time.Second
 
-// agentViews は active な context に agent view を重ねた表示状態を返す。store には書き戻さない。
-func (s *Server) agentViews(active []model.Context) map[string]agentview.View {
+// agentViews は agent view を重ねた表示状態を context 名で返す。store には書き戻さない。
+// all には表示対象に絞らず store の全 context を渡す。Done / 保持期間切れの context が
+// 所有する live セッションを、同じ worktree の別 context に誤って当てないため。
+func (s *Server) agentViews(all []model.Context) map[string]agentview.View {
 	var snap agentview.Snapshot
 	if s.Live != nil {
 		snap = s.Live.Snapshot()
 	}
-	return agentview.Overlay(active, snap, s.Toplevel)
+	return agentview.Overlay(all, snap, s.Toplevel)
 }
 
 // NewServer creates a new Server.
@@ -208,7 +210,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
-	views := s.agentViews(active)
+	views := s.agentViews(store.Contexts)
 
 	// Load insights (non-fatal if fails)
 	var insights *model.InsightStore
@@ -299,7 +301,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
-	views := s.agentViews(active)
+	views := s.agentViews(store.Contexts)
 
 	var insights *model.InsightStore
 	if s.InsightLoader != nil {
@@ -401,7 +403,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
-	views := s.agentViews(active)
+	views := s.agentViews(store.Contexts)
 
 	var insights *model.InsightStore
 	if s.InsightLoader != nil {

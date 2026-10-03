@@ -227,3 +227,21 @@ func TestOverlayWorktreeFallbackIsOneToOne(t *testing.T) {
 		}
 	}
 }
+
+// 表示対象外（Done など）の context が所有する live セッションは、同じ worktree の
+// 別 context に当てはめない。Overlay には store の全 context を渡す前提の回帰テスト。
+func TestOverlayDoneContextKeepsOwningItsLiveSession(t *testing.T) {
+	a := claudeCtx("a", "/w/x", "live-a")
+	a.Status = model.StatusDone
+	b := claudeCtx("b", "/w/x", "old-b")
+	snap := okSnap(Session{SessionID: "live-a", Cwd: "/w/x", Status: "busy"})
+	top := toplevelOf(map[string]string{"/w/x": "/w/x"})
+
+	all := Overlay([]model.Context{a, b}, snap, top)
+	if all["a"].Source != SourceLive {
+		t.Errorf("a は SessionID 一致で live: %+v", all["a"])
+	}
+	if all["b"].Source == SourceLive {
+		t.Errorf("b が a の live セッションを奪った: %+v", all["b"])
+	}
+}

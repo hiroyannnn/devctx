@@ -236,3 +236,24 @@ func TestLiveRefresherClearsInflightOnPanic(t *testing.T) {
 		return atomic.LoadInt32(&calls) == 1 && !l.inflight
 	})
 }
+
+func TestAPIsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
+	now := time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "a", Worktree: "/w/x", Status: model.StatusDone, RepoRoot: "/repo", CreatedAt: now, LastSeen: now, SessionID: "live-a"},
+		{Name: "b", Worktree: "/w/x", Status: model.StatusInProgress, RepoRoot: "/repo", CreatedAt: now, LastSeen: now,
+			SessionID: "old-b", AgentState: model.AgentTurnDone, AgentStateAt: now},
+	}}
+	snap := agentview.Snapshot{OK: true, FetchedAt: now.Add(time.Hour), Sessions: []agentview.Session{
+		{SessionID: "live-a", Cwd: "/w/x", Status: "busy"},
+	}}
+	server := &Server{
+		StoreLoader: &mockStoreLoader{store: store}, Live: fakeLive{snap},
+		Toplevel: func(string) string { return "/w/x" },
+	}
+	w := httptest.NewRecorder()
+	server.handleAPIRoadmap(w, httptest.NewRequest("GET", "/api/roadmap", nil))
+	if body := w.Body.String(); strings.Contains(body, `"agent_state_source":"live"`) {
+		t.Fatalf("b が Done の a の live セッションを奪った:\n%s", body)
+	}
+}

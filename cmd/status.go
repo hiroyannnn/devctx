@@ -67,7 +67,7 @@ Status indicators:
 }
 
 func showStatus(store *model.Store, live *liveViews) error {
-	statuses := getLiveStatuses(store, live.views(store.Active()))
+	statuses := getLiveStatuses(store, live.views(store.Contexts))
 
 	if len(statuses) == 0 {
 		fmt.Println("No contexts registered.")

@@ -123,7 +123,7 @@ var keys = newKeyMap()
 
 // buildItems は status 順の一覧を作る。live 状態は表示用の view としてのみ持ち、store には入れない。
 func buildItems(store *model.Store, live *liveViews) []list.Item {
-	views := live.views(store.Active())
+	views := live.views(store.Contexts)
 	items := make([]list.Item, 0)
 	statuses := []model.Status{
 		model.StatusInProgress,

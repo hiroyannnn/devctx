@@ -161,7 +161,7 @@ var listCmd = &cobra.Command{
 		}
 
 		// Single display（live 状態は 1 回だけ取得する）
-		printKanban(store, 0, newLiveViews(0).views(store.Active()))
+		printKanban(store, 0, newLiveViews(0).views(store.Contexts))
 		return nil
 	},
 }
@@ -482,7 +482,7 @@ func newKanbanModel(s *storage.Storage) kanbanModel {
 		contexts:          contexts,
 		doneRetentionDays: retentionDays,
 		live:              live,
-		views:             live.views(contexts),
+		views:             live.views(store.Contexts),
 	}
 }
 
@@ -535,7 +535,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < 0 {
 				m.cursor = 0
 			}
-			m.views = m.live.views(m.contexts)
+			m.views = m.live.views(store.Contexts)
 		}
 		m.message = ""
 		return m, tickCmd()
