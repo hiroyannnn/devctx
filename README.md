@@ -86,6 +86,16 @@ Known limitations (Codex):
 - With parallel tool calls, a `PostToolUse` from another tool can return the state to running while a permission is still pending.
 - `Stop` can be continued by other Stop hooks, so turn done is a best-effort signal.
 
+### Claude State from Agent View
+
+For Claude, the dashboard (Mind Map / cards), `devctx list`, `devctx tui` and `devctx status` overlay the live state from `claude agents --json` (Claude Code agent view) on the hook state, and show why a session is waiting, e.g. `claude · needs input · permission prompt`.
+
+- Matching: by session ID first; otherwise by the git toplevel of the live session's cwd equal to the context's worktree, only when exactly one live session matches. Ambiguous matches keep the hook state.
+- Hooks stay as the fallback (agent view unavailable, timeout, no match) and as the source for registration and `ended`. A hook that arrives after a fetch started, or `ended`, always wins over the live state.
+- Absence from agent view is **not** treated as ended: restricted environments can return an empty list even while sessions exist.
+- The `dx` fzf picker and shell completion (`list --fzf` / `--names-only`) use hook state only, for speed. (`dxl` / `dxw` are plain `list` / `list --watch`, so they do show live state.) Hooks themselves never call `claude agents`.
+- Live values are display-only and are never written to `contexts.yaml`.
+
 ### Optional Setup
 
 ```bash
