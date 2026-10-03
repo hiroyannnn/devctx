@@ -701,6 +701,34 @@ func (m kanbanModel) View() string {
 	return header + selectedInfo + msgLine + kanban
 }
 
+// macTerminalScript は cmd を新しい iTerm2 / Terminal.app ウィンドウで実行する AppleScript を返す。
+// iTerm2 には zsh -c の引数として渡すため、shell クォートしてから AppleScript 文字列にする。
+func macTerminalScript(cmd string) string {
+	iTermCommand := appleScriptString("/bin/zsh -c " + shellQuote(cmd))
+	return `
+tell application "System Events"
+	if exists (processes where name is "iTerm2") then
+		tell application "iTerm"
+			create window with default profile command ` + iTermCommand + `
+		end tell
+	else
+		tell application "Terminal"
+			do script ` + appleScriptString(cmd) + `
+			activate
+		end tell
+	end if
+end tell
+`
+}
+
+// appleScriptString は s を AppleScript の文字列リテラル（"..." 込み）にする。
+// " より先に \ をエスケープしないと、\" が \\" となり文字列が途中で閉じてしまう。
+func appleScriptString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
 func openInNewTerminal(ctx model.Context) error {
 	cmd, err := resumeShellCommand(ctx)
 	if err != nil {
@@ -709,22 +737,7 @@ func openInNewTerminal(ctx model.Context) error {
 
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS - try iTerm2 first, then Terminal.app
-		script := fmt.Sprintf(`
-			tell application "System Events"
-				if exists (processes where name is "iTerm2") then
-					tell application "iTerm"
-						create window with default profile command "/bin/zsh -c '%s'"
-					end tell
-				else
-					tell application "Terminal"
-						do script "%s"
-						activate
-					end tell
-				end if
-			end tell
-		`, strings.ReplaceAll(cmd, "'", "'\"'\"'"), strings.ReplaceAll(cmd, "\"", "\\\""))
-		return exec.Command("osascript", "-e", script).Start()
+		return exec.Command("osascript", "-e", macTerminalScript(cmd)).Start()
 
 	case "linux":
 		// Try common terminal emulators
