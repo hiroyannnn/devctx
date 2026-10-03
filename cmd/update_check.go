@@ -237,12 +237,17 @@ func startUpdateCheck() {
 }
 
 // startUpdateCheckWithChecker はテスト可能な内部実装。
-func startUpdateCheckWithChecker(checker *UpdateChecker) {
+// 戻り値の channel はバックグラウンド更新の完了時（起動しない場合は即座）に close される。
+// 本番では fire-and-forget のため捨てる。固定 sleep で待つテストが CI で flaky だったため、
+// テストが完了を決定的に待てるよう返している。
+func startUpdateCheckWithChecker(checker *UpdateChecker) <-chan struct{} {
+	done := make(chan struct{})
 	updateChecker = checker
 
 	cache, err := checker.LoadCache()
 	if err != nil {
-		return
+		close(done)
+		return done
 	}
 
 	// キャッシュ済み結果から同期的に通知を決定（goroutine 待ち不要）
@@ -254,11 +259,15 @@ func startUpdateCheckWithChecker(checker *UpdateChecker) {
 	}
 
 	// stale ならバックグラウンドでキャッシュ更新（次回用、fire-and-forget）
-	if checker.IsStale(cache) {
-		go func() {
-			checker.CheckAndCache()
-		}()
+	if !checker.IsStale(cache) {
+		close(done)
+		return done
 	}
+	go func() {
+		defer close(done)
+		checker.CheckAndCache()
+	}()
+	return done
 }
 
 // showUpdateNotification はアップデート通知を表示する。

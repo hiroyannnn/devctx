@@ -347,20 +347,52 @@ func TestStartAndShowUpdateNotification(t *testing.T) {
 	updateChecker = nil
 	pendingNotification = ""
 
-	startUpdateCheckWithChecker(checker)
+	done := startUpdateCheckWithChecker(checker)
 
 	// pendingNotification はキャッシュ済みの v0.3.0 に基づいて設定されるべき
 	if pendingNotification == "" {
 		t.Error("pendingNotification should be set from cached version")
 	}
 
-	// バックグラウンドの goroutine が完了するのを少し待つ
-	time.Sleep(100 * time.Millisecond)
+	// バックグラウンドの goroutine 完了を待つ（固定 sleep は CI で flaky だった）
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background update check did not finish within 5s")
+	}
 
 	// キャッシュが更新されていることを確認
 	updated, _ := checker.LoadCache()
 	if updated.LatestVersion != "v0.5.0" {
 		t.Errorf("background update should have cached v0.5.0, got %q", updated.LatestVersion)
+	}
+}
+
+func TestStartUpdateCheckDoneClosedWhenFresh(t *testing.T) {
+	// キャッシュが fresh なら goroutine を起動せず、done は即座に close されている
+	dir := t.TempDir()
+	checker := &UpdateChecker{
+		CurrentVersion: "v0.2.0",
+		CachePath:      filepath.Join(dir, "update_cache.yaml"),
+		APIURL:         "http://127.0.0.1:0", // 叩かれたら失敗する
+		SuccessTTL:     24 * time.Hour,
+		FailureTTL:     1 * time.Hour,
+	}
+	checker.SaveCache(&UpdateCache{
+		LastCheckedAt: time.Now(),
+		LatestVersion: "v0.2.0",
+		CheckedOK:     true,
+	})
+
+	updateChecker = nil
+	pendingNotification = ""
+
+	done := startUpdateCheckWithChecker(checker)
+
+	select {
+	case <-done:
+	default:
+		t.Fatal("done should be closed immediately when cache is fresh")
 	}
 }
 
