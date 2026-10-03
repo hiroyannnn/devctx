@@ -68,10 +68,20 @@ func TestResumeShellCommand_QuotesWorktreeAndSession(t *testing.T) {
 	}
 }
 
+func TestResumeShellCommand_Codex(t *testing.T) {
+	got, err := resumeShellCommand(model.Context{Worktree: "/w/feat-x", SessionID: "x1", Provider: model.ProviderCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "cd '/w/feat-x' && codex resume 'x1'"; got != want {
+		t.Fatalf("resumeShellCommand = %q, want %q", got, want)
+	}
+}
+
 func TestResumeShellCommand_UnsupportedProvider(t *testing.T) {
-	_, err := resumeShellCommand(model.Context{Worktree: "/w/feat-x", SessionID: "x1", Provider: model.ProviderCodex})
-	if err == nil || !strings.Contains(err.Error(), "codex") {
-		t.Fatalf("err = %v, want unsupported provider error mentioning codex", err)
+	_, err := resumeShellCommand(model.Context{Worktree: "/w/feat-x", SessionID: "x1", Provider: model.ProviderManual})
+	if err == nil || !strings.Contains(err.Error(), "manual") {
+		t.Fatalf("err = %v, want unsupported provider error mentioning manual", err)
 	}
 }
 

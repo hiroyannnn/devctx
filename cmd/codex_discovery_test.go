@@ -1,6 +1,14 @@
 package cmd
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hiroyannnn/devctx/model"
+)
 
 const (
 	codexLineDesktop    = `{"timestamp":"2026-10-03T12:27:38.918Z","type":"session_meta","payload":{"session_id":"019a0000-0000-7000-8000-000000000001","id":"019a0000-0000-7000-8000-000000000001","timestamp":"2026-10-03T12:27:38.918Z","cwd":"/Users/me/proj","git":{"branch":"feat/x","commit_hash":"abc","repository_url":"git@github.com:o/r.git"},"originator":"Codex Desktop","source":"vscode","thread_source":"user","base_instructions":{"text":"large"}}}`
@@ -79,5 +87,105 @@ func TestIsInteractiveCodexSession_OtherThreadSources(t *testing.T) {
 		if isInteractiveCodexSession(codexSessionMeta{ThreadSource: ts, Source: "vscode", Originator: "Codex Desktop"}) {
 			t.Errorf("thread_source %q should not be interactive", ts)
 		}
+	}
+}
+
+// --- codexAdapter ---
+
+func writeRollout(t *testing.T, home, day, id, metaLine string, mtime time.Time) string {
+	t.Helper()
+	dir := filepath.Join(home, "sessions", day)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-"+strings.ReplaceAll(day, "/", "-")+"T00-00-00-"+id+".jsonl")
+	body := metaLine + "\n" + `{"type":"event_msg","payload":{}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func metaLine(id, cwd, threadSource, source string) string {
+	return `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-10-03T00:00:00Z","cwd":"` + cwd +
+		`","git":null,"originator":"Codex Desktop","source":` + source + `,"thread_source":"` + threadSource + `"}}`
+}
+
+func TestCodexAdapter_Discover(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	recent := now.Add(-time.Hour)
+
+	pRecent := writeRollout(t, home, "2026/10/03", "id-recent", metaLine("id-recent", "/w/a", "user", `"vscode"`), recent)
+	writeRollout(t, home, "2026/10/03", "id-auto", metaLine("id-auto", "/w/a", "automation", `"vscode"`), recent)
+	writeRollout(t, home, "2026/10/02", "id-guard", metaLine("id-guard", "/w/a", "guardian_review", `{"subagent":{"other":"guardian"}}`), recent)
+	pOld := writeRollout(t, home, "2026/08/01", "id-old-active", metaLine("id-old-active", "/w/b", "user", `"cli"`), now.Add(-30*time.Minute))
+	writeRollout(t, home, "2026/08/01", "id-old-stale", metaLine("id-old-stale", "/w/c", "user", `"cli"`), now.Add(-1000*time.Hour))
+	writeRollout(t, home, "2026/09/01", "id-old-registered", metaLine("id-old-registered", "/w/d", "user", `"cli"`), now.Add(-900*time.Hour))
+
+	index := strings.Join([]string{
+		`{"id":"id-recent","thread_name":"Recent work","updated_at":"2026-10-03T11:00:00Z"}`,
+		`{"id":"id-old-active","thread_name":"Old but active","updated_at":"2026-10-03T11:30:00Z"}`,
+		`{"id":"id-old-stale","thread_name":"Stale","updated_at":"2026-08-01T11:30:00Z"}`,
+		`not json`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &model.Store{}
+	store.Add(model.Context{Name: "reg", Provider: model.ProviderCodex, SessionID: "id-recent"})
+
+	a := codexAdapter{home: home, days: 14, now: func() time.Time { return now }}
+	got, err := a.Discover(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.SessionID)
+	}
+	want := []string{"id-old-active", "id-recent"} // LastModified desc
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+
+	old := got[0]
+	if old.Provider != model.ProviderCodex || old.SessionName != "Old but active" || old.TranscriptPath != pOld ||
+		old.ProjectPath != "/w/b" || old.MessageCount != 0 || old.IsRegistered || !old.LastModified.Equal(now.Add(-30*time.Minute)) {
+		t.Fatalf("unexpected: %+v", old)
+	}
+	rec := got[1]
+	if rec.TranscriptPath != pRecent || rec.SessionName != "Recent work" || !rec.IsRegistered {
+		t.Fatalf("unexpected: %+v", rec)
+	}
+}
+
+func TestCodexAdapter_Discover_NoHome(t *testing.T) {
+	a := codexAdapter{home: filepath.Join(t.TempDir(), "missing"), days: 14, now: time.Now}
+	got, err := a.Discover(&model.Store{})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+}
+
+func TestCodexAdapter_AgentCommand(t *testing.T) {
+	a := codexAdapter{}
+	if got, _ := a.AgentCommand(model.Context{SessionID: "id'1"}); got != `codex resume 'id'\''1'` {
+		t.Fatalf("got %q", got)
+	}
+	if got, _ := a.AgentCommand(model.Context{}); got != "codex" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestNewCodexAdapter_HomeFromEnv(t *testing.T) {
+	t.Setenv("CODEX_HOME", "/custom/codex")
+	if a := newCodexAdapter(); a.home != "/custom/codex" || a.days != 14 {
+		t.Fatalf("unexpected: %+v", a)
 	}
 }

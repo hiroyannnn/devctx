@@ -14,7 +14,7 @@ type ProviderAdapter interface {
 
 // providerAdapters は discover の表示順でもある。manual は探索も再開もないので登録しない。
 func providerAdapters() []ProviderAdapter {
-	return []ProviderAdapter{claudeAdapter{}}
+	return []ProviderAdapter{claudeAdapter{}, newCodexAdapter()}
 }
 
 func adapterFor(p model.Provider) (ProviderAdapter, bool) {
