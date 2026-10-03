@@ -98,6 +98,10 @@ type codexAdapter struct {
 	home string
 	days int
 	now  func() time.Time
+	// skipResumedSearch は「古い日付ディレクトリにあるが最近再開された」セッションの探索を省く。
+	// この探索は全日付ディレクトリを走査するため、毎回走る list の同期では省き、
+	// 取り込み済みセッションの更新は保存済みの TranscriptPath の mtime で追う。
+	skipResumedSearch bool
 }
 
 // newCodexAdapter は $CODEX_HOME（未設定なら ~/.codex）を見る adapter を返す。
@@ -151,14 +155,22 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 		}
 	}
 
-	// 古い日付ディレクトリにあるが最近も更新されている（resume された）セッション
-	for id, entry := range index {
-		if entry.UpdatedAt.Before(cutoff) || hasRolloutFor(paths, id) {
-			continue
+	// 古い日付ディレクトリにあるが最近も更新されている（resume された）セッション。
+	// 全日付ディレクトリの走査は高いので、対象 id をまとめて 1 回だけ glob する
+	if !a.skipResumedSearch {
+		missing := map[string]bool{}
+		for id, entry := range index {
+			if !entry.UpdatedAt.Before(cutoff) && !hasRolloutFor(paths, id) {
+				missing[id] = true
+			}
 		}
-		matches, _ := filepath.Glob(filepath.Join(sessionsDir, "*", "*", "*", "rollout-*-"+id+".jsonl"))
-		for _, m := range matches {
-			add(m)
+		if len(missing) > 0 {
+			all, _ := filepath.Glob(filepath.Join(sessionsDir, "*", "*", "*", "rollout-*.jsonl"))
+			for _, m := range all {
+				if id, ok := rolloutSessionID(m); ok && missing[id] {
+					add(m)
+				}
+			}
 		}
 	}
 
@@ -247,6 +259,17 @@ func readCodexIndex(path string) map[string]codexIndexEntry {
 
 // hasRolloutFor は候補にすでに id の rollout があるかを返す。
 // 最近のセッションごとに sessions/*/*/*/ を glob するとディレクトリ走査が高くつくため、その前に除外する。
+// rolloutSessionID は rollout-<YYYY-MM-DDThh-mm-ss>-<id>.jsonl から id を取り出す。
+// Why not split on the last "-": id 自体（UUID）が "-" を含む。
+func rolloutSessionID(path string) (string, bool) {
+	const prefixLen = len("rollout-") + len("2006-01-02T15-04-05") + len("-")
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "rollout-") || !strings.HasSuffix(base, ".jsonl") || len(base) <= prefixLen+len(".jsonl") {
+		return "", false
+	}
+	return strings.TrimSuffix(base[prefixLen:], ".jsonl"), true
+}
+
 func hasRolloutFor(paths []string, id string) bool {
 	suffix := "-" + id + ".jsonl"
 	for _, p := range paths {

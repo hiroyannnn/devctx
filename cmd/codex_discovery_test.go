@@ -205,3 +205,29 @@ func TestCodexAdapter_Discover_UsesSessionBranch(t *testing.T) {
 		t.Fatalf("Branch should come from session_meta git.branch (the branch the session ran on), got %+v", sessions)
 	}
 }
+
+func TestCodexAdapter_Discover_SkipResumedSearch(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	writeRollout(t, home, "2026/08/01", "id-old-active", metaLine("id-old-active", "/w/b", "user", `"cli"`), now.Add(-30*time.Minute))
+	idx := `{"id":"id-old-active","thread_name":"old","updated_at":"2026-10-03T11:30:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), []byte(idx), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	full, _ := codexAdapter{home: home, days: 2, now: func() time.Time { return now }}.Discover(&model.Store{})
+	quick, _ := codexAdapter{home: home, days: 2, now: func() time.Time { return now }, skipResumedSearch: true}.Discover(&model.Store{})
+	if len(full) != 1 || len(quick) != 0 {
+		t.Fatalf("full=%d quick=%d; the resumed-session search (all day dirs) should be skipped only when requested", len(full), len(quick))
+	}
+}
+
+func TestRolloutSessionID(t *testing.T) {
+	id, ok := rolloutSessionID("/x/sessions/2026/10/03/rollout-2026-10-03T21-27-38-01a101bb-fa25-77c1-9dd5-5246825f6982.jsonl")
+	if !ok || id != "01a101bb-fa25-77c1-9dd5-5246825f6982" {
+		t.Fatalf("id=%q ok=%v", id, ok)
+	}
+	if _, ok := rolloutSessionID("/x/notes.jsonl"); ok {
+		t.Fatalf("non-rollout file should not match")
+	}
+}
