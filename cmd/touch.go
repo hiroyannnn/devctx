@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,14 @@ type hookInput struct {
 	SessionID        string `json:"session_id"`
 	HookEventName    string `json:"hook_event_name"`
 	NotificationType string `json:"notification_type"`
+	ToolName         string `json:"tool_name"`
+	// ToolInput は待ち要求の分類にだけ使う。Write の content やパッチ全文のように巨大でも、構造体には展開しない
+	ToolInput json.RawMessage `json:"tool_input"`
 }
+
+// maxHookInputBytes は hook stdin の読み取り上限。tool_input は巨大になりうるので、
+// 上限を超えたら黙って切り詰めず不正入力として扱う（状態を変えない）。
+const maxHookInputBytes = 8 << 20
 
 var (
 	touchQuick      bool
@@ -149,7 +157,7 @@ func resolveTouchTarget(store *model.Store, provider model.Provider, sessionID s
 // parseHookInput は hook の stdin JSON（1 行）を読む。空入力はゼロ値を返す。
 func parseHookInput(r io.Reader) (hookInput, error) {
 	var input hookInput
-	err := decodeHookInput(r, &input)
+	err := decodeHookInput(io.LimitReader(r, maxHookInputBytes), &input)
 	return input, err
 }
 
@@ -170,19 +178,20 @@ func applyLastSeen(ctx *model.Context, now time.Time, quick bool) bool {
 	return true
 }
 
-// applyHookState は hook イベントからエージェント状態を更新する。状態が変わらなければ false を返す。
+// applyHookState は hook イベントからエージェント状態と待ち要求を更新する。変化が無ければ false を返す。
+// ロック無しの no-op 判定（touchIsNoop）とロック内の更新が同じ関数を通るので、判定がずれない。
 // 同じ状態の再記録を避けるのは、UserPromptSubmit など高頻度の hook で毎回 store を書き換えないため。
 // eventTime より後に記録された状態があれば、遅れて届いた古いイベントとして捨てる（async hook の順序逆転対策）。
 func applyHookState(ctx *model.Context, input hookInput, eventTime time.Time) bool {
 	if eventTime.Before(ctx.AgentStateAt) {
 		return false
 	}
-	next, ok := model.AgentStateFromHook(input.HookEventName, input.NotificationType, ctx.AgentState)
-	if !ok || next == ctx.AgentState {
-		return false
-	}
-	ctx.SetAgentState(next, eventTime)
-	return true
+	return model.ApplyHookEvent(ctx, model.HookEvent{
+		Name:             input.HookEventName,
+		NotificationType: input.NotificationType,
+		ToolName:         input.ToolName,
+		ToolInput:        input.ToolInput,
+	}, eventTime)
 }
 
 func init() {

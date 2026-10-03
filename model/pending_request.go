@@ -42,6 +42,12 @@ const (
 	networkAccessTag   = "network-access "
 )
 
+// matches は PostToolUse の tool_name / tool_input が、この待ち要求と同じツール呼び出しかを返す。
+// tool_use_id が PermissionRequest に無いため、tool_input のハッシュで対応付ける。
+func (p PendingRequest) matches(toolName string, toolInput json.RawMessage) bool {
+	return p.Tool == toolName && p.InputHash == ClassifyPending(toolName, toolInput, time.Time{}).InputHash
+}
+
 // Label は表示用の短い文字列を返す。MCP は Tool 名（mcp__server__tool）が冗長なので Summary だけにする。
 func (p PendingRequest) Label() string {
 	if p.Kind == PendingMCP && p.Summary != "" {

@@ -131,12 +131,15 @@ func TestUniqueContextName(t *testing.T) {
 
 func TestUpsertRegistration_NewSessionResetsAgentState(t *testing.T) {
 	store := &model.Store{Contexts: []model.Context{
-		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1", AgentState: model.AgentEnded, AgentStateAt: registerNow.Add(-time.Hour)},
+		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1", AgentState: model.AgentEnded, AgentStateAt: registerNow.Add(-time.Hour), PendingRequest: &model.PendingRequest{Tool: "Bash"}},
 	}}
 	ctx, _ := upsertRegistration(store, registration{
 		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderClaude, SessionID: "c2",
 	}, registerNow)
 
+	if ctx.PendingRequest != nil {
+		t.Fatalf("session start should clear the pending request, got %+v", ctx.PendingRequest)
+	}
 	if ctx.AgentState != "" || !ctx.AgentStateAt.IsZero() {
 		t.Fatalf("session start should clear the previous session's state, got %q at %v", ctx.AgentState, ctx.AgentStateAt)
 	}

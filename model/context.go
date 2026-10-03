@@ -70,6 +70,8 @@ type Context struct {
 	Provider       Provider        `yaml:"provider,omitempty"`  // 空は claude（EffectiveProvider を使う）
 	AgentState     AgentState      `yaml:"agent_state,omitempty"`
 	AgentStateAt   time.Time       `yaml:"agent_state_at,omitempty"`
+	// PendingRequest は needs_input の間だけ、何を待っているか（hook 由来の単一スロット）
+	PendingRequest *PendingRequest `yaml:"pending_request,omitempty"`
 }
 
 type Config struct {

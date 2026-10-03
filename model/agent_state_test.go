@@ -24,6 +24,7 @@ func TestAgentStateFromHook(t *testing.T) {
 		{name: "auth success is not waiting", event: "Notification", notificationType: "auth_success", current: AgentRunning, wantChange: false},
 		{name: "permission request (Codex)", event: "PermissionRequest", current: AgentRunning, want: AgentNeedsInput, wantChange: true},
 		{name: "tool finished returns to running after approval", event: "PostToolUse", current: AgentNeedsInput, want: AgentRunning, wantChange: true},
+		{name: "interrupt ends the turn", event: "Interrupt", current: AgentNeedsInput, want: AgentTurnDone, wantChange: true},
 		{name: "ended is terminal", event: "UserPromptSubmit", current: AgentEnded, wantChange: false},
 		{name: "unknown event", event: "PreToolUse", current: AgentRunning, wantChange: false},
 	}
