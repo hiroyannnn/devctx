@@ -284,7 +284,8 @@ func discoverFromAdapters(adapters []ProviderAdapter, store *model.Store) ([]Dis
 
 // resolveSessionPlacement は取り込み先の worktree / repo / branch を git から解決する。
 func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
-	if sess.ProjectPath == "" {
+	// 登録済みは merge で LastSeen しか使わないので、git を呼ばない
+	if sess.ProjectPath == "" || sess.IsRegistered {
 		return sess
 	}
 	switch sess.Provider {

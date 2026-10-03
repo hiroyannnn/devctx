@@ -188,6 +188,16 @@ var listCmd = &cobra.Command{
 			}
 		}
 
+		// 直近の対話的な Codex セッションを毎回取り込む（失敗しても list は続ける）
+		if autoImport {
+			if imported, err := syncCodexSessions(s, newCodexSyncAdapter(), store); err == nil && len(imported) > 0 {
+				fmt.Println(dimStyle.Render(fmt.Sprintf("Auto-imported %d Codex session(s)", len(imported))))
+				if reloaded, err := s.LoadStore(); err == nil {
+					store = reloaded
+				}
+			}
+		}
+
 		// Watch mode with interactive scrolling
 		if listWatch {
 			p := tea.NewProgram(newKanbanModel(s), tea.WithAltScreen())
@@ -782,4 +792,37 @@ func openInNewTerminal(ctx model.Context) error {
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
+}
+
+// codexSyncDays は list の自動取り込みで遡る日数。毎回走るので discover の既定より短くする。
+const codexSyncDays = 2
+
+func newCodexSyncAdapter() codexAdapter {
+	a := newCodexAdapter()
+	a.days = codexSyncDays
+	return a
+}
+
+// syncCodexSessions は直近の Codex セッションを取り込み、既存分の LastSeen を進める。
+// 変更がなければ contexts.yaml を書き換えない（list のたびに mtime が動かないように）。
+func syncCodexSessions(s *storage.Storage, adapter codexAdapter, store *model.Store) ([]string, error) {
+	sessions, err := adapter.Discover(store)
+	if err != nil || len(sessions) == 0 {
+		return nil, err
+	}
+	resolved := make([]DiscoveredSession, len(sessions))
+	for i, sess := range sessions {
+		resolved[i] = resolveSessionPlacement(sess)
+	}
+
+	var imported []string
+	err = s.UpdateStore(func(locked *model.Store) error {
+		var changed bool
+		imported, changed = mergeDiscoveredSessions(locked, resolved, time.Now())
+		if !changed {
+			return storage.ErrSkipSave
+		}
+		return nil
+	})
+	return imported, err
 }
