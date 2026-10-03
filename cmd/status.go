@@ -154,7 +154,7 @@ func watchStatus(store *model.Store) error {
 	return nil
 }
 
-// getLiveStatuses は context ごとの稼働状態を返す。優先順位は live（agent view）→ hook → transcript 推論。
+// getLiveStatuses は context ごとの稼働状態を返す。優先順位は live（agent view）→ transcript 推論。
 // views は agentview.Overlay の結果（nil なら hook と transcript のみ）。
 func getLiveStatuses(store *model.Store, views map[string]agentview.View) []LiveStatus {
 	var statuses []LiveStatus
@@ -172,9 +172,11 @@ func getLiveStatuses(store *model.Store, views map[string]agentview.View) []Live
 			ls.LastRole = lastRole
 		}
 
-		// live / hook で状態が分かるなら transcript の mtime 推論より優先する
+		// agent view の live 状態だけを transcript の mtime 推論より優先する。
+		// Why not hook state: hook の状態は SessionEnd が欠けると古いまま残る（昨日の turn_done 等）ため、
+		// 従来 hook を見ていなかった status の推論を上書きすると後退になる
 		view := agentview.ViewFor(views, ctx)
-		if status, ok := sessionStatusFromAgentState(view.State); ok {
+		if status, ok := sessionStatusFromAgentState(view.State); ok && view.Source == agentview.SourceLive {
 			ls.SessionStatus = status
 			ls.Reason = view.Reason
 			ls.Source = view.Source

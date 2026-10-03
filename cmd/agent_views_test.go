@@ -175,8 +175,9 @@ func TestGetLiveStatusesPrecedence(t *testing.T) {
 	if g := got["live"]; g.SessionStatus != SessionStatusWaiting || g.Reason != "permission prompt" {
 		t.Errorf("live: %+v", g)
 	}
-	if g := got["hook"]; g.SessionStatus != SessionStatusActive {
-		t.Errorf("hook: %+v", g)
+	// hook の状態は古いまま残りうる（昨日の turn_done 等）ため、status では使わず従来の transcript 推論に任せる
+	if g := got["hook"]; g.SessionStatus != SessionStatusOffline || g.Source != "" {
+		t.Errorf("hook state must not override transcript inference: %+v", g)
 	}
 	if g := got["ended"]; g.SessionStatus != SessionStatusOffline {
 		t.Errorf("ended: %+v", g)
