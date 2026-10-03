@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -15,13 +18,41 @@ import (
 
 // buildDevctx は hook と同じく stdin をパイプで渡して実行するため、実バイナリをビルドする。
 // Why not cobra の Execute をテスト内で呼ぶ: stdinIsPipe は os.Stdin を見るので、プロセスを分けないと hook 経路を再現できない。
+// Why once: ビルドは数秒かかるため、テストごとではなくバイナリごとに 1 回だけ行う。
 func buildDevctx(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "devctx")
-	if out, err := exec.Command("go", "build", "-o", bin, "..").CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
+	devctxBin.once.Do(func() {
+		dir, err := os.MkdirTemp("", "devctx-e2e-")
+		if err != nil {
+			devctxBin.err = err
+			return
+		}
+		devctxBin.dir = dir
+		devctxBin.path = filepath.Join(dir, "devctx")
+		if out, err := exec.Command("go", "build", "-o", devctxBin.path, "..").CombinedOutput(); err != nil {
+			devctxBin.err = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if devctxBin.err != nil {
+		t.Fatal(devctxBin.err)
 	}
-	return bin
+	return devctxBin.path
+}
+
+var devctxBin struct {
+	once sync.Once
+	dir  string
+	path string
+	err  error
+}
+
+// TestMain はテスト用にビルドしたバイナリの一時ディレクトリを後始末する。
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if devctxBin.dir != "" {
+		os.RemoveAll(devctxBin.dir)
+	}
+	os.Exit(code)
 }
 
 // runHook は隔離した HOME で devctx を実行し、stdin に hook の JSON を渡す。
@@ -141,5 +172,51 @@ func TestRegisterClaudeHook_RegistersSilently(t *testing.T) {
 	}
 	if got := len(loadStoreFromHome(t, home).Contexts); got != 1 {
 		t.Fatalf("contexts = %d, want 1", got)
+	}
+}
+
+func TestTouchHook_NoopDoesNotRewriteStore(t *testing.T) {
+	bin := buildDevctx(t)
+	home := t.TempDir()
+	repo := initGitRepo(t)
+	if _, err := runHook(t, bin, home,
+		`{"session_id":"claude-1","cwd":"`+repo+`","source":"startup"}`, "register"); err != nil {
+		t.Fatal(err)
+	}
+	touch := func(event string) {
+		t.Helper()
+		if _, err := runHook(t, bin, home,
+			`{"session_id":"claude-1","hook_event_name":"`+event+`"}`,
+			"touch", "--quick", "--track-state"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(home, ".config", "devctx", "contexts.yaml")
+	// 書き換えを mtime で検出するため、過去に戻してから観測する
+	past := time.Now().Add(-time.Hour)
+	mtime := func() time.Time {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.ModTime()
+	}
+
+	touch("UserPromptSubmit") // "" -> running: 書く
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+	touch("UserPromptSubmit") // 同じ状態 + last_seen は間引き: 書かない
+	if !mtime().Equal(past) {
+		t.Fatal("no-op touch must not rewrite contexts.yaml")
+	}
+
+	touch("Stop") // running -> turn_done: 書く
+	if mtime().Equal(past) {
+		t.Fatal("state-changing touch must rewrite contexts.yaml")
+	}
+	if got := loadStoreFromHome(t, home).Contexts[0].AgentState; got != model.AgentTurnDone {
+		t.Fatalf("agent state = %q, want turn_done", got)
 	}
 }

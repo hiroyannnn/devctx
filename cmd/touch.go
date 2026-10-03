@@ -56,6 +56,13 @@ Use --track-state to record the agent state from the hook event (running / needs
 			}
 		}
 
+		// Why unlocked read first: 高頻度 hook の大半は no-op（同じ状態・quick の間引き）で、
+		// ロック待ちと書き込みを避けたい。store の書き込みは atomic rename なので、ロック無しの読み取りでも
+		// 中途半端なファイルは見えない。古い値を読んでも、変化ありと判断すれば下のロック内で再評価される
+		if touchIsNoop(s, provider, input, args, eventTime) {
+			return nil
+		}
+
 		var updated model.Context
 		var seen bool
 		err = s.UpdateStore(func(store *model.Store) error {
@@ -104,6 +111,27 @@ Use --track-state to record the agent state from the hook event (running / needs
 		}
 		return nil
 	},
+}
+
+// touchIsNoop は store をロック無しで読み、この touch が何も変えないことが確実なら true を返す。
+// 読み込み失敗・対象不明などは false を返し、エラー報告を UpdateStore 側に任せる。
+func touchIsNoop(s *storage.Storage, provider model.Provider, input hookInput, args []string, eventTime time.Time) bool {
+	store, err := s.LoadStore()
+	if err != nil {
+		return false
+	}
+	name := resolveTouchTarget(store, provider, input.SessionID, args)
+	if name == "" {
+		return false
+	}
+	ctx := store.FindByName(name)
+	if ctx == nil {
+		return false
+	}
+	probe := *ctx // 副作用を本物の store に残さないためコピーで評価する
+	stateChanged := touchTrackState && applyHookState(&probe, input, eventTime)
+	seen := applyLastSeen(&probe, time.Now(), touchQuick)
+	return !stateChanged && !seen
 }
 
 // resolveTouchTarget は touch が更新する context の名前を返す。明示された名前を優先し、
