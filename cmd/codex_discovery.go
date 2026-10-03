@@ -138,20 +138,17 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 	cutoff := now.AddDate(0, 0, -a.days)
 
 	var paths []string
-	seenPath := map[string]bool{}
-	add := func(p string) {
-		if !seenPath[p] {
-			seenPath[p] = true
-			paths = append(paths, p)
-		}
-	}
+	haveID := map[string]bool{}
 
 	// ディレクトリ名はローカル日付と UTC 日付のどちらでもありうるので、前後 1 日の余裕を持たせる
 	for i := -1; i <= a.days; i++ {
 		day := now.AddDate(0, 0, -i)
 		matches, _ := filepath.Glob(filepath.Join(sessionsDir, day.Format("2006"), day.Format("01"), day.Format("02"), "rollout-*.jsonl"))
 		for _, m := range matches {
-			add(m)
+			paths = append(paths, m)
+			if id, ok := rolloutSessionID(m); ok {
+				haveID[id] = true
+			}
 		}
 	}
 
@@ -160,7 +157,7 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 	if !a.skipResumedSearch {
 		missing := map[string]bool{}
 		for id, entry := range index {
-			if !entry.UpdatedAt.Before(cutoff) && !hasRolloutFor(paths, id) {
+			if !entry.UpdatedAt.Before(cutoff) && !haveID[id] {
 				missing[id] = true
 			}
 		}
@@ -168,7 +165,7 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 			all, _ := filepath.Glob(filepath.Join(sessionsDir, "*", "*", "*", "rollout-*.jsonl"))
 			for _, m := range all {
 				if id, ok := rolloutSessionID(m); ok && missing[id] {
-					add(m)
+					paths = append(paths, m)
 				}
 			}
 		}
@@ -257,8 +254,6 @@ func readCodexIndex(path string) map[string]codexIndexEntry {
 	}
 }
 
-// hasRolloutFor は候補にすでに id の rollout があるかを返す。
-// 最近のセッションごとに sessions/*/*/*/ を glob するとディレクトリ走査が高くつくため、その前に除外する。
 // rolloutSessionID は rollout-<YYYY-MM-DDThh-mm-ss>-<id>.jsonl から id を取り出す。
 // Why not split on the last "-": id 自体（UUID）が "-" を含む。
 func rolloutSessionID(path string) (string, bool) {
@@ -268,14 +263,4 @@ func rolloutSessionID(path string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSuffix(base[prefixLen:], ".jsonl"), true
-}
-
-func hasRolloutFor(paths []string, id string) bool {
-	suffix := "-" + id + ".jsonl"
-	for _, p := range paths {
-		if strings.HasSuffix(p, suffix) {
-			return true
-		}
-	}
-	return false
 }

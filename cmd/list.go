@@ -141,51 +141,14 @@ var listCmd = &cobra.Command{
 		}
 
 		// Auto-import if enabled (default: true)
-		autoImport := config == nil || config.AutoImport == nil || *config.AutoImport
-		if autoImport && len(store.Contexts) == 0 {
+		if autoImportEnabled(config) && len(store.Contexts) == 0 {
 			sessions, err := claudeAdapter{}.Discover(store)
 			if err == nil && len(sessions) > 0 {
 				fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
 				fmt.Println()
 
-				imported := 0
-				cutoff := time.Now().AddDate(0, 0, -1)
-				for _, sess := range sessions {
-					if sess.LastModified.Before(cutoff) || sess.IsRegistered {
-						continue
-					}
-
-					name := generateNameFromPath(sess.ProjectPath, sess.SessionID)
-					if store.FindByName(name) != nil {
-						name = name + "-" + sess.SessionID[:6]
-					}
-
-					branch := ""
-					if sess.ProjectPath != "" {
-						branch = getGitBranch(sess.ProjectPath)
-					}
-
-					ctx := model.Context{
-						Name:           name,
-						Worktree:       sess.ProjectPath,
-						Branch:         branch,
-						SessionID:      sess.SessionID,
-						SessionName:    sess.SessionName,
-						TranscriptPath: sess.TranscriptPath,
-						Status:         model.StatusInProgress,
-						CreatedAt:      sess.LastModified,
-						LastSeen:       sess.LastModified,
-						Checklist:      make(map[string]bool),
-					}
-
-					store.Add(ctx)
-					imported++
-				}
-
-				if imported > 0 {
-					if err := s.SaveStore(store); err != nil {
-						return err
-					}
+				if _, err := firstRunImport(s, sessions, time.Now()); err != nil {
+					return err
 				}
 			}
 		}
@@ -794,6 +757,24 @@ func openInNewTerminal(ctx model.Context) error {
 	}
 }
 
+// autoImportEnabled は config の auto_import を解釈する。未設定は有効。
+func autoImportEnabled(config *model.Config) bool {
+	return config == nil || config.AutoImport == nil || *config.AutoImport
+}
+
+// firstRunImport は直近 1 日の未登録セッションを取り込む。保存した store を返し、取り込みがなければ nil。
+func firstRunImport(s *storage.Storage, sessions []DiscoveredSession, now time.Time) (*model.Store, error) {
+	cutoff := now.AddDate(0, 0, -1)
+	var fresh []DiscoveredSession
+	for _, sess := range sessions {
+		if !sess.LastModified.Before(cutoff) && !sess.IsRegistered {
+			fresh = append(fresh, sess)
+		}
+	}
+	_, updated, err := importDiscovered(s, fresh)
+	return updated, err
+}
+
 // codexSyncDays は list の自動取り込みで遡る日数。毎回走るので discover の既定より短くする。
 const codexSyncDays = 2
 
@@ -807,7 +788,7 @@ func newCodexSyncAdapter() codexAdapter {
 // autoSyncCodex は AutoImport が有効なとき Codex セッションを同期する。失敗しても list は続ける。
 // quiet なら何も表示しない（補完や fzf の出力を汚さないため）。store を書き換えたら true。
 func autoSyncCodex(s *storage.Storage, config *model.Config, quiet bool) bool {
-	if config != nil && config.AutoImport != nil && !*config.AutoImport {
+	if !autoImportEnabled(config) {
 		return false
 	}
 	imported, changed, err := syncCodexSessions(s, newCodexSyncAdapter())
@@ -832,14 +813,11 @@ func syncCodexSessions(s *storage.Storage, adapter codexAdapter) (imported []str
 	if err != nil {
 		return nil, false, err
 	}
-	resolved := make([]DiscoveredSession, len(sessions))
-	for i, sess := range sessions {
-		resolved[i] = resolveSessionPlacement(sess)
-	}
+	resolved := resolvePlacements(sessions)
 	// stat はロック外で済ませる
 	transcriptMtimes := map[string]time.Time{}
 	for _, c := range store.Contexts {
-		if c.EffectiveProvider() != model.ProviderCodex || c.TranscriptPath == "" {
+		if !tracksPerSession(c.EffectiveProvider()) || c.TranscriptPath == "" {
 			continue
 		}
 		if info, err := os.Stat(c.TranscriptPath); err == nil {
@@ -851,7 +829,7 @@ func syncCodexSessions(s *storage.Storage, adapter codexAdapter) (imported []str
 		imported, changed = mergeDiscoveredSessions(locked, resolved, time.Now())
 		for i := range locked.Contexts {
 			c := &locked.Contexts[i]
-			if mtime, ok := transcriptMtimes[c.SessionID]; ok && c.EffectiveProvider() == model.ProviderCodex && mtime.After(c.LastSeen) {
+			if mtime, ok := transcriptMtimes[c.SessionID]; ok && tracksPerSession(c.EffectiveProvider()) && mtime.After(c.LastSeen) {
 				c.LastSeen = mtime
 				changed = true
 			}

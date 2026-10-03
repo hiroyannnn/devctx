@@ -26,11 +26,13 @@ type DiscoveredSession struct {
 	MessageCount   int
 	IsRegistered   bool
 
-	// 取り込み先の配置。git 呼び出しを伴うため、contexts.yaml のロック外で
-	// resolveSessionPlacement が埋める。空なら ProjectPath をそのまま使う。
+	// Branch は Codex では Discover が session_meta から入れ、空のときだけ resolveSessionPlacement が
+	// git から埋める。Claude は resolveSessionPlacement が埋める。
+	Branch string
+	// Worktree / RepoRoot は取り込み先の配置で、git 呼び出しを伴うため contexts.yaml のロック外で
+	// resolveSessionPlacement が埋める。空なら mergeDiscoveredSessions が ProjectPath を使う。
 	Worktree string
 	RepoRoot string
-	Branch   string
 }
 
 var (
@@ -198,7 +200,7 @@ func displayDiscoveredSessions(sessions []DiscoveredSession) {
 			sessionShort = sessionShort[:12] + "..."
 		}
 
-		fmt.Printf("%s %s %s\n", titleStyle.Render(sessionShort), pathStyle.Render("("+providerLabel(sess.Provider)+")"), statusTag)
+		fmt.Printf("%s %s %s\n", titleStyle.Render(sessionShort), pathStyle.Render("("+string(sess.Provider)+")"), statusTag)
 
 		if sess.SessionName != "" {
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Italic(true)
@@ -222,21 +224,7 @@ func displayDiscoveredSessions(sessions []DiscoveredSession) {
 }
 
 func importSessions(s *storage.Storage, sessions []DiscoveredSession) error {
-	// git 呼び出しはロック外で済ませる（ロック保持中に外部コマンドを走らせない）
-	resolved := make([]DiscoveredSession, len(sessions))
-	for i, sess := range sessions {
-		resolved[i] = resolveSessionPlacement(sess)
-	}
-
-	var imported []string
-	err := s.UpdateStore(func(store *model.Store) error {
-		var changed bool
-		imported, changed = mergeDiscoveredSessions(store, resolved, time.Now())
-		if !changed {
-			return storage.ErrSkipSave
-		}
-		return nil
-	})
+	imported, _, err := importDiscovered(s, sessions)
 	if err != nil {
 		return err
 	}
@@ -248,6 +236,25 @@ func importSessions(s *storage.Storage, sessions []DiscoveredSession) error {
 		fmt.Printf("\n✓ Imported %d session(s)\n", len(imported))
 	}
 	return nil
+}
+
+// importDiscovered は探索結果を store に取り込んで保存する。保存した store を返し、変更がなければ nil。
+func importDiscovered(s *storage.Storage, sessions []DiscoveredSession) (imported []string, updated *model.Store, err error) {
+	// git 呼び出しはロック外で済ませる（ロック保持中に外部コマンドを走らせない）
+	resolved := resolvePlacements(sessions)
+	err = s.UpdateStore(func(store *model.Store) error {
+		var changed bool
+		imported, changed = mergeDiscoveredSessions(store, resolved, time.Now())
+		if !changed {
+			return storage.ErrSkipSave
+		}
+		updated = store
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return imported, updated, nil
 }
 
 // selectAdapters は --provider の値から探索対象の adapter を選ぶ。空なら全 adapter。
@@ -282,7 +289,17 @@ func discoverFromAdapters(adapters []ProviderAdapter, store *model.Store) ([]Dis
 	return all, nil
 }
 
+// resolvePlacements は各セッションの取り込み先を解決する（git を呼ぶのでロック外で使う）。
+func resolvePlacements(sessions []DiscoveredSession) []DiscoveredSession {
+	resolved := make([]DiscoveredSession, len(sessions))
+	for i, sess := range sessions {
+		resolved[i] = resolveSessionPlacement(sess)
+	}
+	return resolved
+}
+
 // resolveSessionPlacement は取り込み先の worktree / repo / branch を git から解決する。
+// git 管理外のときの Worktree は ProjectPath へのフォールバックを mergeDiscoveredSessions に一本化しているので、ここでは埋めない。
 func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
 	// 登録済みは merge で LastSeen しか使わないので、git を呼ばない
 	if sess.ProjectPath == "" || sess.IsRegistered {
@@ -293,7 +310,6 @@ func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
 		// Codex の cwd は worktree 配下のサブディレクトリのことがあるので、worktree ルートに寄せる
 		sess.Worktree = getWorktreeRoot(sess.ProjectPath)
 		if sess.Worktree == "" {
-			sess.Worktree = sess.ProjectPath
 			return sess
 		}
 		sess.RepoRoot = detectRepoRoot(sess.Worktree)
@@ -303,8 +319,7 @@ func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
 			sess.Branch = getGitBranch(sess.Worktree)
 		}
 	default:
-		// Claude は従来どおり cwd をそのまま worktree として扱う
-		sess.Worktree = sess.ProjectPath
+		// Claude は従来どおり cwd をそのまま worktree として扱う（merge 側のフォールバックに任せる）
 		sess.Branch = getGitBranch(sess.ProjectPath)
 	}
 	return sess
@@ -347,9 +362,9 @@ func mergeDiscoveredSessions(store *model.Store, sessions []DiscoveredSession, n
 			LastSeen:       sess.LastModified,
 			Checklist:      make(map[string]bool),
 		}
-		if sess.Provider == model.ProviderCodex {
-			ctx.Provider = model.ProviderCodex
-			ctx.Name = uniqueContextName(store, generateName(sess.Branch, worktree), model.ProviderCodex, now)
+		if tracksPerSession(sess.Provider) {
+			ctx.Provider = sess.Provider
+			ctx.Name = uniqueContextName(store, generateName(sess.Branch, worktree), sess.Provider, now)
 		} else {
 			// claude は既存データと同じく provider を空のまま保存する
 			ctx.Name = uniqueClaudeImportName(store, worktree, sess.SessionID)
@@ -365,19 +380,11 @@ func mergeDiscoveredSessions(store *model.Store, sessions []DiscoveredSession, n
 // uniqueClaudeImportName は従来どおりディレクトリ名を使い、衝突したら session ID 先頭 6 文字を足す。
 // それでも衝突する場合に備えて連番で一意にする。
 func uniqueClaudeImportName(store *model.Store, projectPath, sessionID string) string {
-	name := generateNameFromPath(projectPath, sessionID)
-	if store.FindByName(name) == nil {
-		return name
-	}
 	short := sessionID
 	if len(short) > 6 {
 		short = short[:6]
 	}
-	candidate := name + "-" + short
-	for i := 2; store.FindByName(candidate) != nil; i++ {
-		candidate = fmt.Sprintf("%s-%s-%d", name, short, i)
-	}
-	return candidate
+	return uniqueNameWithSuffix(store, generateNameFromPath(projectPath, sessionID), short)
 }
 
 func generateNameFromPath(projectPath, sessionID string) string {
@@ -401,11 +408,4 @@ func init() {
 	discoverCmd.Flags().BoolVar(&discoverImport, "import", false, "Import discovered sessions")
 	discoverCmd.Flags().StringVar(&discoverProvider, "provider", "", "Limit discovery to a provider (claude|codex); default: all")
 	discoverCmd.Flags().BoolVar(&discoverAll, "all", false, "Show all sessions including registered ones")
-}
-
-func providerLabel(p model.Provider) string {
-	if p == "" {
-		return string(model.ProviderClaude)
-	}
-	return string(p)
 }

@@ -17,6 +17,10 @@ func providerAdapters() []ProviderAdapter {
 	return []ProviderAdapter{claudeAdapter{}, newCodexAdapter()}
 }
 
+// tracksPerSession は provider がセッション単位で context を持つかを返す。
+// Why: Codex は discover がセッション単位で取り込む。Claude は既存 UX のとおり worktree ごとに 1 context を保つ。
+func tracksPerSession(p model.Provider) bool { return p == model.ProviderCodex }
+
 func adapterFor(p model.Provider) (ProviderAdapter, bool) {
 	for _, a := range providerAdapters() {
 		if a.Provider() == p {

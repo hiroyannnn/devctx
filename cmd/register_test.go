@@ -184,3 +184,19 @@ func TestUpsertRegistration_NewCodexSessionInSameWorktreeIsSeparate(t *testing.T
 		t.Fatalf("created=%v ctx=%+v; a new codex session should get its own context (codex is tracked per session)", created, ctx)
 	}
 }
+
+func TestUniqueNameWithSuffix(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{{Name: "a"}, {Name: "a-x"}, {Name: "a-x-2"}}}
+	if got := uniqueNameWithSuffix(store, "free", "x"); got != "free" {
+		t.Fatalf("got %q", got)
+	}
+	if got := uniqueNameWithSuffix(store, "a", "x"); got != "a-x-3" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTracksPerSession(t *testing.T) {
+	if !tracksPerSession(model.ProviderCodex) || tracksPerSession(model.ProviderClaude) || tracksPerSession(model.ProviderManual) {
+		t.Fatal("only codex is tracked per session")
+	}
+}

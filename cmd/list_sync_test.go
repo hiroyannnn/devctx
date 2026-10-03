@@ -74,3 +74,64 @@ func TestSyncCodexSessions_RefreshesRegisteredFromTranscript(t *testing.T) {
 		t.Fatalf("LastSeen should follow the transcript mtime without touching AgentState: %+v", got)
 	}
 }
+
+func mustLoadStore(t *testing.T, s *storage.Storage) *model.Store {
+	t.Helper()
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func TestFirstRunImport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := storage.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	sessions := []DiscoveredSession{
+		{Provider: model.ProviderClaude, SessionID: "abc", ProjectPath: dir, LastModified: now.Add(-time.Hour)}, // shorter than 6 chars
+		{Provider: model.ProviderClaude, SessionID: "abcdef-2", ProjectPath: dir, LastModified: now.Add(-2 * time.Hour)},
+		{Provider: model.ProviderClaude, SessionID: "old-session", ProjectPath: dir, LastModified: now.Add(-72 * time.Hour)},
+		{Provider: model.ProviderClaude, SessionID: "registered", ProjectPath: dir, LastModified: now.Add(-time.Hour), IsRegistered: true},
+	}
+	updated, err := firstRunImport(s, sessions, now)
+	if err != nil || updated == nil {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	saved := mustLoadStore(t, s)
+	if len(saved.Contexts) != 2 {
+		t.Fatalf("only recent unregistered sessions should be imported: %+v", saved.Contexts)
+	}
+	base := filepath.Base(dir)
+	if saved.Contexts[0].Name != base || saved.Contexts[1].Name != base+"-abcdef" {
+		t.Fatalf("names = %q, %q", saved.Contexts[0].Name, saved.Contexts[1].Name)
+	}
+	if saved.Contexts[0].Provider != "" || saved.Contexts[0].Worktree != dir {
+		t.Fatalf("claude import keeps provider empty and cwd as worktree: %+v", saved.Contexts[0])
+	}
+
+	if again, err := firstRunImport(s, sessions[:3], now); err != nil || again != nil {
+		t.Fatalf("nothing new should not write: %v %v", again, err)
+	}
+}
+
+func TestAutoImportEnabled(t *testing.T) {
+	on, off := true, false
+	for name, tc := range map[string]struct {
+		cfg  *model.Config
+		want bool
+	}{
+		"nil config":   {nil, true},
+		"nil flag":     {&model.Config{}, true},
+		"explicit on":  {&model.Config{AutoImport: &on}, true},
+		"explicit off": {&model.Config{AutoImport: &off}, false},
+	} {
+		if got := autoImportEnabled(tc.cfg); got != tc.want {
+			t.Errorf("%s: got %v", name, got)
+		}
+	}
+}
