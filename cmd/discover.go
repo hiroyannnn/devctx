@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -17,6 +15,7 @@ import (
 )
 
 type DiscoveredSession struct {
+	Provider       model.Provider
 	SessionID      string
 	SessionName    string // Claude Code's auto-generated name (slug)
 	TranscriptPath string
@@ -49,7 +48,7 @@ Use --import to automatically register discovered sessions.`,
 			return err
 		}
 
-		sessions, err := discoverSessions(store)
+		sessions, err := claudeAdapter{}.Discover(store)
 		if err != nil {
 			return err
 		}
@@ -85,80 +84,6 @@ Use --import to automatically register discovered sessions.`,
 
 		return nil
 	},
-}
-
-func discoverSessions(store *model.Store) ([]DiscoveredSession, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	claudeDir := filepath.Join(home, ".claude", "projects")
-	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	var sessions []DiscoveredSession
-
-	// Walk through project directories
-	entries, err := os.ReadDir(claudeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		projectHash := entry.Name()
-		projectDir := filepath.Join(claudeDir, projectHash)
-
-		// Find transcript files
-		transcripts, err := filepath.Glob(filepath.Join(projectDir, "*.jsonl"))
-		if err != nil {
-			continue
-		}
-
-		for _, transcriptPath := range transcripts {
-			info, err := os.Stat(transcriptPath)
-			if err != nil {
-				continue
-			}
-
-			sessionID := strings.TrimSuffix(filepath.Base(transcriptPath), ".jsonl")
-
-			// Try to get project path from transcript
-			projectPath := extractProjectPath(transcriptPath)
-
-			// Try to get session name (slug) from transcript
-			sessionName := extractSessionName(transcriptPath)
-
-			// Check if already registered
-			isRegistered := store.FindByProviderSession(model.ProviderClaude, sessionID) != nil
-
-			// Count messages
-			msgCount := countMessages(transcriptPath)
-
-			sessions = append(sessions, DiscoveredSession{
-				SessionID:      sessionID,
-				SessionName:    sessionName,
-				TranscriptPath: transcriptPath,
-				ProjectPath:    projectPath,
-				ProjectHash:    projectHash,
-				LastModified:   info.ModTime(),
-				MessageCount:   msgCount,
-				IsRegistered:   isRegistered,
-			})
-		}
-	}
-
-	// Sort by last modified (most recent first)
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].LastModified.After(sessions[j].LastModified)
-	})
-
-	return sessions, nil
 }
 
 func extractProjectPath(transcriptPath string) string {

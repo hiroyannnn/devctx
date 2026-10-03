@@ -111,15 +111,12 @@ func LaunchInNewTerminal(worktree, sessionID string) error {
 // agentResumeCommand は context のエージェントを再開するコマンドを返す。
 // 再開方法が未実装の provider はエラーにする（誤って claude --resume を出さないため）。
 func agentResumeCommand(ctx model.Context) (string, error) {
-	switch p := ctx.EffectiveProvider(); p {
-	case model.ProviderClaude:
-		if ctx.SessionID != "" {
-			return "claude --resume " + shellQuote(ctx.SessionID), nil
-		}
-		return "claude", nil
-	default:
+	p := ctx.EffectiveProvider()
+	adapter, ok := adapterFor(p)
+	if !ok {
 		return "", fmt.Errorf("resume is not supported for provider %q yet", p)
 	}
+	return adapter.AgentCommand(ctx)
 }
 
 // resumeShellCommand は worktree へ移動してエージェントを再開する shell コマンドを返す。
