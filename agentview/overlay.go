@@ -190,9 +190,9 @@ func overlayOne(ctx model.Context, fetchedAt time.Time, idx sessionIndex) View {
 // 食い違う要求を表示して誤解させるより捨てる。sandbox / dialog 等は hook で分類できないので載せない。
 func pendingMatchesLive(p *model.PendingRequest, waitingFor string) bool {
 	switch waitingFor {
-	case "permission prompt":
+	case waitingForPermission:
 		return p.Kind != model.PendingQuestion
-	case "input needed":
+	case waitingForInput:
 		return p.Kind == model.PendingQuestion
 	}
 	return false

@@ -100,13 +100,13 @@ func TestAPIsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
 	}
 }
 
-func TestAPIsExposePendingLabel(t *testing.T) {
+func TestAPIsCarryPendingLabelInWaitingFor(t *testing.T) {
 	now := time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)
 	store := &model.Store{Contexts: []model.Context{{
 		Name: "feat-x", Worktree: "/w/feat-x", Status: model.StatusInProgress, Phase: model.PhaseIdle,
 		RepoRoot: "/repo", CreatedAt: now, LastSeen: now,
 		Provider: model.ProviderCodex, AgentState: model.AgentNeedsInput, AgentStateAt: now,
-		PendingRequest: &model.PendingRequest{Tool: "Bash", Kind: model.PendingBash, Summary: "Run tests", At: now},
+		PendingRequest: &model.PendingRequest{Tool: "Bash", Kind: model.PendingBash, Summary: "Run tests"},
 	}}}
 	server := &Server{StoreLoader: &mockStoreLoader{store: store}}
 	for path, handler := range map[string]func(http.ResponseWriter, *http.Request){
@@ -117,18 +117,11 @@ func TestAPIsExposePendingLabel(t *testing.T) {
 		w := httptest.NewRecorder()
 		handler(w, httptest.NewRequest("GET", path, nil))
 		body := w.Body.String()
-		for _, want := range []string{`"agent_pending_kind":"bash"`, `"agent_pending_label":"Bash: Run tests"`} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s lacks %s:\n%s", path, want, body)
-			}
+		if want := `"agent_waiting_for":"Bash: Run tests"`; !strings.Contains(body, want) {
+			t.Errorf("%s lacks %s:\n%s", path, want, body)
 		}
-	}
-}
-
-func TestIndexPrefersPendingLabel(t *testing.T) {
-	w := httptest.NewRecorder()
-	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
-	if !strings.Contains(w.Body.String(), "agent_pending_label") {
-		t.Error("index.html が agent_pending_label を参照していない")
+		if strings.Contains(body, "agent_pending") {
+			t.Errorf("%s exposes agent_pending_*:\n%s", path, body)
+		}
 	}
 }

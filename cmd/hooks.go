@@ -207,7 +207,8 @@ func devctxCommand(devctxPath, args string) []Hook {
 // 表示（devctx hooks）とインストール（--install）の両方がこれを使う。
 func devctxHookSpecs(devctxPath string) []hookEventSpec {
 	command := func(args string) []Hook { return devctxCommand(devctxPath, args) }
-	asyncCommand := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state", Async: true}}
+	asyncCommand := command("touch --quick --track-state")
+	asyncCommand[0].Async = true
 	return []hookEventSpec{
 		{"SessionStart", []HookConfig{
 			{Matcher: "startup", Hooks: command("register")},

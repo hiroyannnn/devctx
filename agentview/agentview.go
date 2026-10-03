@@ -17,6 +17,12 @@ import (
 	"github.com/hiroyannnn/devctx/model"
 )
 
+// agent view の waitingFor のうち、待ち要求との整合チェックに使う既知の値。
+const (
+	waitingForPermission = "permission prompt"
+	waitingForInput      = "input needed"
+)
+
 // Session は agent view が返す 1 セッション。
 type Session struct {
 	SessionID  string

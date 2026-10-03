@@ -30,7 +30,7 @@ type LiveStatus struct {
 	SessionStatus SessionStatus
 	LastActivity  time.Time
 	LastRole      string
-	// Reason は live の待ち理由（permission prompt 等）
+	// Reason は待ち要求のラベル、なければ live の待ち理由（permission prompt 等）
 	Reason string
 }
 

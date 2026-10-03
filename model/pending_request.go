@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // PendingKind は待っている要求の種別。表示と整合チェックだけに使い、細かい分類はしない。
@@ -32,8 +31,7 @@ type PendingRequest struct {
 	// Why not コマンド本文: トークンや鍵が含まれうるため store に残さない
 	Summary string `yaml:"summary,omitempty"`
 	// InputHash は正規化した tool_input の sha256 先頭 16 桁。本文を持たずに PostToolUse と対応付けるために使う
-	InputHash string    `yaml:"input_hash,omitempty"`
-	At        time.Time `yaml:"at"`
+	InputHash string `yaml:"input_hash,omitempty"`
 }
 
 const (
@@ -45,7 +43,7 @@ const (
 // matches は PostToolUse の tool_name / tool_input が、この待ち要求と同じツール呼び出しかを返す。
 // tool_use_id が PermissionRequest に無いため、tool_input のハッシュで対応付ける。
 func (p PendingRequest) matches(toolName string, toolInput json.RawMessage) bool {
-	return p.Tool == toolName && p.InputHash == ClassifyPending(toolName, toolInput, time.Time{}).InputHash
+	return p.Tool == toolName && p.InputHash == inputHash(toolInput)
 }
 
 // Label は表示用の短い文字列を返す。MCP は Tool 名（mcp__server__tool）が冗長なので Summary だけにする。
@@ -74,14 +72,25 @@ func canonicalJSON(raw json.RawMessage) []byte {
 	return out
 }
 
+// inputHash は正規化した tool_input の sha256 先頭 16 桁を返す（空入力は空文字）。
+// ClassifyPending（記録側）と matches（照合側）で同じ手順を使わないと、PostToolUse で解消できなくなるため一箇所に置く。
+func inputHash(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(canonicalJSON(raw))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// isQuestionTool は質問 UI を出すツールかを返す。許可ダイアログとは別に PreToolUse で待ちに入る対象。
+func isQuestionTool(name string) bool {
+	return name == "AskUserQuestion" || name == "request_user_input"
+}
+
 // ClassifyPending は PermissionRequest 等の tool_name / tool_input から待ち要求を作る。
 // tool_input が壊れていても分類は落とさず、Summary を空にして返す（待ち状態そのものは記録したいため）。
-func ClassifyPending(toolName string, toolInput json.RawMessage, now time.Time) PendingRequest {
-	p := PendingRequest{Tool: toolName, Kind: PendingOther, At: now}
-	if len(toolInput) > 0 {
-		sum := sha256.Sum256(canonicalJSON(toolInput))
-		p.InputHash = hex.EncodeToString(sum[:])[:16]
-	}
+func ClassifyPending(toolName string, toolInput json.RawMessage) PendingRequest {
+	p := PendingRequest{Tool: toolName, Kind: PendingOther, InputHash: inputHash(toolInput)}
 
 	var in struct {
 		Command     json.RawMessage `json:"command"`
@@ -125,7 +134,7 @@ func ClassifyPending(toolName string, toolInput json.RawMessage, now time.Time) 
 		if server, tool, ok := strings.Cut(strings.TrimPrefix(toolName, "mcp__"), "__"); ok {
 			p.Summary = server + "/" + tool
 		}
-	case toolName == "AskUserQuestion" || toolName == "request_user_input":
+	case isQuestionTool(toolName):
 		p.Kind = PendingQuestion
 		if len(in.Questions) > 0 {
 			p.Summary = truncateRunes(in.Questions[0].Header, pendingQuestionMax)

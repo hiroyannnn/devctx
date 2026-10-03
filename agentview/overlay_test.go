@@ -229,7 +229,7 @@ func TestOverlayDoneContextKeepsOwningItsLiveSession(t *testing.T) {
 }
 
 func pendingOf(kind model.PendingKind, summary string) *model.PendingRequest {
-	return &model.PendingRequest{Tool: "T", Kind: kind, Summary: summary, At: t0}
+	return &model.PendingRequest{Tool: "T", Kind: kind, Summary: summary}
 }
 
 func TestOverlayPending_HookNeedsInputCarriesPending(t *testing.T) {

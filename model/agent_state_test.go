@@ -22,15 +22,12 @@ func TestAgentStateFromHook(t *testing.T) {
 		{name: "idle after turn keeps turn_done", event: "Notification", notificationType: "idle_prompt", current: AgentTurnDone, wantChange: false},
 		{name: "idle while running needs input", event: "Notification", notificationType: "idle_prompt", current: AgentRunning, want: AgentNeedsInput, wantChange: true},
 		{name: "auth success is not waiting", event: "Notification", notificationType: "auth_success", current: AgentRunning, wantChange: false},
-		{name: "permission request (Codex)", event: "PermissionRequest", current: AgentRunning, want: AgentNeedsInput, wantChange: true},
-		{name: "tool finished returns to running after approval", event: "PostToolUse", current: AgentNeedsInput, want: AgentRunning, wantChange: true},
 		{name: "interrupt ends the turn", event: "Interrupt", current: AgentNeedsInput, want: AgentTurnDone, wantChange: true},
-		{name: "ended is terminal", event: "UserPromptSubmit", current: AgentEnded, wantChange: false},
 		{name: "unknown event", event: "PreToolUse", current: AgentRunning, wantChange: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, changed := AgentStateFromHook(tt.event, tt.notificationType, tt.current)
+			got, changed := agentStateFromHook(tt.event, tt.notificationType, tt.current)
 			if changed != tt.wantChange {
 				t.Fatalf("changed = %v, want %v", changed, tt.wantChange)
 			}

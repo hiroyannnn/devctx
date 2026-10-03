@@ -517,11 +517,11 @@ function phaseIndex(phase) {
 // Waiting-for-user amber; keep in sync with .card.agent-waiting in the stylesheet.
 var AGENT_WAITING_STYLE = { color: { border: '#d29922', background: '#2d2208' }, borderWidth: 3 };
 
-// "needs input · Bash: Run tests": label plus the pending request, else the waiting reason (all server-provided)
-// The pending label replaces the generic reason because it says what is being asked.
+// "needs input · Bash: Run tests": label plus the waiting detail (all server-provided).
+// The server already puts the pending request label ahead of the generic live reason.
 function agentStateText(item) {
   if (!item.agent_state_label) return '';
-  var detail = item.agent_pending_label || item.agent_waiting_for;
+  var detail = item.agent_waiting_for;
   return detail ? item.agent_state_label + ' \u00B7 ' + detail : item.agent_state_label;
 }
 

@@ -14,7 +14,7 @@ func bashInput(cmd string) json.RawMessage {
 }
 
 func pendingFor(tool string, input json.RawMessage) *PendingRequest {
-	p := ClassifyPending(tool, input, hookNow.Add(-time.Minute))
+	p := ClassifyPending(tool, input)
 	return &p
 }
 
@@ -167,7 +167,7 @@ func TestApplyHookEvent(t *testing.T) {
 	}
 }
 
-func TestApplyHookEvent_PendingAtDoesNotCountAsDifference(t *testing.T) {
+func TestApplyHookEvent_RedeliveredRequestIsNoOp(t *testing.T) {
 	ctx := Context{AgentState: AgentNeedsInput, PendingRequest: pendingFor("Bash", bashInput("ls"))}
 	ev := HookEvent{Name: "PermissionRequest", ToolName: "Bash", ToolInput: bashInput("ls")}
 	if ApplyHookEvent(&ctx, ev, hookNow.Add(time.Hour)) {

@@ -21,20 +21,12 @@ func (s AgentState) WaitsForUser() bool {
 	return s == AgentNeedsInput || s == AgentTurnDone
 }
 
-// AgentStateFromHook は hook イベントから次の状態を決める。状態を変えない場合は false を返す。
-// ended は終着点で、hook では戻さない（再開時は SessionStart の register が状態をクリアする）。
-func AgentStateFromHook(event, notificationType string, current AgentState) (AgentState, bool) {
-	if current == AgentEnded {
-		return "", false
-	}
+// agentStateFromHook は ApplyHookEvent の default 分岐（要求を持たないイベント）で次の状態を決める。
+// 状態を変えない場合は false を返す。ended の終着判定は呼び出し側（ApplyHookEvent）で済んでいる。
+func agentStateFromHook(event, notificationType string, current AgentState) (AgentState, bool) {
 	switch event {
-	case "UserPromptSubmit", "PostToolUse":
-		// PostToolUse: 許可待ち（PermissionRequest）はツール実行後に解消する。承認後に running へ戻すための信号で、
-		// 同じ状態の再記録は呼び出し側が間引くので高頻度でも store は書き換わらない
+	case "UserPromptSubmit":
 		return AgentRunning, true
-	case "PermissionRequest":
-		// Codex には Notification が無く、許可待ちは PermissionRequest で通知される
-		return AgentNeedsInput, true
 	case "Stop", "Interrupt":
 		// Interrupt: Codex の user interrupt。拒否には専用 hook が無く、中断が待ちの解消を知る唯一の手がかり
 		return AgentTurnDone, true
@@ -91,17 +83,13 @@ func ApplyHookEvent(ctx *Context, ev HookEvent, now time.Time) bool {
 	}
 	next, pending := ctx.AgentState, ctx.PendingRequest
 	switch ev.Name {
-	case "PermissionRequest":
-		next = AgentNeedsInput
-		p := ClassifyPending(ev.ToolName, ev.ToolInput, now)
-		pending = &p
-	case "PreToolUse":
-		// Claude / Codex とも許可ダイアログとは別に、質問ツールだけは PreToolUse で待ちに入る
-		if ev.ToolName != "AskUserQuestion" && ev.ToolName != "request_user_input" {
+	case "PermissionRequest", "PreToolUse":
+		// PreToolUse は Claude / Codex とも許可ダイアログとは別に、質問ツールだけが待ちに入る経路
+		if ev.Name == "PreToolUse" && !isQuestionTool(ev.ToolName) {
 			return false
 		}
 		next = AgentNeedsInput
-		p := ClassifyPending(ev.ToolName, ev.ToolInput, now)
+		p := ClassifyPending(ev.ToolName, ev.ToolInput)
 		pending = &p
 	case "PostToolUse":
 		// 並列ツールの別の 1 件が終わっただけなら、まだ許可待ちが続いている
@@ -110,15 +98,16 @@ func ApplyHookEvent(ctx *Context, ev HookEvent, now time.Time) bool {
 		}
 		next, pending = AgentRunning, nil
 	default:
-		state, ok := AgentStateFromHook(ev.Name, ev.NotificationType, ctx.AgentState)
+		state, ok := agentStateFromHook(ev.Name, ev.NotificationType, ctx.AgentState)
 		if !ok {
 			return false
 		}
 		next = state
-		// Notification の needs_input は種別だけで要求の中身を持たない。hook で得た要求を消さない
-		if state != AgentNeedsInput || ev.Name != "Notification" {
-			pending = nil
-		}
+	}
+	// 待ち要求は needs_input の間だけ意味を持つ。pending は ctx.PendingRequest から始まるので、
+	// 種別だけで中身を持たない Notification の needs_input では hook で得た要求が残り、それ以外の遷移では消える
+	if next != AgentNeedsInput {
+		pending = nil
 	}
 	if next == ctx.AgentState && samePending(pending, ctx.PendingRequest) {
 		return false
@@ -128,10 +117,10 @@ func ApplyHookEvent(ctx *Context, ev HookEvent, now time.Time) bool {
 	return true
 }
 
-// samePending は At を除いて待ち要求が同じかを返す。再送された同一 hook で store を書き換えないため。
+// samePending は待ち要求が同じかを返す。再送された同一 hook で store を書き換えないため。
 func samePending(a, b *PendingRequest) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Tool == b.Tool && a.Kind == b.Kind && a.Summary == b.Summary && a.InputHash == b.InputHash
+	return *a == *b
 }

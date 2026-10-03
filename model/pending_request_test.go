@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
-
-var pendingNow = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 func TestClassifyPending(t *testing.T) {
 	tests := []struct {
@@ -49,33 +46,30 @@ func TestClassifyPending(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ClassifyPending(tt.tool, json.RawMessage(tt.input), pendingNow)
+			got := ClassifyPending(tt.tool, json.RawMessage(tt.input))
 			if got.Tool != tt.tool || got.Kind != tt.wantKind || got.Summary != tt.wantSummary {
 				t.Fatalf("got tool=%q kind=%q summary=%q, want kind=%q summary=%q", got.Tool, got.Kind, got.Summary, tt.wantKind, tt.wantSummary)
-			}
-			if !got.At.Equal(pendingNow) {
-				t.Errorf("At = %v", got.At)
 			}
 		})
 	}
 }
 
 func TestClassifyPending_InputHash(t *testing.T) {
-	a := ClassifyPending("Bash", json.RawMessage(`{"command":"ls"}`), pendingNow)
-	b := ClassifyPending("Bash", json.RawMessage(`{"command":"ls"}`), pendingNow.Add(time.Hour))
-	c := ClassifyPending("Bash", json.RawMessage(`{"command":"pwd"}`), pendingNow)
+	a := ClassifyPending("Bash", json.RawMessage(`{"command":"ls"}`))
+	b := ClassifyPending("Bash", json.RawMessage(`{"command":"ls"}`))
+	c := ClassifyPending("Bash", json.RawMessage(`{"command":"pwd"}`))
 	if len(a.InputHash) != 16 || a.InputHash != b.InputHash || a.InputHash == c.InputHash {
 		t.Fatalf("hashes: %q %q %q", a.InputHash, b.InputHash, c.InputHash)
 	}
-	if got := ClassifyPending("Bash", nil, pendingNow).InputHash; got != "" {
+	if got := ClassifyPending("Bash", nil).InputHash; got != "" {
 		t.Errorf("empty input should have empty hash, got %q", got)
 	}
 }
 
 // PreToolUse / PermissionRequest と PostToolUse で tool_input の直列化（キー順・空白）が違っても同じ要求とみなす
 func TestClassifyPending_InputHashIgnoresJSONFormatting(t *testing.T) {
-	a := ClassifyPending("request_user_input", json.RawMessage(`{"questions":[{"header":"H","question":"Q"}],"id":1}`), pendingNow)
-	b := ClassifyPending("request_user_input", json.RawMessage("{ \"id\": 1,\n \"questions\": [ {\"question\":\"Q\", \"header\":\"H\"} ] }"), pendingNow)
+	a := ClassifyPending("request_user_input", json.RawMessage(`{"questions":[{"header":"H","question":"Q"}],"id":1}`))
+	b := ClassifyPending("request_user_input", json.RawMessage("{ \"id\": 1,\n \"questions\": [ {\"question\":\"Q\", \"header\":\"H\"} ] }"))
 	if a.InputHash != b.InputHash {
 		t.Errorf("hash differs by formatting: %q vs %q", a.InputHash, b.InputHash)
 	}
