@@ -12,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
@@ -159,8 +160,8 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
-		// Single display
-		printKanban(store, 0)
+		// Single display（live 状態は 1 回だけ取得する）
+		printKanban(store, 0, newLiveViews().views(store.Contexts))
 		return nil
 	},
 }
@@ -180,11 +181,12 @@ func statusIcon(status model.Status) string {
 	}
 }
 
-func printKanban(store *model.Store, offset int) {
-	printKanbanWithSize(store, offset, "", 0, 0)
+func printKanban(store *model.Store, offset int, views map[string]agentview.View) {
+	printKanbanWithSize(store, offset, "", 0, 0, views)
 }
 
-func printKanbanWithSize(store *model.Store, offset int, selectedName string, width int, height int) string {
+// views は agent view を重ねた表示状態（nil なら hook 状態）。store は変更しない。
+func printKanbanWithSize(store *model.Store, offset int, selectedName string, width int, height int, views map[string]agentview.View) string {
 	lanes := []struct {
 		status      model.Status
 		title       string
@@ -273,7 +275,7 @@ func printKanbanWithSize(store *model.Store, offset int, selectedName string, wi
 					col.WriteString("\n")
 					break
 				}
-				card := formatCard(contexts[i])
+				card := formatCard(contexts[i], views[contexts[i].Name])
 				// Highlight selected card
 				cardStyle := lane.cardStyle
 				if contexts[i].Name == selectedName {
@@ -298,7 +300,7 @@ func printKanbanWithSize(store *model.Store, offset int, selectedName string, wi
 	return result
 }
 
-func formatCard(ctx model.Context) string {
+func formatCard(ctx model.Context, view agentview.View) string {
 	var b strings.Builder
 
 	// Name (bold)
@@ -307,10 +309,10 @@ func formatCard(ctx model.Context) string {
 
 	// Agent provider and state (amber when waiting for the user)
 	agentStyle := dimStyle
-	if ctx.AgentState.WaitsForUser() {
+	if view.State.WaitsForUser() {
 		agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	}
-	b.WriteString(agentStyle.Render(agentTag(ctx)))
+	b.WriteString(agentStyle.Render(agentTag(ctx, view)))
 	b.WriteString("\n")
 
 	// Session name (Claude's auto-generated slug)
@@ -453,6 +455,8 @@ type kanbanModel struct {
 	message           string // Status message
 	contexts          []model.Context
 	doneRetentionDays int
+	live              *liveViews
+	views             map[string]agentview.View
 }
 
 type tickMsg time.Time
@@ -467,6 +471,7 @@ func newKanbanModel(s *storage.Storage) kanbanModel {
 	}
 
 	contexts := store.ActiveWithRetention(retentionDays)
+	live := newWatchLiveViews()
 	return kanbanModel{
 		storage:           s,
 		store:             store,
@@ -476,6 +481,8 @@ func newKanbanModel(s *storage.Storage) kanbanModel {
 		maxItem:           len(contexts),
 		contexts:          contexts,
 		doneRetentionDays: retentionDays,
+		live:              live,
+		views:             live.views(store.Contexts),
 	}
 }
 
@@ -524,6 +531,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < 0 {
 				m.cursor = 0
 			}
+			m.views = m.live.views(store.Contexts)
 		}
 		m.message = ""
 		return m, tickCmd()
@@ -696,7 +704,7 @@ func (m kanbanModel) View() string {
 	if ctx := m.selectedContext(); ctx != nil {
 		selectedName = ctx.Name
 	}
-	kanban := printKanbanWithSize(m.store, m.offset, selectedName, m.width, m.height-4)
+	kanban := printKanbanWithSize(m.store, m.offset, selectedName, m.width, m.height-4, m.views)
 
 	return header + selectedInfo + msgLine + kanban
 }

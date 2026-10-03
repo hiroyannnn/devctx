@@ -86,6 +86,16 @@ Codex の状態更新の hook は `"async": true` で動き、エージェント
 - ツールを並列に呼んでいると、別のツールの `PostToolUse` で、許可待ちのまま running に戻ることがあります。
 - `Stop` は他の Stop hook によって継続されることがあるため、turn done は目安です。
 
+### Agent View からの Claude 状態
+
+Claude については、ダッシュボード（Mind Map / カード）、`devctx list`、`devctx tui`、`devctx status` が `claude agents --json`（Claude Code の agent view）の live 状態を hook 状態に重ねて表示し、`claude · needs input · permission prompt` のように待ちの理由も出します。
+
+- 照合: まずセッション ID。無ければ live セッションの cwd の git toplevel が context の worktree と一致し、かつ 1 件だけのときに採用します。曖昧な場合は hook 状態のままです。
+- hook は、agent view が使えない・タイムアウト・未一致のときのフォールバックと、登録・`ended` の信号源として残ります。取得開始後に届いた hook と `ended` は常に live より優先されます。
+- agent view に載っていないことを ended とは**みなしません**。制限された環境ではセッションが生きていても空配列が返ることがあるためです。
+- `dx` の fzf 選択とシェル補完（`list --fzf` / `--names-only`）は速度のため hook 状態のみを使います（`dxl` / `dxw` は通常の `list` / `list --watch` なので live 状態を表示します）。hook 自体は `claude agents` を呼びません。
+- live の値は表示専用で、`contexts.yaml` には書き込みません。
+
 ### オプション設定
 
 ```bash
