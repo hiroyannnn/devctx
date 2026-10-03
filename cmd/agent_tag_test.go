@@ -26,3 +26,24 @@ func TestAgentTag(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentTag_PendingReplacesReason(t *testing.T) {
+	ctx := model.Context{AgentState: model.AgentNeedsInput}
+	pending := &model.PendingRequest{Tool: "Bash", Kind: model.PendingBash, Summary: "Run tests"}
+	tests := []struct {
+		name string
+		view agentview.View
+		want string
+	}{
+		{"pending label", agentview.View{State: model.AgentNeedsInput, Pending: pending}, "claude · needs input · Bash: Run tests"},
+		{"pending wins over waitingFor", agentview.View{State: model.AgentNeedsInput, Reason: "permission prompt", Pending: pending}, "claude · needs input · Bash: Run tests"},
+		{"reason without pending", agentview.View{State: model.AgentNeedsInput, Reason: "permission prompt"}, "claude · needs input · permission prompt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentTag(ctx, tt.view); got != tt.want {
+				t.Fatalf("agentTag = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

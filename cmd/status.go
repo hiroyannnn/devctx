@@ -177,7 +177,7 @@ func getLiveStatuses(store *model.Store, views map[string]agentview.View) []Live
 		if view := views[ctx.Name]; view.Source == agentview.SourceLive {
 			if status, ok := sessionStatusFromAgentState(view.State); ok {
 				ls.SessionStatus = status
-				ls.Reason = view.Reason
+				ls.Reason = view.Detail()
 			}
 		}
 

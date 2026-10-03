@@ -517,10 +517,12 @@ function phaseIndex(phase) {
 // Waiting-for-user amber; keep in sync with .card.agent-waiting in the stylesheet.
 var AGENT_WAITING_STYLE = { color: { border: '#d29922', background: '#2d2208' }, borderWidth: 3 };
 
-// "needs input · permission prompt": label plus the waiting reason (both server-provided)
+// "needs input · Bash: Run tests": label plus the pending request, else the waiting reason (all server-provided)
+// The pending label replaces the generic reason because it says what is being asked.
 function agentStateText(item) {
   if (!item.agent_state_label) return '';
-  return item.agent_waiting_for ? item.agent_state_label + ' \u00B7 ' + item.agent_waiting_for : item.agent_state_label;
+  var detail = item.agent_pending_label || item.agent_waiting_for;
+  return detail ? item.agent_state_label + ' \u00B7 ' + detail : item.agent_state_label;
 }
 
 // "claude · needs input · permission prompt" line for Mind Map session nodes

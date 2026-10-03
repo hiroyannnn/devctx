@@ -86,6 +86,9 @@ type RoadmapEntry struct {
 	// 待ちの理由（permission prompt 等）と状態の出どころ（live / hook）。live は agent view 由来
 	AgentWaitingFor  string                `json:"agent_waiting_for,omitempty"`
 	AgentStateSource string                `json:"agent_state_source,omitempty"`
+	// 何を待っているか（hook の待ち要求）。label は Tool + 要約で、本文は含まない
+	AgentPendingKind  string               `json:"agent_pending_kind,omitempty"`
+	AgentPendingLabel string               `json:"agent_pending_label,omitempty"`
 }
 
 // applyAgentFields は provider（空なら claude）と、view（live と hook を突き合わせた状態）を entry に写す。
@@ -97,6 +100,10 @@ func applyAgentFields(entry *RoadmapEntry, ctx model.Context, view agentview.Vie
 	entry.AgentWaiting = view.State.WaitsForUser()
 	entry.AgentWaitingFor = view.Reason
 	entry.AgentStateSource = view.Source
+	if view.Pending != nil {
+		entry.AgentPendingKind = string(view.Pending.Kind)
+		entry.AgentPendingLabel = view.Pending.Label()
+	}
 	if !ctx.AgentStateAt.IsZero() {
 		entry.AgentStateAt = ctx.AgentStateAt.Format(time.RFC3339)
 	}

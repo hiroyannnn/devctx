@@ -24,6 +24,15 @@ type View struct {
 	Pending *model.PendingRequest
 }
 
+// Detail は待ちの詳細表示を返す。待ち要求があればそのラベル、なければ live の待ち理由。
+// 要求を理由より優先するのは、"permission prompt" より "Bash: Run tests" の方が何を許可するかが分かるため。
+func (v View) Detail() string {
+	if v.Pending != nil {
+		return v.Pending.Label()
+	}
+	return v.Reason
+}
+
 // hookView は context の hook 由来の状態をそのまま View にする。
 func hookView(ctx model.Context) View {
 	v := View{State: ctx.AgentState}
