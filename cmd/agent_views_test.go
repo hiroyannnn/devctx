@@ -205,3 +205,62 @@ func TestTuiItemsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
 		}
 	}
 }
+
+// TUI は操作がなくても定期的に live 状態を取り直す。取得は Update 内で同期実行せず、
+// tick → 取得 Cmd → snapshot Msg → 次の tick の直列で 1 本ずつ回す（tick を積み上げない）。
+func TestTuiPeriodicRefreshUpdatesItemsOffUpdateGoroutine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := storage.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &model.Store{Contexts: []model.Context{{
+		Name: "a", Status: model.StatusInProgress, SessionID: "s1",
+		AgentState: model.AgentTurnDone, AgentStateAt: time.Now().Add(-time.Hour),
+	}}}
+	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "busy"}))
+
+	m := newTuiModel(store, s)
+	desc := func(m tuiModel) string { return m.list.Items()[0].(contextItem).Description() }
+	if !strings.Contains(desc(m), "claude · running") {
+		t.Fatalf("初期状態: %q", desc(m))
+	}
+
+	if m.Init() == nil {
+		t.Fatal("Init は最初の tick を返す")
+	}
+
+	fetches := 0
+	m.fetch = func() agentview.Snapshot {
+		fetches++
+		return liveSnap(agentview.Session{SessionID: "s1", Status: "waiting", WaitingFor: "permission prompt"})
+	}
+
+	next, cmd := m.Update(tuiTickMsg{})
+	m = next.(tuiModel)
+	if fetches != 0 {
+		t.Fatal("tick の Update 内で同期取得してはいけない")
+	}
+	if cmd == nil {
+		t.Fatal("tick は取得 Cmd を返す")
+	}
+	msg := cmd()
+	if fetches != 1 {
+		t.Fatalf("取得 Cmd が fetch を呼ぶ: %d", fetches)
+	}
+
+	next, cmd = m.Update(msg)
+	m = next.(tuiModel)
+	if !strings.Contains(desc(m), "claude · needs input · permission prompt") {
+		t.Errorf("snapshot 反映後: %q", desc(m))
+	}
+	if cmd == nil {
+		t.Error("snapshot 受信後に次の tick を予約する")
+	}
+	if fetches != 1 {
+		t.Errorf("snapshot 反映で再取得しない: %d", fetches)
+	}
+	if store.Contexts[0].AgentState != model.AgentTurnDone {
+		t.Errorf("overlay 値が store に入った: %v", store.Contexts[0].AgentState)
+	}
+}

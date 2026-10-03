@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -89,6 +90,27 @@ type tuiModel struct {
 	selectedForResume *model.Context
 	err               error
 	live              *liveViews
+	// fetch は live 取得。tea.Cmd（UI goroutine の外）からのみ呼ぶ。テストで差し替える
+	fetch func() agentview.Snapshot
+}
+
+// tuiLiveInterval は操作がなくても live 状態を取り直す間隔。
+const tuiLiveInterval = 5 * time.Second
+
+// tuiTickMsg は定期更新の合図。tuiSnapshotMsg は取得結果。
+// tick → 取得 → 結果受信で次の tick、と直列に回すので、取得が遅くても tick は積み上がらない。
+type (
+	tuiTickMsg     struct{}
+	tuiSnapshotMsg struct{ snap agentview.Snapshot }
+)
+
+func tuiTickCmd() tea.Cmd {
+	return tea.Tick(tuiLiveInterval, func(time.Time) tea.Msg { return tuiTickMsg{} })
+}
+
+func (m tuiModel) fetchCmd() tea.Cmd {
+	fetch := m.fetch
+	return func() tea.Msg { return tuiSnapshotMsg{snap: fetch()} }
 }
 
 type keyMap struct {
@@ -123,7 +145,10 @@ var keys = newKeyMap()
 
 // buildItems は status 順の一覧を作る。live 状態は表示用の view としてのみ持ち、store には入れない。
 func buildItems(store *model.Store, live *liveViews) []list.Item {
-	views := live.views(store.Contexts)
+	return buildItemsFromViews(store, live.views(store.Contexts))
+}
+
+func buildItemsFromViews(store *model.Store, views map[string]agentview.View) []list.Item {
 	items := make([]list.Item, 0)
 	statuses := []model.Status{
 		model.StatusInProgress,
@@ -172,11 +197,12 @@ func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
 		store:   store,
 		storage: s,
 		live:    live,
+		fetch:   func() agentview.Snapshot { return fetchAgentSnapshot() },
 	}
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return nil
+	return tuiTickCmd()
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -185,6 +211,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetWidth(msg.Width)
 		m.list.SetHeight(msg.Height - 2)
 		return m, nil
+
+	case tuiTickMsg:
+		return m, m.fetchCmd()
+
+	case tuiSnapshotMsg:
+		m.live.apply(msg.snap)
+		m.list.SetItems(buildItemsFromViews(m.store, m.live.overlay(m.store.Contexts)))
+		return m, tuiTickCmd()
 
 	case tea.KeyMsg:
 		// Don't handle keys if filtering
@@ -242,7 +276,8 @@ func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {
-	items := buildItems(m.store, m.live)
+	// 保持中の snapshot で再計算する。ここ（Update 内）では claude を実行しない
+	items := buildItemsFromViews(m.store, m.live.overlay(m.store.Contexts))
 
 	m.list.SetItems(items)
 	return m, nil

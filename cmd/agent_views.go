@@ -48,8 +48,18 @@ func newLiveViews(minInterval time.Duration) *liveViews {
 // 表示側は自分が描画する context だけを名前で引く。
 func (l *liveViews) views(all []model.Context) map[string]agentview.View {
 	if !l.fetched || l.now().Sub(l.snap.FetchedAt) >= l.minInterval {
-		l.snap = fetchAgentSnapshot()
-		l.fetched = true
+		l.apply(fetchAgentSnapshot())
 	}
+	return l.overlay(all)
+}
+
+// apply は外部（TUI のバックグラウンド取得など）で得た snapshot を保持する。
+func (l *liveViews) apply(snap agentview.Snapshot) {
+	l.snap = snap
+	l.fetched = true
+}
+
+// overlay は保持中の snapshot で overlay だけを計算する（claude は実行しない）。
+func (l *liveViews) overlay(all []model.Context) map[string]agentview.View {
 	return agentview.Overlay(all, l.snap, l.toplevel)
 }
