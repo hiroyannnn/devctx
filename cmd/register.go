@@ -25,7 +25,7 @@ var registerCmd = &cobra.Command{
 	Use:   "register [name]",
 	Short: "Register current worktree with an agent session",
 	Long: `Register the current directory as a development context.
-If called from a Claude Code hook, reads session info from stdin.
+If called from a Claude Code / Codex hook, reads session info from stdin (and prints nothing).
 If called manually, uses current directory and prompts for name.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := storage.New()
@@ -37,7 +37,8 @@ If called manually, uses current directory and prompts for name.`,
 		var name string
 
 		// Called from a hook: read session info from stdin
-		if stdinIsPipe() {
+		fromHook := stdinIsPipe()
+		if fromHook {
 			if err := decodeHookInput(os.Stdin, &input); err != nil {
 				return err
 			}
@@ -107,6 +108,11 @@ If called manually, uses current directory and prompts for name.`,
 
 		// Record session_start event
 		recordEvent(s, ctx.Name, model.MilestoneSessionStart, "")
+
+		// Why not print from hooks: SessionStart の stdout は Claude Code / Codex がモデルの context に追加する
+		if fromHook {
+			return nil
+		}
 
 		if !created {
 			fmt.Printf("Updated context [%s]\n", ctx.Name)
