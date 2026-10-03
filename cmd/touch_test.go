@@ -114,3 +114,22 @@ func TestResolveTouchTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyHookState_IgnoresEventsOlderThanRecordedState(t *testing.T) {
+	// async hook の Stop が遅れて保存されても、それより後に記録された running を巻き戻さない
+	ctx := &model.Context{AgentState: model.AgentRunning, AgentStateAt: touchNow}
+	if applyHookState(ctx, hookInput{HookEventName: "Stop"}, touchNow.Add(-time.Second)) {
+		t.Fatalf("a Stop that started before the recorded state must be ignored")
+	}
+	if ctx.AgentState != model.AgentRunning {
+		t.Fatalf("state = %q, want running", ctx.AgentState)
+	}
+}
+
+func TestApplyHookState_EndedIsTerminal(t *testing.T) {
+	// SessionEnd の後に遅れて届いた PostToolUse で running に戻さない（再開時は register がクリアする）
+	ctx := &model.Context{AgentState: model.AgentEnded, AgentStateAt: touchNow}
+	if applyHookState(ctx, hookInput{HookEventName: "PostToolUse"}, touchNow.Add(time.Second)) {
+		t.Fatalf("hooks must not move a session out of ended")
+	}
+}

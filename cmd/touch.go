@@ -33,6 +33,10 @@ If called with a name, updates that specific context.
 Use --quick to skip phase scan and milestone collection (for high-frequency hooks).
 Use --track-state to record the agent state from the hook event (running / needs_input / turn_done / ended).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Why capture before the lock: async hooks run concurrently and may acquire the store lock
+		// out of order; the process start time is the closest available proxy for the event time
+		eventTime := time.Now()
+
 		provider, err := model.ParseProvider(touchProvider)
 		if err != nil {
 			return err
@@ -68,7 +72,7 @@ Use --track-state to record the agent state from the hook event (running / needs
 			now := time.Now()
 
 			// State changes are saved even when last_seen is throttled
-			stateChanged := touchTrackState && applyHookState(ctx, input, now)
+			stateChanged := touchTrackState && applyHookState(ctx, input, eventTime)
 			seen = applyLastSeen(ctx, now, touchQuick)
 			if !seen && !stateChanged {
 				return storage.ErrSkipSave
@@ -140,12 +144,17 @@ func applyLastSeen(ctx *model.Context, now time.Time, quick bool) bool {
 
 // applyHookState は hook イベントからエージェント状態を更新する。状態が変わらなければ false を返す。
 // 同じ状態の再記録を避けるのは、UserPromptSubmit など高頻度の hook で毎回 store を書き換えないため。
-func applyHookState(ctx *model.Context, input hookInput, now time.Time) bool {
+// eventTime より後に記録された状態があれば、遅れて届いた古いイベントとして捨てる（async hook の順序逆転対策）。
+// ended は終着点で、hook では戻さない（再開時は SessionStart の register が状態をクリアする）。
+func applyHookState(ctx *model.Context, input hookInput, eventTime time.Time) bool {
+	if ctx.AgentState == model.AgentEnded || eventTime.Before(ctx.AgentStateAt) {
+		return false
+	}
 	next, ok := model.AgentStateFromHook(input.HookEventName, input.NotificationType, ctx.AgentState)
 	if !ok || next == ctx.AgentState {
 		return false
 	}
-	ctx.SetAgentState(next, now)
+	ctx.SetAgentState(next, eventTime)
 	return true
 }
 
