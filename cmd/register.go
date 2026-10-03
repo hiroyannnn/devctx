@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,23 +32,14 @@ If called manually, uses current directory and prompts for name.`,
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
-		if err != nil {
-			return err
-		}
 
 		var input SessionStartInput
 		var name string
 
-		// Check if stdin has data (called from hook)
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			// Reading from pipe (hook mode)
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
-					return fmt.Errorf("failed to parse hook input: %w", err)
-				}
+		// Called from a hook: read session info from stdin
+		if stdinIsPipe() {
+			if err := decodeHookInput(os.Stdin, &input); err != nil {
+				return err
 			}
 		}
 
@@ -88,32 +77,36 @@ If called manually, uses current directory and prompts for name.`,
 			sessionName = extractSessionName(input.TranscriptPath)
 		}
 
-		ctx, created := upsertRegistration(store, registration{
-			Name:           name,
-			Worktree:       cwd,
-			Branch:         branch,
-			RepoRoot:       repoRoot,
-			Provider:       provider,
-			SessionID:      input.SessionID,
-			SessionName:    sessionName,
-			TranscriptPath: input.TranscriptPath,
-		}, time.Now())
+		var ctx model.Context
+		var created bool
+		err = s.UpdateStore(func(store *model.Store) error {
+			registered, isNew := upsertRegistration(store, registration{
+				Name:           name,
+				Worktree:       cwd,
+				Branch:         branch,
+				RepoRoot:       repoRoot,
+				Provider:       provider,
+				SessionID:      input.SessionID,
+				SessionName:    sessionName,
+				TranscriptPath: input.TranscriptPath,
+			}, time.Now())
+			ctx, created = *registered, isNew
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 
-		// Auto-detect phase (fast mode for hook performance)
-		phaseScanner := roadmap.NewScanner()
-		phaseScanner.RefreshPhase(ctx, roadmap.ScanModeFast)
-
+		if err := refreshPhaseOutsideLock(s, ctx); err != nil {
+			return err
+		}
 		if !created {
 			// Collect git milestones
-			collectAndSaveMilestones(s, ctx)
+			collectAndSaveMilestones(s, &ctx)
 		}
 
 		// Record session_start event
 		recordEvent(s, ctx.Name, model.MilestoneSessionStart, "")
-
-		if err := s.SaveStore(store); err != nil {
-			return err
-		}
 
 		if !created {
 			fmt.Printf("Updated context [%s]\n", ctx.Name)
@@ -159,6 +152,9 @@ func upsertRegistration(store *model.Store, reg registration, now time.Time) (*m
 			if reg.SessionName != "" {
 				existing.SessionName = reg.SessionName
 			}
+			// A (re)started session has not been observed yet; the previous session's
+			// state (e.g. ended / turn_done) would otherwise linger until the next prompt.
+			existing.SetAgentState("", time.Time{})
 		}
 		existing.LastSeen = now
 		if reg.Branch != "" {
@@ -258,6 +254,21 @@ func detectRepoRoot(dir string) string {
 	}
 	// Fallback: use toplevel
 	return getWorktreeRoot(dir)
+}
+
+// refreshPhaseOutsideLock は git を使う phase 判定を contexts.yaml のロック外で行い、
+// 結果の Phase / PhaseCheckedAt だけを短いロックで書き戻す。
+// Why not UpdateStore の中で判定する: git の起動（最大数回）の間、高頻度の hook（touch）が待たされる。
+func refreshPhaseOutsideLock(s *storage.Storage, ctx model.Context) error {
+	roadmap.NewScanner().RefreshPhase(&ctx, roadmap.ScanModeFast)
+	return s.UpdateStore(func(store *model.Store) error {
+		stored := store.FindByName(ctx.Name)
+		if stored == nil {
+			return storage.ErrSkipSave
+		}
+		stored.Phase, stored.PhaseCheckedAt = ctx.Phase, ctx.PhaseCheckedAt
+		return nil
+	})
 }
 
 func collectAndSaveMilestones(s *storage.Storage, ctx *model.Context) {

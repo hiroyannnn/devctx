@@ -35,60 +35,7 @@ Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 		// Use PATH-based name so hooks survive binary rebuilds / user changes
 		devctxPath := "devctx"
 
-		settings := ClaudeSettings{
-			Hooks: map[string][]HookConfig{
-				"SessionStart": {
-					{
-						Matcher: "startup",
-						Hooks: []Hook{
-							{
-								Type:    "command",
-								Command: devctxPath + " register",
-							},
-						},
-					},
-					{
-						Matcher: "resume",
-						Hooks: []Hook{
-							{
-								Type:    "command",
-								Command: devctxPath + " register",
-							},
-						},
-					},
-				},
-				"Notification": {
-					{
-						Hooks: []Hook{
-							{
-								Type:    "command",
-								Command: devctxPath + " touch --quick",
-							},
-						},
-					},
-				},
-				"SessionEnd": {
-					{
-						Hooks: []Hook{
-							{
-								Type:    "command",
-								Command: devctxPath + " touch",
-							},
-						},
-					},
-				},
-				"Stop": {
-					{
-						Hooks: []Hook{
-							{
-								Type:    "command",
-								Command: devctxPath + " roadmap analyze --if-stale --background",
-							},
-						},
-					},
-				},
-			},
-		}
+		settings := ClaudeSettings{Hooks: devctxHookConfigs(devctxPath)}
 
 		jsonBytes, err := json.MarshalIndent(settings, "", "  ")
 		if err != nil {
@@ -154,48 +101,13 @@ func installHooksToSettings() error {
 		hooks = make(map[string]interface{})
 	}
 
-	// Merge SessionStart hooks (startup + resume)
-	hooks["SessionStart"] = mergeHookConfigs(hooks["SessionStart"],
-		map[string]interface{}{
-			"matcher": "startup",
-			"hooks": []map[string]interface{}{
-				{"type": "command", "command": devctxPath + " register"},
-			},
-		},
-		map[string]interface{}{
-			"matcher": "resume",
-			"hooks": []map[string]interface{}{
-				{"type": "command", "command": devctxPath + " register"},
-			},
-		},
-	)
-
-	// Merge Notification hooks (throttled last_seen update)
-	hooks["Notification"] = mergeHookConfigs(hooks["Notification"],
-		map[string]interface{}{
-			"hooks": []map[string]interface{}{
-				{"type": "command", "command": devctxPath + " touch --quick"},
-			},
-		},
-	)
-
-	// Merge SessionEnd hooks
-	hooks["SessionEnd"] = mergeHookConfigs(hooks["SessionEnd"],
-		map[string]interface{}{
-			"hooks": []map[string]interface{}{
-				{"type": "command", "command": devctxPath + " touch"},
-			},
-		},
-	)
-
-	// Merge Stop hooks (background insight analysis)
-	hooks["Stop"] = mergeHookConfigs(hooks["Stop"],
-		map[string]interface{}{
-			"hooks": []map[string]interface{}{
-				{"type": "command", "command": devctxPath + " roadmap analyze --if-stale --background"},
-			},
-		},
-	)
+	for _, spec := range devctxHookSpecs(devctxPath) {
+		var newConfigs []map[string]interface{}
+		for _, c := range spec.Configs {
+			newConfigs = append(newConfigs, hookConfigMap(c))
+		}
+		hooks[spec.Event] = mergeHookConfigs(hooks[spec.Event], newConfigs...)
+	}
 
 	settings["hooks"] = hooks
 
@@ -221,9 +133,62 @@ func installHooksToSettings() error {
 	return nil
 }
 
-// mergeHookConfigs appends devctx hooks that don't already exist.
-// If an existing config already has a devctx command with the same
-// subcommand, it is left untouched. Never removes or modifies existing entries.
+// hookEventSpec は 1 イベント分の devctx hook 定義。
+type hookEventSpec struct {
+	Event   string
+	Configs []HookConfig
+}
+
+// devctxHookSpecs は devctx が Claude Code に登録する hook 定義（インストール順）。
+// 表示（devctx hooks）とインストール（--install）の両方がこれを使う。
+func devctxHookSpecs(devctxPath string) []hookEventSpec {
+	command := func(args string) []Hook {
+		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
+	}
+	return []hookEventSpec{
+		{"SessionStart", []HookConfig{
+			{Matcher: "startup", Hooks: command("register")},
+			{Matcher: "resume", Hooks: command("register")},
+		}},
+		// Agent state: running on prompt, waiting on notification / turn end
+		{"UserPromptSubmit", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
+		{"Notification", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
+		{"Stop", []HookConfig{
+			{Hooks: command("roadmap analyze --if-stale --background")},
+			{Hooks: command("touch --quick --track-state")},
+		}},
+		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state")}}},
+	}
+}
+
+// devctxHookConfigs は devctxHookSpecs をイベント名で引けるようにしたもの（表示用）。
+func devctxHookConfigs(devctxPath string) map[string][]HookConfig {
+	configs := make(map[string][]HookConfig)
+	for _, spec := range devctxHookSpecs(devctxPath) {
+		configs[spec.Event] = spec.Configs
+	}
+	return configs
+}
+
+// hookConfigMap は HookConfig を settings.json から読んだのと同じ汎用表現に変換する。
+func hookConfigMap(c HookConfig) map[string]interface{} {
+	hooks := make([]interface{}, len(c.Hooks))
+	for i, h := range c.Hooks {
+		hooks[i] = map[string]interface{}{"type": h.Type, "command": h.Command}
+	}
+	config := map[string]interface{}{"hooks": hooks}
+	if c.Matcher != "" {
+		config["matcher"] = c.Matcher
+	}
+	return config
+}
+
+// mergeHookConfigs adds devctx hooks to existing hook configs.
+// If a config with a devctx command of the same subcommand + matcher exists,
+// that devctx command is upgraded to the new arguments (keeping its binary path).
+// Non-devctx hooks are never removed or modified.
+// Why not leave existing devctx entries untouched: users who installed an older
+// version would never receive new flags such as --track-state.
 func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}) []interface{} {
 	var configs []interface{}
 
@@ -235,69 +200,97 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 	}
 
 	for _, nc := range newConfigs {
-		newCmd := extractDevctxCommand(nc)
-		if newCmd == "" {
+		newHooks := findDevctxHooks(nc)
+		if len(newHooks) == 0 {
 			configs = append(configs, nc)
 			continue
 		}
-		newSub := devctxSubcommand(newCmd)
-
-		// Check if a devctx hook with the same subcommand + matcher already exists
+		newCmd, _ := newHooks[0]["command"].(string)
+		newPath := devctxCommandPath(newCmd)
 		newMatcher, _ := nc["matcher"].(string)
-		found := false
-		for _, config := range configs {
-			existCmd := extractDevctxCommand(config)
-			if existCmd == "" || devctxSubcommand(existCmd) != newSub {
-				continue
-			}
-			if configMap, ok := config.(map[string]interface{}); ok {
-				existMatcher, _ := configMap["matcher"].(string)
-				if existMatcher == newMatcher {
-					found = true
-					break
-				}
-			}
-		}
-		if !found {
+
+		existHook := findMatchingDevctxHook(configs, newPath, newMatcher)
+		if existHook == nil {
 			configs = append(configs, nc)
+			continue
 		}
+		existCmd, _ := existHook["command"].(string)
+		existBinary, _, existRest, _ := splitDevctxCommand(existCmd)
+		_, newArgs, _, _ := splitDevctxCommand(newCmd)
+		// Keep anything the user chained after the devctx command (e.g. "&& say done")
+		existHook["command"] = strings.Join(append(append([]string{existBinary}, newArgs...), existRest...), " ")
 	}
 	return configs
 }
 
-// extractDevctxCommand returns the first devctx command from a hook config, or "".
-func extractDevctxCommand(config interface{}) string {
-	configMap, ok := config.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	hooksArr, ok := configMap["hooks"].([]interface{})
-	if !ok {
-		return ""
-	}
-	for _, hook := range hooksArr {
-		if hookMap, ok := hook.(map[string]interface{}); ok {
-			if cmd, ok := hookMap["command"].(string); ok {
-				if strings.Contains(cmd, "devctx") {
-					return cmd
-				}
+// findMatchingDevctxHook returns the devctx hook entry with the same command path
+// (e.g. "roadmap analyze") under the same matcher, searching every hook in every config.
+func findMatchingDevctxHook(configs []interface{}, path, matcher string) map[string]interface{} {
+	for _, config := range configs {
+		configMap, _ := config.(map[string]interface{})
+		if existMatcher, _ := configMap["matcher"].(string); existMatcher != matcher {
+			continue
+		}
+		for _, hook := range findDevctxHooks(config) {
+			if cmd, _ := hook["command"].(string); devctxCommandPath(cmd) == path {
+				return hook
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
-// devctxSubcommand extracts the subcommand from a devctx command string.
-// e.g. "/path/to/devctx register" → "register", "devctx touch --quick" → "touch"
-func devctxSubcommand(cmd string) string {
-	idx := strings.Index(cmd, "devctx")
-	if idx < 0 {
+// findDevctxHooks returns the hook entries running devctx in a hook config.
+// Configs must use the settings.json shape ([]interface{}); hookConfigMap builds that shape.
+func findDevctxHooks(config interface{}) []map[string]interface{} {
+	configMap, _ := config.(map[string]interface{})
+	hooks, _ := configMap["hooks"].([]interface{})
+	var result []map[string]interface{}
+	for _, h := range hooks {
+		hook, _ := h.(map[string]interface{})
+		if cmd, ok := hook["command"].(string); ok {
+			if _, _, _, ok := splitDevctxCommand(cmd); ok {
+				result = append(result, hook)
+			}
+		}
+	}
+	return result
+}
+
+// splitDevctxCommand splits a hook command into the devctx binary part, its arguments,
+// and the rest of a shell chain after it.
+// e.g. "/path/to/devctx touch --quick && say hi" → ("/path/to/devctx", ["touch", "--quick"], ["&&", "say", "hi"], true)
+func splitDevctxCommand(cmd string) (binary string, args, rest []string, ok bool) {
+	fields := strings.Fields(cmd)
+	for i, field := range fields {
+		if filepath.Base(field) != "devctx" {
+			continue
+		}
+		args = fields[i+1:]
+		for j, arg := range args {
+			if arg == "&&" || arg == "||" || arg == ";" || arg == "|" {
+				return strings.Join(fields[:i+1], " "), args[:j], args[j:], true
+			}
+		}
+		return strings.Join(fields[:i+1], " "), args, nil, true
+	}
+	return "", nil, nil, false
+}
+
+// devctxCommandPath returns the devctx subcommand path before the first flag.
+// e.g. "/path/to/devctx roadmap analyze --if-stale" → "roadmap analyze", "devctx touch --quick" → "touch"
+// Why not the first word only: "roadmap analyze" and "roadmap serve" are different hooks.
+func devctxCommandPath(cmd string) string {
+	_, args, _, ok := splitDevctxCommand(cmd)
+	if !ok {
 		return ""
 	}
-	rest := strings.TrimSpace(cmd[idx+len("devctx"):])
-	parts := strings.Fields(rest)
-	if len(parts) == 0 {
-		return ""
+	var path []string
+	for _, part := range args {
+		if strings.HasPrefix(part, "-") {
+			break
+		}
+		path = append(path, part)
 	}
-	return parts[0]
+	return strings.Join(path, " ")
 }

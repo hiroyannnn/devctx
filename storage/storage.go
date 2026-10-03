@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -56,11 +57,40 @@ func (s *Storage) LoadStore() (*model.Store, error) {
 }
 
 func (s *Storage) SaveStore(store *model.Store) error {
+	return s.withFileLock(s.contextsPath(), func() error {
+		return s.writeStore(store)
+	})
+}
+
+// ErrSkipSave を UpdateStore の fn から返すと、保存せずに成功として扱う（filepath.SkipDir と同じ流儀）。
+// 高頻度の hook で、変化がないときに contexts.yaml を書き換えないために使う。
+var ErrSkipSave = errors.New("skip save")
+
+// UpdateStore atomically loads, updates, and saves contexts with file locking.
+// Hooks (register / touch) fire concurrently, e.g. Stop runs touch and roadmap analyze
+// at the same time; a plain Load + Save would let the later writer drop the other's change.
+func (s *Storage) UpdateStore(fn func(*model.Store) error) error {
+	return s.withFileLock(s.contextsPath(), func() error {
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
+		}
+		if err := fn(store); err != nil {
+			if errors.Is(err, ErrSkipSave) {
+				return nil
+			}
+			return err
+		}
+		return s.writeStore(store)
+	})
+}
+
+func (s *Storage) writeStore(store *model.Store) error {
 	data, err := yaml.Marshal(store)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.contextsPath(), data, 0644)
+	return atomicWriteFile(s.contextsPath(), data, 0644)
 }
 
 func (s *Storage) LoadConfig() (*model.Config, error) {

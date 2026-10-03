@@ -68,6 +68,8 @@ type Context struct {
 	PhaseCheckedAt time.Time       `yaml:"phase_checked_at,omitempty"`
 	RepoRoot       string          `yaml:"repo_root,omitempty"` // Git repo root path for project grouping
 	Provider       Provider        `yaml:"provider,omitempty"`  // 空は claude（EffectiveProvider を使う）
+	AgentState     AgentState      `yaml:"agent_state,omitempty"`
+	AgentStateAt   time.Time       `yaml:"agent_state_at,omitempty"`
 }
 
 type Config struct {

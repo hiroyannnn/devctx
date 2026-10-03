@@ -51,8 +51,10 @@ func TestContextYAMLKeepsLegacyFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(legacy), "provider") {
-		t.Fatalf("legacy context should not emit provider key:\n%s", legacy)
+	for _, key := range []string{"provider", "agent_state"} {
+		if strings.Contains(string(legacy), key) {
+			t.Fatalf("legacy context should not emit %s key:\n%s", key, legacy)
+		}
 	}
 
 	var loaded Context

@@ -341,6 +341,14 @@ func formatCard(ctx model.Context) string {
 	b.WriteString(nameStyle.Render(ctx.Name))
 	b.WriteString("\n")
 
+	// Agent provider and state (amber when waiting for the user)
+	agentStyle := dimStyle
+	if ctx.AgentState.WaitsForUser() {
+		agentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	}
+	b.WriteString(agentStyle.Render(agentTag(ctx)))
+	b.WriteString("\n")
+
 	// Session name (Claude's auto-generated slug)
 	if ctx.SessionName != "" {
 		sessionName := ctx.SessionName

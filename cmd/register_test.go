@@ -121,3 +121,29 @@ func TestUniqueContextName(t *testing.T) {
 		})
 	}
 }
+
+func TestUpsertRegistration_NewSessionResetsAgentState(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1", AgentState: model.AgentEnded, AgentStateAt: registerNow.Add(-time.Hour)},
+	}}
+	ctx, _ := upsertRegistration(store, registration{
+		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderClaude, SessionID: "c2",
+	}, registerNow)
+
+	if ctx.AgentState != "" || !ctx.AgentStateAt.IsZero() {
+		t.Fatalf("session start should clear the previous session's state, got %q at %v", ctx.AgentState, ctx.AgentStateAt)
+	}
+}
+
+func TestUpsertRegistration_ManualRegisterKeepsAgentState(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1", AgentState: model.AgentTurnDone},
+	}}
+	ctx, _ := upsertRegistration(store, registration{
+		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderClaude,
+	}, registerNow)
+
+	if ctx.AgentState != model.AgentTurnDone {
+		t.Fatalf("manual register without a session should keep state, got %q", ctx.AgentState)
+	}
+}

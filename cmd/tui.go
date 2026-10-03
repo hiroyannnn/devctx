@@ -61,7 +61,7 @@ func (i contextItem) Title() string {
 }
 
 func (i contextItem) Description() string {
-	parts := []string{i.ctx.Branch}
+	parts := []string{agentTag(i.ctx), i.ctx.Branch}
 	if i.ctx.Note != "" {
 		note := i.ctx.Note
 		if len(note) > 40 {

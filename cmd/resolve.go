@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,16 +48,21 @@ func resolveHookContext(store *model.Store, args []string, sessionID, worktree s
 	return resolveContext(store, args, worktree)
 }
 
+// decodeHookInput は hook が stdin に渡す JSON を v に読み込む。空入力は何もせず nil を返す。
+// Why not bufio.Scanner: 1 行 64KB の上限を超えると黙って空入力扱いになる。
+func decodeHookInput(r io.Reader, v any) error {
+	if err := json.NewDecoder(r).Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("failed to parse hook input: %w", err)
+	}
+	return nil
+}
+
 // readHookSessionID は hook の stdin JSON から session_id を読む。読めなければ空文字を返す。
 func readHookSessionID(r io.Reader) string {
-	scanner := bufio.NewScanner(r)
-	if !scanner.Scan() {
-		return ""
-	}
 	var input struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := json.Unmarshal(scanner.Bytes(), &input); err != nil {
+	if err := decodeHookInput(r, &input); err != nil {
 		return ""
 	}
 	return input.SessionID

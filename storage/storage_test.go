@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,5 +279,81 @@ func TestSaveInsightsAndLoadInsightsRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(store, loaded) {
 		t.Fatalf("loaded insights mismatch\nwant: %#v\ngot:  %#v", store, loaded)
+	}
+}
+
+func TestUpdateStoreSerializesConcurrentUpdates(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+	const writers = 20
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- s.UpdateStore(func(store *model.Store) error {
+				store.Add(model.Context{Name: fmt.Sprintf("ctx-%d", i)})
+				return nil
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Contexts) != writers {
+		t.Fatalf("contexts = %d, want %d (updates were lost)", len(store.Contexts), writers)
+	}
+}
+
+func TestUpdateStoreDoesNotSaveOnError(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+	if err := s.SaveStore(&model.Store{Contexts: []model.Context{{Name: "keep"}}}); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("abort")
+	err := s.UpdateStore(func(store *model.Store) error {
+		store.Contexts = nil
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Contexts) != 1 {
+		t.Fatalf("store was modified despite error: %+v", store.Contexts)
+	}
+}
+
+func TestUpdateStoreSkipSave(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+	if err := s.SaveStore(&model.Store{Contexts: []model.Context{{Name: "keep"}}}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.UpdateStore(func(store *model.Store) error {
+		store.Contexts = nil
+		return ErrSkipSave
+	})
+	if err != nil {
+		t.Fatalf("ErrSkipSave should be reported as success, got %v", err)
+	}
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Contexts) != 1 {
+		t.Fatalf("store should not be written on ErrSkipSave: %+v", store.Contexts)
 	}
 }
