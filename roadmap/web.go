@@ -86,7 +86,6 @@ type RoadmapEntry struct {
 	// 待ちの詳細（待ち要求のラベル、なければ live の待ち理由 permission prompt 等）と状態の出どころ（live / hook）。live は agent view 由来
 	AgentWaitingFor  string                `json:"agent_waiting_for,omitempty"`
 	AgentStateSource string                `json:"agent_state_source,omitempty"`
-	// 何を待っているか（hook の待ち要求）。label は Tool + 要約で、本文は含まない
 }
 
 // applyAgentFields は provider（空なら claude）と、view（live と hook を突き合わせた状態）を entry に写す。
