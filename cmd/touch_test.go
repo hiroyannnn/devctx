@@ -87,3 +87,49 @@ func TestParseHookInput_Empty(t *testing.T) {
 		t.Fatalf("empty input = %+v, %v; want zero value and nil", in, err)
 	}
 }
+
+func TestResolveTouchTarget(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "claude-ctx", SessionID: "same-id"},
+		{Name: "codex-ctx", Provider: model.ProviderCodex, SessionID: "codex-id"},
+	}}
+	tests := []struct {
+		name      string
+		provider  model.Provider
+		sessionID string
+		args      []string
+		want      string
+	}{
+		{"claude session", model.ProviderClaude, "same-id", nil, "claude-ctx"},
+		{"codex session", model.ProviderCodex, "codex-id", nil, "codex-ctx"},
+		{"provider mismatch does not resolve", model.ProviderClaude, "codex-id", nil, ""},
+		{"unknown session", model.ProviderCodex, "nope", nil, ""},
+		{"explicit name wins", model.ProviderCodex, "codex-id", []string{"other"}, "other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveTouchTarget(store, tt.provider, tt.sessionID, tt.args); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyHookState_IgnoresEventsOlderThanRecordedState(t *testing.T) {
+	// async hook の Stop が遅れて保存されても、それより後に記録された running を巻き戻さない
+	ctx := &model.Context{AgentState: model.AgentRunning, AgentStateAt: touchNow}
+	if applyHookState(ctx, hookInput{HookEventName: "Stop"}, touchNow.Add(-time.Second)) {
+		t.Fatalf("a Stop that started before the recorded state must be ignored")
+	}
+	if ctx.AgentState != model.AgentRunning {
+		t.Fatalf("state = %q, want running", ctx.AgentState)
+	}
+}
+
+func TestApplyHookState_EndedIsTerminal(t *testing.T) {
+	// SessionEnd の後に遅れて届いた PostToolUse で running に戻さない（再開時は register がクリアする）
+	ctx := &model.Context{AgentState: model.AgentEnded, AgentStateAt: touchNow}
+	if applyHookState(ctx, hookInput{HookEventName: "PostToolUse"}, touchNow.Add(time.Second)) {
+		t.Fatalf("hooks must not move a session out of ended")
+	}
+}

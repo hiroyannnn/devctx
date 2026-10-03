@@ -21,17 +21,26 @@ type hookInput struct {
 var (
 	touchQuick      bool
 	touchTrackState bool
+	touchProvider   string
 )
 
 var touchCmd = &cobra.Command{
 	Use:   "touch [name]",
 	Short: "Update last-seen timestamp for a context",
 	Long: `Update the last-seen timestamp for a context.
-If called from a Claude Code hook, reads session info from stdin.
+If called from a Claude Code / Codex hook (--provider), reads session info from stdin.
 If called with a name, updates that specific context.
 Use --quick to skip phase scan and milestone collection (for high-frequency hooks).
 Use --track-state to record the agent state from the hook event (running / needs_input / turn_done / ended).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Why capture before the lock: async hooks run concurrently and may acquire the store lock
+		// out of order; the process start time is the closest available proxy for the event time
+		eventTime := time.Now()
+
+		provider, err := model.ParseProvider(touchProvider)
+		if err != nil {
+			return err
+		}
 		s, err := storage.New()
 		if err != nil {
 			return err
@@ -47,17 +56,17 @@ Use --track-state to record the agent state from the hook event (running / needs
 			}
 		}
 
+		// Why unlocked read first: 高頻度 hook の大半は no-op（同じ状態・quick の間引き）で、
+		// ロック待ちと書き込みを避けたい。store の書き込みは atomic rename なので、ロック無しの読み取りでも
+		// 中途半端なファイルは見えない。古い値を読んでも、変化ありと判断すれば下のロック内で再評価される
+		if touchIsNoop(s, provider, input, args, eventTime) {
+			return nil
+		}
+
 		var updated model.Context
 		var seen bool
 		err = s.UpdateStore(func(store *model.Store) error {
-			var name string
-			if ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID); ctx != nil {
-				name = ctx.Name
-			}
-			// If name provided as argument, use that
-			if len(args) > 0 {
-				name = args[0]
-			}
+			name := resolveTouchTarget(store, provider, input.SessionID, args)
 			if name == "" {
 				return fmt.Errorf("no context specified and no session ID found")
 			}
@@ -70,7 +79,7 @@ Use --track-state to record the agent state from the hook event (running / needs
 			now := time.Now()
 
 			// State changes are saved even when last_seen is throttled
-			stateChanged := touchTrackState && applyHookState(ctx, input, now)
+			stateChanged := touchTrackState && applyHookState(ctx, input, eventTime)
 			seen = applyLastSeen(ctx, now, touchQuick)
 			if !seen && !stateChanged {
 				return storage.ErrSkipSave
@@ -104,6 +113,39 @@ Use --track-state to record the agent state from the hook event (running / needs
 	},
 }
 
+// touchIsNoop は store をロック無しで読み、この touch が何も変えないことが確実なら true を返す。
+// 読み込み失敗・対象不明などは false を返し、エラー報告を UpdateStore 側に任せる。
+func touchIsNoop(s *storage.Storage, provider model.Provider, input hookInput, args []string, eventTime time.Time) bool {
+	store, err := s.LoadStore()
+	if err != nil {
+		return false
+	}
+	name := resolveTouchTarget(store, provider, input.SessionID, args)
+	if name == "" {
+		return false
+	}
+	ctx := store.FindByName(name)
+	if ctx == nil {
+		return false
+	}
+	probe := *ctx // 副作用を本物の store に残さないためコピーで評価する
+	stateChanged := touchTrackState && applyHookState(&probe, input, eventTime)
+	seen := applyLastSeen(&probe, time.Now(), touchQuick)
+	return !stateChanged && !seen
+}
+
+// resolveTouchTarget は touch が更新する context の名前を返す。明示された名前を優先し、
+// なければ hook の session_id を provider 側のセッション ID として探す。見つからなければ空文字。
+func resolveTouchTarget(store *model.Store, provider model.Provider, sessionID string, args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	if ctx := store.FindByProviderSession(provider, sessionID); ctx != nil {
+		return ctx.Name
+	}
+	return ""
+}
+
 // parseHookInput は hook の stdin JSON（1 行）を読む。空入力はゼロ値を返す。
 func parseHookInput(r io.Reader) (hookInput, error) {
 	var input hookInput
@@ -130,17 +172,22 @@ func applyLastSeen(ctx *model.Context, now time.Time, quick bool) bool {
 
 // applyHookState は hook イベントからエージェント状態を更新する。状態が変わらなければ false を返す。
 // 同じ状態の再記録を避けるのは、UserPromptSubmit など高頻度の hook で毎回 store を書き換えないため。
-func applyHookState(ctx *model.Context, input hookInput, now time.Time) bool {
+// eventTime より後に記録された状態があれば、遅れて届いた古いイベントとして捨てる（async hook の順序逆転対策）。
+func applyHookState(ctx *model.Context, input hookInput, eventTime time.Time) bool {
+	if eventTime.Before(ctx.AgentStateAt) {
+		return false
+	}
 	next, ok := model.AgentStateFromHook(input.HookEventName, input.NotificationType, ctx.AgentState)
 	if !ok || next == ctx.AgentState {
 		return false
 	}
-	ctx.SetAgentState(next, now)
+	ctx.SetAgentState(next, eventTime)
 	return true
 }
 
 func init() {
 	touchCmd.Flags().BoolVar(&touchQuick, "quick", false, "Quick mode: only update last-seen and total time (skip phase scan and milestones)")
+	touchCmd.Flags().StringVar(&touchProvider, "provider", "claude", "Agent provider that owns the hook session (claude/codex/manual)")
 	touchCmd.Flags().BoolVar(&touchTrackState, "track-state", false, "Record agent state from the hook event read from stdin")
 }
 

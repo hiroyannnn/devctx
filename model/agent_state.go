@@ -19,10 +19,19 @@ func (s AgentState) WaitsForUser() bool {
 }
 
 // AgentStateFromHook は hook イベントから次の状態を決める。状態を変えない場合は false を返す。
+// ended は終着点で、hook では戻さない（再開時は SessionStart の register が状態をクリアする）。
 func AgentStateFromHook(event, notificationType string, current AgentState) (AgentState, bool) {
+	if current == AgentEnded {
+		return "", false
+	}
 	switch event {
-	case "UserPromptSubmit":
+	case "UserPromptSubmit", "PostToolUse":
+		// PostToolUse: 許可待ち（PermissionRequest）はツール実行後に解消する。承認後に running へ戻すための信号で、
+		// 同じ状態の再記録は呼び出し側が間引くので高頻度でも store は書き換わらない
 		return AgentRunning, true
+	case "PermissionRequest":
+		// Codex には Notification が無く、許可待ちは PermissionRequest で通知される
+		return AgentNeedsInput, true
 	case "Stop":
 		return AgentTurnDone, true
 	case "SessionEnd":
