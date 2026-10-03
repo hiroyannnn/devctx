@@ -227,3 +227,77 @@ func TestOverlayDoneContextKeepsOwningItsLiveSession(t *testing.T) {
 		t.Errorf("b が a の live セッションを奪った: %+v", all["b"])
 	}
 }
+
+func pendingOf(kind model.PendingKind, summary string) *model.PendingRequest {
+	return &model.PendingRequest{Tool: "T", Kind: kind, Summary: summary, At: t0}
+}
+
+func TestOverlayPending_HookNeedsInputCarriesPending(t *testing.T) {
+	p := pendingOf(model.PendingBash, "Run tests")
+	ctx := claudeCtx("a", "/w/a", "s1")
+	ctx.AgentState = model.AgentNeedsInput
+	ctx.PendingRequest = p
+	// agent view が使えない・照合できない場合は hook の状態をそのまま使う
+	if got := Overlay([]model.Context{ctx}, Snapshot{})["a"]; got.Pending != p {
+		t.Errorf("no snapshot: pending = %+v", got.Pending)
+	}
+	codex := ctx
+	codex.Provider = model.ProviderCodex
+	if got := Overlay([]model.Context{codex}, okSnap())["a"]; got.Pending != p {
+		t.Errorf("codex: pending = %+v", got.Pending)
+	}
+}
+
+func TestOverlayPending_HookNonNeedsInputHasNoPending(t *testing.T) {
+	ctx := claudeCtx("a", "/w/a", "s1")
+	ctx.AgentState = model.AgentTurnDone
+	ctx.PendingRequest = pendingOf(model.PendingBash, "stale")
+	if got := Overlay([]model.Context{ctx}, Snapshot{})["a"]; got.Pending != nil {
+		t.Errorf("pending = %+v, want nil", got.Pending)
+	}
+}
+
+func TestOverlayPending_LiveConsistency(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		waitingFor string
+		kind       model.PendingKind
+		want       bool
+	}{
+		{"permission prompt with bash", "waiting", "permission prompt", model.PendingBash, true},
+		{"permission prompt with plan", "waiting", "permission prompt", model.PendingPlan, true},
+		{"permission prompt with question is inconsistent", "waiting", "permission prompt", model.PendingQuestion, false},
+		{"input needed with question", "waiting", "input needed", model.PendingQuestion, true},
+		{"input needed with bash is inconsistent", "waiting", "input needed", model.PendingBash, false},
+		{"sandbox request is not classified", "waiting", "sandbox request", model.PendingBash, false},
+		{"dialog open is not classified", "waiting", "dialog open", model.PendingBash, false},
+		{"busy drops pending", "busy", "", model.PendingBash, false},
+		{"idle drops pending", "idle", "", model.PendingBash, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := pendingOf(tt.kind, "x")
+			ctx := claudeCtx("a", "/w/a", "s1")
+			ctx.AgentState = model.AgentNeedsInput
+			ctx.AgentStateAt = t0.Add(-time.Minute)
+			ctx.PendingRequest = p
+			snap := okSnap(Session{SessionID: "s1", Status: tt.status, WaitingFor: tt.waitingFor})
+			got := Overlay([]model.Context{ctx}, snap)["a"]
+			if got.Source != SourceLive {
+				t.Fatalf("source = %q", got.Source)
+			}
+			if (got.Pending == p) != tt.want || (!tt.want && got.Pending != nil) {
+				t.Errorf("pending = %+v, want attached=%v", got.Pending, tt.want)
+			}
+		})
+	}
+}
+
+func TestOverlayPending_LiveWaitingWithoutHookPending(t *testing.T) {
+	ctx := claudeCtx("a", "/w/a", "s1")
+	snap := okSnap(Session{SessionID: "s1", Status: "waiting", WaitingFor: "permission prompt"})
+	if got := Overlay([]model.Context{ctx}, snap)["a"]; got.Pending != nil {
+		t.Errorf("pending = %+v, want nil", got.Pending)
+	}
+}
