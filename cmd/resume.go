@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -113,7 +114,7 @@ func agentResumeCommand(ctx model.Context) (string, error) {
 	switch p := ctx.EffectiveProvider(); p {
 	case model.ProviderClaude:
 		if ctx.SessionID != "" {
-			return fmt.Sprintf("claude --resume '%s'", ctx.SessionID), nil
+			return "claude --resume " + shellQuote(ctx.SessionID), nil
 		}
 		return "claude", nil
 	default:
@@ -127,5 +128,11 @@ func resumeShellCommand(ctx model.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("cd '%s' && %s", ctx.Worktree, agentCmd), nil
+	return "cd " + shellQuote(ctx.Worktree) + " && " + agentCmd, nil
+}
+
+// shellQuote は POSIX sh 向けに単一引用符で囲む。パスやセッション ID に ' や空白が
+// 含まれても eval / コピペ実行でコマンドが壊れたり注入されたりしないようにする。
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

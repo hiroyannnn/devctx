@@ -42,6 +42,32 @@ func TestResumeShellCommand(t *testing.T) {
 	}
 }
 
+func TestShellQuote(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"abc", "'abc'"},
+		{"", "''"},
+		{"a b", "'a b'"},
+		{"it's", `'it'\''s'`},
+		{"$(rm -rf /)", "'$(rm -rf /)'"},
+	}
+	for _, tt := range tests {
+		if got := shellQuote(tt.in); got != tt.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestResumeShellCommand_QuotesWorktreeAndSession(t *testing.T) {
+	got, err := resumeShellCommand(model.Context{Worktree: "/w/it's a dir", SessionID: "s'1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `cd '/w/it'\''s a dir' && claude --resume 's'\''1'`
+	if got != want {
+		t.Fatalf("resumeShellCommand = %q, want %q", got, want)
+	}
+}
+
 func TestResumeShellCommand_UnsupportedProvider(t *testing.T) {
 	_, err := resumeShellCommand(model.Context{Worktree: "/w/feat-x", SessionID: "x1", Provider: model.ProviderCodex})
 	if err == nil || !strings.Contains(err.Error(), "codex") {
