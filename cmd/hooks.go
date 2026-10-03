@@ -11,7 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type ClaudeSettings struct {
+// hooksFile は Claude の settings.json / Codex の hooks.json に共通する "hooks" の形。
+type hooksFile struct {
 	Hooks map[string][]HookConfig `json:"hooks"`
 }
 
@@ -42,27 +43,21 @@ Codex (--provider codex): add this to $CODEX_HOME/hooks.json (default ~/.codex/h
 		if err != nil {
 			return err
 		}
+		if installHooks {
+			if provider == model.ProviderCodex {
+				return installCodexHooks()
+			}
+			return installHooksToSettings()
+		}
 		// Use PATH-based name so hooks survive binary rebuilds / user changes
-		devctxPath := "devctx"
-
 		if provider == model.ProviderCodex {
-			return printCodexHooks(devctxPath)
+			return printHooks(codexHookSpecs("devctx"),
+				"Add the following to your Codex hooks ($CODEX_HOME/hooks.json, default ~/.codex/hooks.json):",
+				"Or run: devctx hooks --install --provider codex to automatically add to the Codex hooks file")
 		}
-
-		settings := ClaudeSettings{Hooks: devctxHookConfigs(devctxPath)}
-
-		jsonBytes, err := json.MarshalIndent(settings, "", "  ")
-		if err != nil {
-			return err
-		}
-
-		fmt.Println("Add the following to your Claude settings (~/.claude/settings.json):")
-		fmt.Println()
-		fmt.Println(string(jsonBytes))
-		fmt.Println()
-		fmt.Println("Or run: devctx hooks --install to automatically add to user settings")
-
-		return nil
+		return printHooks(devctxHookSpecs("devctx"),
+			"Add the following to your Claude settings (~/.claude/settings.json):",
+			"Or run: devctx hooks --install to automatically add to user settings")
 	},
 }
 
@@ -74,20 +69,6 @@ var (
 func init() {
 	hooksCmd.Flags().BoolVar(&installHooks, "install", false, "Automatically install hooks to ~/.claude/settings.json (or $CODEX_HOME/hooks.json with --provider codex)")
 	hooksCmd.Flags().StringVar(&hooksProvider, "provider", "claude", "Agent provider to install hooks for (claude/codex)")
-
-	hooksCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
-		if !installHooks {
-			return nil
-		}
-		provider, err := parseHooksProvider(hooksProvider)
-		if err != nil {
-			return err
-		}
-		if provider == model.ProviderCodex {
-			return installCodexHooks()
-		}
-		return installHooksToSettings()
-	}
 }
 
 // parseHooksProvider は hooks コマンドが対応する provider（claude / codex）だけを受け付ける。
@@ -174,32 +155,26 @@ func installHookSpecsToFile(path string, specs []hookEventSpec) error {
 	return os.WriteFile(path, output, 0644)
 }
 
-// codexHooksPath は Codex の hooks.json の場所を返す。CODEX_HOME 未設定なら ~/.codex。
+// codexHooksPath は Codex の hooks.json の場所を返す。
 func codexHooksPath() (string, error) {
-	if dir := os.Getenv("CODEX_HOME"); dir != "" {
-		return filepath.Join(dir, "hooks.json"), nil
-	}
-	home, err := os.UserHomeDir()
+	home, err := codexHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".codex", "hooks.json"), nil
+	return filepath.Join(home, "hooks.json"), nil
 }
 
-func printCodexHooks(devctxPath string) error {
-	hooks := make(map[string][]HookConfig)
-	for _, spec := range codexHookSpecs(devctxPath) {
-		hooks[spec.Event] = spec.Configs
-	}
-	jsonBytes, err := json.MarshalIndent(ClaudeSettings{Hooks: hooks}, "", "  ")
+// printHooks は specs を JSON で表示する。Claude / Codex で header・footer だけが違う。
+func printHooks(specs []hookEventSpec, header, footer string) error {
+	jsonBytes, err := json.MarshalIndent(hooksFile{Hooks: hookConfigsByEvent(specs)}, "", "  ")
 	if err != nil {
 		return err
 	}
-	fmt.Println("Add the following to your Codex hooks ($CODEX_HOME/hooks.json, default ~/.codex/hooks.json):")
+	fmt.Println(header)
 	fmt.Println()
 	fmt.Println(string(jsonBytes))
 	fmt.Println()
-	fmt.Println("Or run: devctx hooks --install --provider codex to automatically add to the Codex hooks file")
+	fmt.Println(footer)
 	return nil
 }
 
@@ -223,12 +198,15 @@ type hookEventSpec struct {
 	Configs []HookConfig
 }
 
+// devctxCommand は devctx の 1 コマンドだけを実行する hook 列を返す。
+func devctxCommand(devctxPath, args string) []Hook {
+	return []Hook{{Type: "command", Command: devctxPath + " " + args}}
+}
+
 // devctxHookSpecs は devctx が Claude Code に登録する hook 定義（インストール順）。
 // 表示（devctx hooks）とインストール（--install）の両方がこれを使う。
 func devctxHookSpecs(devctxPath string) []hookEventSpec {
-	command := func(args string) []Hook {
-		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
-	}
+	command := func(args string) []Hook { return devctxCommand(devctxPath, args) }
 	return []hookEventSpec{
 		{"SessionStart", []HookConfig{
 			{Matcher: "startup", Hooks: command("register")},
@@ -249,15 +227,13 @@ func devctxHookSpecs(devctxPath string) []hookEventSpec {
 // Codex には Notification が無く、許可待ちは PermissionRequest で届く。
 // Why not roadmap analyze: Stop ごとの LLM 解析は Claude 用の機能で、Codex では対象外。
 func codexHookSpecs(devctxPath string) []hookEventSpec {
-	command := func(args string) []Hook {
-		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
-	}
+	touchCmd := devctxPath + " touch --quick --track-state --provider codex"
 	// 状態更新はエージェントを待たせないよう async。register は以降の touch が context を見つけられるよう同期
-	track := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state --provider codex", Async: true}}
+	track := []Hook{{Type: "command", Command: touchCmd, Async: true}}
 	// SessionEnd は Codex 側で同期固定・既定 1s のため、git を呼ぶ phase 更新を省く --quick にし timeout を明示する
-	end := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state --provider codex", Timeout: 3}}
+	end := []Hook{{Type: "command", Command: touchCmd, Timeout: 3}}
 	return []hookEventSpec{
-		{"SessionStart", []HookConfig{{Matcher: "startup|resume", Hooks: command("register --provider codex")}}},
+		{"SessionStart", []HookConfig{{Matcher: "startup|resume", Hooks: devctxCommand(devctxPath, "register --provider codex")}}},
 		{"UserPromptSubmit", []HookConfig{{Hooks: track}}},
 		{"PermissionRequest", []HookConfig{{Hooks: track}}},
 		// 許可が承認されてツールが動いたら running に戻す（承認後に Stop まで needs_input が残らないように）
@@ -267,10 +243,10 @@ func codexHookSpecs(devctxPath string) []hookEventSpec {
 	}
 }
 
-// devctxHookConfigs は devctxHookSpecs をイベント名で引けるようにしたもの（表示用）。
-func devctxHookConfigs(devctxPath string) map[string][]HookConfig {
-	configs := make(map[string][]HookConfig)
-	for _, spec := range devctxHookSpecs(devctxPath) {
+// hookConfigsByEvent は specs をイベント名で引けるようにしたもの（表示用）。
+func hookConfigsByEvent(specs []hookEventSpec) map[string][]HookConfig {
+	configs := make(map[string][]HookConfig, len(specs))
+	for _, spec := range specs {
 		configs[spec.Event] = spec.Configs
 	}
 	return configs

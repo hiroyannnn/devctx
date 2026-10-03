@@ -108,7 +108,7 @@ func TestMergeHookConfigs_DifferentMatcherIsSeparate(t *testing.T) {
 }
 
 func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
-	configs := devctxHookConfigs("devctx")
+	configs := hookConfigsByEvent(devctxHookSpecs("devctx"))
 	want := map[string][]string{
 		"SessionStart":     {"devctx register", "devctx register"},
 		"UserPromptSubmit": {"devctx touch --quick --track-state"},
@@ -131,7 +131,7 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 }
 
 func TestInstallConfigsAreRecognizedAsDevctx(t *testing.T) {
-	for event, configs := range devctxHookConfigs("devctx") {
+	for event, configs := range hookConfigsByEvent(devctxHookSpecs("devctx")) {
 		for _, c := range configs {
 			if len(findDevctxHooks(hookConfigMap(c))) == 0 {
 				t.Fatalf("%s config %+v is not recognized as a devctx hook", event, c)

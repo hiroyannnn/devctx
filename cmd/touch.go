@@ -145,9 +145,8 @@ func applyLastSeen(ctx *model.Context, now time.Time, quick bool) bool {
 // applyHookState は hook イベントからエージェント状態を更新する。状態が変わらなければ false を返す。
 // 同じ状態の再記録を避けるのは、UserPromptSubmit など高頻度の hook で毎回 store を書き換えないため。
 // eventTime より後に記録された状態があれば、遅れて届いた古いイベントとして捨てる（async hook の順序逆転対策）。
-// ended は終着点で、hook では戻さない（再開時は SessionStart の register が状態をクリアする）。
 func applyHookState(ctx *model.Context, input hookInput, eventTime time.Time) bool {
-	if ctx.AgentState == model.AgentEnded || eventTime.Before(ctx.AgentStateAt) {
+	if eventTime.Before(ctx.AgentStateAt) {
 		return false
 	}
 	next, ok := model.AgentStateFromHook(input.HookEventName, input.NotificationType, ctx.AgentState)

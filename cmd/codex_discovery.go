@@ -108,14 +108,22 @@ type codexAdapter struct {
 	skipRegistered bool
 }
 
-// newCodexAdapter は $CODEX_HOME（未設定なら ~/.codex）を見る adapter を返す。
-func newCodexAdapter() codexAdapter {
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			home = filepath.Join(h, ".codex")
-		}
+// codexHomeDir は $CODEX_HOME（未設定なら ~/.codex）を返す。
+func codexHomeDir() (string, error) {
+	if dir := os.Getenv("CODEX_HOME"); dir != "" {
+		return dir, nil
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex"), nil
+}
+
+// newCodexAdapter は codexHomeDir を見る adapter を返す。
+// Why not エラーを返す: home が解決できなくても list / discover 全体は動かすべきで、その場合は Codex を空として扱う。
+func newCodexAdapter() codexAdapter {
+	home, _ := codexHomeDir()
 	return codexAdapter{home: home, days: defaultCodexDiscoveryDays, now: time.Now}
 }
 
