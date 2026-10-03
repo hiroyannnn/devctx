@@ -74,14 +74,13 @@ Hooks record the agent state shown on the Mind Map and cards:
 | State | Set by |
 |-------|--------|
 | running | `UserPromptSubmit`; Codex also `PostToolUse` (returns to running once a permission is approved) |
-| needs input | `Notification` (permission / elicitation / idle, Claude Code), `PermissionRequest` (Codex) |
-| turn done | `Stop` |
+| needs input | `Notification` (permission / elicitation / idle, Claude Code), `PermissionRequest` and `request_user_input` `PreToolUse` (Codex) |
+| turn done | `Stop`; Codex also `Interrupt` |
 | ended | `SessionEnd` |
 
 Codex state hooks run with `"async": true` so they never block the agent; `SessionEnd` is synchronous in Codex (1s by default), so devctx installs it with `timeout: 3` and skips the git-based phase scan there.
 
 Known limitations (Codex):
-- There is no hook for "waiting for an answer" (`request_user_input`), so question waits are not shown as needs input.
 - `PermissionRequest` fires right before Codex asks; if another hook or an auto-approval allows the request, Codex never actually waits.
 - With parallel tool calls, a `PostToolUse` from another tool can return the state to running while a permission is still pending.
 - `Stop` can be continued by other Stop hooks, so turn done is a best-effort signal.
@@ -95,6 +94,26 @@ For Claude, the dashboard (Mind Map / cards), `devctx list`, `devctx tui` and `d
 - Absence from agent view is **not** treated as ended: restricted environments can return an empty list even while sessions exist.
 - The `dx` fzf picker and shell completion (`list --fzf` / `--names-only`) use hook state only, for speed. (`dxl` / `dxw` are plain `list` / `list --watch`, so they do show live state.) Hooks themselves never call `claude agents`.
 - Live values are display-only and are never written to `contexts.yaml`.
+
+### What the Agent Is Waiting For
+
+When a session needs input, devctx also records **what** it is waiting for from the hook payload and shows it in place of the generic reason, e.g. `claude · needs input · Bash: Run tests`.
+
+| Kind | Source hook |
+|------|-------------|
+| bash / edit / mcp / plan / network / other | `PermissionRequest` (Claude Code and Codex) |
+| question | `PreToolUse` for `AskUserQuestion` (Claude Code) / `request_user_input` (Codex) |
+| cleared | `UserPromptSubmit`, `Stop`, `SessionEnd`, Codex `Interrupt`, and a Codex `PostToolUse` whose `tool_input` matches the pending request |
+
+Privacy: command bodies, file contents and other free text are never stored. Only a short summary is kept: the Bash `description` or the program name (first token, basename), the file base name, the MCP `server/tool`, the URL host, or the question `header`. A hash of `tool_input` is stored solely to match the later `PostToolUse`.
+
+Known limitations:
+- Manually denying a request fires no hook, so the request stays until the next prompt, `Stop` or interrupt.
+- Claude sandbox network requests (`sandbox request`) and other dialogs are not classified; for Claude the pending label is shown only when it is consistent with the live waiting reason (`permission prompt` for tool requests, `input needed` for questions).
+- There is a single slot: with parallel requests the latest one is shown.
+- Hooks are async, so the label can lag the state by a moment.
+
+To get the new hooks, re-run `devctx hooks --install` (Claude Code) and `devctx hooks --install --provider codex`, then review and trust the changed entries with `/hooks` in Codex.
 
 ### Optional Setup
 

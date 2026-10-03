@@ -99,3 +99,29 @@ func TestAPIsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
 		t.Fatalf("b が Done の a の live セッションを奪った:\n%s", body)
 	}
 }
+
+func TestAPIsCarryPendingLabelInWaitingFor(t *testing.T) {
+	now := time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)
+	store := &model.Store{Contexts: []model.Context{{
+		Name: "feat-x", Worktree: "/w/feat-x", Status: model.StatusInProgress, Phase: model.PhaseIdle,
+		RepoRoot: "/repo", CreatedAt: now, LastSeen: now,
+		Provider: model.ProviderCodex, AgentState: model.AgentNeedsInput, AgentStateAt: now,
+		PendingRequest: &model.PendingRequest{Tool: "Bash", Kind: model.PendingBash, Summary: "Run tests"},
+	}}}
+	server := &Server{StoreLoader: &mockStoreLoader{store: store}}
+	for path, handler := range map[string]func(http.ResponseWriter, *http.Request){
+		"/api/roadmap":       server.handleAPIRoadmap,
+		"/api/roadmap-map":   server.handleAPIRoadmapMap,
+		"/api/roadmap-graph": server.handleAPIRoadmapGraph,
+	} {
+		w := httptest.NewRecorder()
+		handler(w, httptest.NewRequest("GET", path, nil))
+		body := w.Body.String()
+		if want := `"agent_waiting_for":"Bash: Run tests"`; !strings.Contains(body, want) {
+			t.Errorf("%s lacks %s:\n%s", path, want, body)
+		}
+		if strings.Contains(body, "agent_pending") {
+			t.Errorf("%s exposes agent_pending_*:\n%s", path, body)
+		}
+	}
+}

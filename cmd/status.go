@@ -30,7 +30,7 @@ type LiveStatus struct {
 	SessionStatus SessionStatus
 	LastActivity  time.Time
 	LastRole      string
-	// Reason は live の待ち理由（permission prompt 等）
+	// Reason は待ち要求のラベル、なければ live の待ち理由（permission prompt 等）
 	Reason string
 }
 
@@ -177,7 +177,7 @@ func getLiveStatuses(store *model.Store, views map[string]agentview.View) []Live
 		if view := views[ctx.Name]; view.Source == agentview.SourceLive {
 			if status, ok := sessionStatusFromAgentState(view.State); ok {
 				ls.SessionStatus = status
-				ls.Reason = view.Reason
+				ls.Reason = view.Detail()
 			}
 		}
 

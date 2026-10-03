@@ -176,6 +176,7 @@ func upsertRegistration(store *model.Store, reg registration, now time.Time) (*m
 			// A (re)started session has not been observed yet; the previous session's
 			// state (e.g. ended / turn_done) would otherwise linger until the next prompt.
 			existing.SetAgentState("", time.Time{})
+			existing.PendingRequest = nil
 		}
 		existing.LastSeen = now
 		if reg.Branch != "" {

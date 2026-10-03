@@ -20,6 +20,17 @@ type View struct {
 	State  model.AgentState
 	Reason string
 	Source string // SourceLive / SourceHook / ""（未観測）
+	// Pending は何を待っているか。hook が記録した要求で、live の待ちと矛盾しないときだけ載せる
+	Pending *model.PendingRequest
+}
+
+// Detail は待ちの詳細表示を返す。待ち要求があればそのラベル、なければ live の待ち理由。
+// 要求を理由より優先するのは、"permission prompt" より "Bash: Run tests" の方が何を許可するかが分かるため。
+func (v View) Detail() string {
+	if v.Pending != nil {
+		return v.Pending.Label()
+	}
+	return v.Reason
 }
 
 // hookView は context の hook 由来の状態をそのまま View にする。
@@ -27,6 +38,9 @@ func hookView(ctx model.Context) View {
 	v := View{State: ctx.AgentState}
 	if ctx.AgentState != "" {
 		v.Source = SourceHook
+	}
+	if ctx.AgentState == model.AgentNeedsInput {
+		v.Pending = ctx.PendingRequest
 	}
 	return v
 }
@@ -164,5 +178,22 @@ func overlayOne(ctx model.Context, fetchedAt time.Time, idx sessionIndex) View {
 	if !ok {
 		return hook
 	}
-	return View{State: state, Reason: reason, Source: SourceLive}
+	v := View{State: state, Reason: reason, Source: SourceLive}
+	if state == model.AgentNeedsInput && ctx.PendingRequest != nil && pendingMatchesLive(ctx.PendingRequest, reason) {
+		v.Pending = ctx.PendingRequest
+	}
+	return v
+}
+
+// pendingMatchesLive は hook の待ち要求が live の待ち理由と同じものを指していそうかを返す。
+// 承認後に別の待ちへ移っても hook 側の要求は残る（Claude には PostToolUse が無い）ため、
+// 食い違う要求を表示して誤解させるより捨てる。sandbox / dialog 等は hook で分類できないので載せない。
+func pendingMatchesLive(p *model.PendingRequest, waitingFor string) bool {
+	switch waitingFor {
+	case waitingForPermission:
+		return p.Kind != model.PendingQuestion
+	case waitingForInput:
+		return p.Kind == model.PendingQuestion
+	}
+	return false
 }

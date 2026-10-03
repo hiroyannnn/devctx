@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestParseHookInput_LongLine(t *testing.T) {
 
 func TestParseHookInput_Empty(t *testing.T) {
 	in, err := parseHookInput(strings.NewReader(""))
-	if err != nil || in != (hookInput{}) {
+	if err != nil || in.SessionID != "" || in.HookEventName != "" || in.ToolInput != nil {
 		t.Fatalf("empty input = %+v, %v; want zero value and nil", in, err)
 	}
 }
@@ -131,5 +132,55 @@ func TestApplyHookState_EndedIsTerminal(t *testing.T) {
 	ctx := &model.Context{AgentState: model.AgentEnded, AgentStateAt: touchNow}
 	if applyHookState(ctx, hookInput{HookEventName: "PostToolUse"}, touchNow.Add(time.Second)) {
 		t.Fatalf("hooks must not move a session out of ended")
+	}
+}
+
+func TestApplyHookState_RecordsPendingRequest(t *testing.T) {
+	ctx := &model.Context{AgentState: model.AgentRunning, AgentStateAt: touchNow.Add(-time.Minute)}
+	in := hookInput{HookEventName: "PermissionRequest", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"npm test","description":"Run tests"}`)}
+	if !applyHookState(ctx, in, touchNow) {
+		t.Fatal("PermissionRequest should change state")
+	}
+	if ctx.PendingRequest == nil || ctx.PendingRequest.Summary != "Run tests" {
+		t.Fatalf("pending = %+v", ctx.PendingRequest)
+	}
+}
+
+func TestApplyHookState_SameStateDifferentRequestIsAChange(t *testing.T) {
+	// no-op 判定が状態だけを見ると、2 件目の許可待ちが記録されず古い要求が表示され続ける
+	ctx := &model.Context{AgentState: model.AgentRunning, AgentStateAt: touchNow.Add(-time.Minute)}
+	first := hookInput{HookEventName: "PermissionRequest", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"ls"}`)}
+	second := hookInput{HookEventName: "PermissionRequest", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"pwd"}`)}
+	applyHookState(ctx, first, touchNow)
+	if !applyHookState(ctx, second, touchNow.Add(time.Second)) {
+		t.Fatal("different request in the same state must be recorded")
+	}
+	if applyHookState(ctx, second, touchNow.Add(2*time.Second)) {
+		t.Fatal("identical request must be a no-op")
+	}
+}
+
+func TestApplyHookState_StaleGuardAppliesToPending(t *testing.T) {
+	ctx := &model.Context{AgentState: model.AgentRunning, AgentStateAt: touchNow}
+	in := hookInput{HookEventName: "PermissionRequest", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"ls"}`)}
+	if applyHookState(ctx, in, touchNow.Add(-time.Second)) || ctx.PendingRequest != nil {
+		t.Fatal("stale PermissionRequest must be dropped")
+	}
+}
+
+func TestParseHookInput_ToolFields(t *testing.T) {
+	in, err := parseHookInput(strings.NewReader(`{"session_id":"c1","hook_event_name":"PermissionRequest","tool_name":"Edit","tool_input":{"file_path":"/a/b.go"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.ToolName != "Edit" || string(in.ToolInput) != `{"file_path":"/a/b.go"}` {
+		t.Fatalf("unexpected: %+v", in)
+	}
+}
+
+func TestParseHookInput_OverLimitIsInvalid(t *testing.T) {
+	big := strings.Repeat("x", maxHookInputBytes+10)
+	if _, err := parseHookInput(strings.NewReader(`{"session_id":"c1","tool_input":{"content":"` + big + `"}}`)); err == nil {
+		t.Fatal("input over the cap must be rejected, not truncated silently")
 	}
 }

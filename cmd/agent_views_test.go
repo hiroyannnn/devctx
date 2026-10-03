@@ -193,12 +193,14 @@ func TestGetLiveStatusesPrecedence(t *testing.T) {
 	store := &model.Store{Contexts: []model.Context{
 		{Name: "live", Status: model.StatusInProgress},
 		{Name: "hook", Status: model.StatusInProgress},
+		{Name: "pend", Status: model.StatusInProgress},
 		{Name: "ended", Status: model.StatusInProgress},
 		{Name: "none", Status: model.StatusInProgress},
 	}}
 	views := map[string]agentview.View{
 		"live":  {State: model.AgentNeedsInput, Reason: "permission prompt", Source: agentview.SourceLive},
 		"hook":  {State: model.AgentRunning, Source: agentview.SourceHook},
+		"pend":  {State: model.AgentNeedsInput, Reason: "permission prompt", Source: agentview.SourceLive, Pending: &model.PendingRequest{Tool: "Bash", Summary: "Run tests"}},
 		"ended": {State: model.AgentEnded, Source: agentview.SourceHook},
 	}
 	got := map[string]LiveStatus{}
@@ -207,6 +209,9 @@ func TestGetLiveStatusesPrecedence(t *testing.T) {
 	}
 	if g := got["live"]; g.SessionStatus != SessionStatusWaiting || g.Reason != "permission prompt" {
 		t.Errorf("live: %+v", g)
+	}
+	if g := got["pend"]; g.Reason != "Bash: Run tests" {
+		t.Errorf("pending label should replace the waiting reason: %+v", g)
 	}
 	// hook の状態は古いまま残りうる（昨日の turn_done 等）ため、status では使わず従来の transcript 推論に任せる
 	if g := got["hook"]; g.SessionStatus != SessionStatusOffline || g.Reason != "" {
