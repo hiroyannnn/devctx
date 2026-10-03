@@ -23,6 +23,13 @@ func AgentStateFromHook(event, notificationType string, current AgentState) (Age
 	switch event {
 	case "UserPromptSubmit":
 		return AgentRunning, true
+	case "PostToolUse":
+		// 許可待ち（PermissionRequest）はツール実行後に解消する。承認後に running へ戻すための信号で、
+		// 同じ状態の再記録は呼び出し側が間引くので高頻度でも store は書き換わらない
+		return AgentRunning, true
+	case "PermissionRequest":
+		// Codex には Notification が無く、許可待ちは PermissionRequest で通知される
+		return AgentNeedsInput, true
 	case "Stop":
 		return AgentTurnDone, true
 	case "SessionEnd":

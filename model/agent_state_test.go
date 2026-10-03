@@ -22,6 +22,8 @@ func TestAgentStateFromHook(t *testing.T) {
 		{name: "idle after turn keeps turn_done", event: "Notification", notificationType: "idle_prompt", current: AgentTurnDone, wantChange: false},
 		{name: "idle while running needs input", event: "Notification", notificationType: "idle_prompt", current: AgentRunning, want: AgentNeedsInput, wantChange: true},
 		{name: "auth success is not waiting", event: "Notification", notificationType: "auth_success", current: AgentRunning, wantChange: false},
+		{name: "permission request (Codex)", event: "PermissionRequest", current: AgentRunning, want: AgentNeedsInput, wantChange: true},
+		{name: "tool finished returns to running after approval", event: "PostToolUse", current: AgentNeedsInput, want: AgentRunning, wantChange: true},
 		{name: "unknown event", event: "PreToolUse", current: AgentRunning, wantChange: false},
 	}
 	for _, tt := range tests {
