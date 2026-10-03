@@ -23,6 +23,10 @@ type HookConfig struct {
 type Hook struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
+	// Async は Codex の非同期 hook（エージェントを待たせない）。Claude では使わない
+	Async bool `json:"async,omitempty"`
+	// Timeout は秒。Codex の SessionEnd は既定 1s と短いため明示する
+	Timeout int `json:"timeout,omitempty"`
 }
 
 var hooksCmd = &cobra.Command{
@@ -233,8 +237,6 @@ func devctxHookSpecs(devctxPath string) []hookEventSpec {
 		// Agent state: running on prompt, waiting on notification / turn end
 		{"UserPromptSubmit", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
 		{"Notification", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
-		// 許可を承認してツールが動き出したら running に戻す（--quick の間引きで高頻度でも書き込みは増えない）
-		{"PostToolUse", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
 		{"Stop", []HookConfig{
 			{Hooks: command("roadmap analyze --if-stale --background")},
 			{Hooks: command("touch --quick --track-state")},
@@ -250,14 +252,18 @@ func codexHookSpecs(devctxPath string) []hookEventSpec {
 	command := func(args string) []Hook {
 		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
 	}
-	track := command("touch --quick --track-state --provider codex")
+	// 状態更新はエージェントを待たせないよう async。register は以降の touch が context を見つけられるよう同期
+	track := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state --provider codex", Async: true}}
+	// SessionEnd は Codex 側で同期固定・既定 1s のため、git を呼ぶ phase 更新を省く --quick にし timeout を明示する
+	end := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state --provider codex", Timeout: 3}}
 	return []hookEventSpec{
 		{"SessionStart", []HookConfig{{Matcher: "startup|resume", Hooks: command("register --provider codex")}}},
 		{"UserPromptSubmit", []HookConfig{{Hooks: track}}},
 		{"PermissionRequest", []HookConfig{{Hooks: track}}},
+		// 許可が承認されてツールが動いたら running に戻す（承認後に Stop まで needs_input が残らないように）
 		{"PostToolUse", []HookConfig{{Hooks: track}}},
 		{"Stop", []HookConfig{{Hooks: track}}},
-		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state --provider codex")}}},
+		{"SessionEnd", []HookConfig{{Hooks: end}}},
 	}
 }
 
@@ -274,7 +280,14 @@ func devctxHookConfigs(devctxPath string) map[string][]HookConfig {
 func hookConfigMap(c HookConfig) map[string]interface{} {
 	hooks := make([]interface{}, len(c.Hooks))
 	for i, h := range c.Hooks {
-		hooks[i] = map[string]interface{}{"type": h.Type, "command": h.Command}
+		m := map[string]interface{}{"type": h.Type, "command": h.Command}
+		if h.Async {
+			m["async"] = true
+		}
+		if h.Timeout > 0 {
+			m["timeout"] = h.Timeout
+		}
+		hooks[i] = m
 	}
 	config := map[string]interface{}{"hooks": hooks}
 	if c.Matcher != "" {
@@ -319,6 +332,14 @@ func mergeHookConfigs(existing interface{}, newConfigs ...map[string]interface{}
 		_, newArgs, _, _ := splitDevctxCommand(newCmd)
 		// Keep anything the user chained after the devctx command (e.g. "&& say done")
 		existHook["command"] = strings.Join(append(append([]string{existBinary}, newArgs...), existRest...), " ")
+		// 実行方式（async / timeout）も devctx 管理下の項目なので新しい定義に揃える
+		for _, key := range []string{"async", "timeout"} {
+			if v, ok := newHooks[0][key]; ok {
+				existHook[key] = v
+			} else {
+				delete(existHook, key)
+			}
+		}
 	}
 	return configs
 }

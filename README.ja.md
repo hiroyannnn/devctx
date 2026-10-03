@@ -73,10 +73,18 @@ hook は Mind Map とカードに表示するエージェント状態を記録�
 
 | 状態 | 契機 |
 |------|------|
-| running | `UserPromptSubmit`、`PostToolUse`（許可を承認すると running に戻る） |
+| running | `UserPromptSubmit`。Codex は `PostToolUse` でも running に戻す（許可を承認したあと） |
 | needs input | `Notification`（許可 / 確認ダイアログ / 放置、Claude Code）、`PermissionRequest`（Codex） |
 | turn done | `Stop` |
 | ended | `SessionEnd` |
+
+Codex の状態更新の hook は `"async": true` で動き、エージェントを待たせません。Codex の `SessionEnd` は同期で既定 1 秒しか待たないため、devctx は `timeout: 3` を付け、git を使う phase の更新を省いて登録します。
+
+既知の制約（Codex）:
+- 「質問への回答待ち」（`request_user_input`）を知らせる hook がないため、質問待ちは needs input として表示されません。
+- `PermissionRequest` は Codex が確認を出す直前に発火します。別の hook や自動承認が許可した場合、実際には待ちません。
+- ツールを並列に呼んでいると、別のツールの `PostToolUse` で、許可待ちのまま running に戻ることがあります。
+- `Stop` は他の Stop hook によって継続されることがあるため、turn done は目安です。
 
 ### オプション設定
 

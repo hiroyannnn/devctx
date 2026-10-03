@@ -73,10 +73,18 @@ Hooks record the agent state shown on the Mind Map and cards:
 
 | State | Set by |
 |-------|--------|
-| running | `UserPromptSubmit`, `PostToolUse` (returns to running once a permission is approved) |
+| running | `UserPromptSubmit`; Codex also `PostToolUse` (returns to running once a permission is approved) |
 | needs input | `Notification` (permission / elicitation / idle, Claude Code), `PermissionRequest` (Codex) |
 | turn done | `Stop` |
 | ended | `SessionEnd` |
+
+Codex state hooks run with `"async": true` so they never block the agent; `SessionEnd` is synchronous in Codex (1s by default), so devctx installs it with `timeout: 3` and skips the git-based phase scan there.
+
+Known limitations (Codex):
+- There is no hook for "waiting for an answer" (`request_user_input`), so question waits are not shown as needs input.
+- `PermissionRequest` fires right before Codex asks; if another hook or an auto-approval allows the request, Codex never actually waits.
+- With parallel tool calls, a `PostToolUse` from another tool can return the state to running while a permission is still pending.
+- `Stop` can be continued by other Stop hooks, so turn done is a best-effort signal.
 
 ### Optional Setup
 

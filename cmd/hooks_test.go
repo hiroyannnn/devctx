@@ -114,7 +114,6 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 		"UserPromptSubmit": {"devctx touch --quick --track-state"},
 		"Notification":     {"devctx touch --quick --track-state"},
 		"Stop":             {"devctx roadmap analyze --if-stale --background", "devctx touch --quick --track-state"},
-		"PostToolUse":      {"devctx touch --quick --track-state"},
 		"SessionEnd":       {"devctx touch --track-state"},
 	}
 	if len(configs) != len(want) {
@@ -193,7 +192,7 @@ func TestCodexHookSpecs(t *testing.T) {
 		"PermissionRequest": {{"", "devctx touch --quick --track-state --provider codex"}},
 		"PostToolUse":       {{"", "devctx touch --quick --track-state --provider codex"}},
 		"Stop":              {{"", "devctx touch --quick --track-state --provider codex"}},
-		"SessionEnd":        {{"", "devctx touch --track-state --provider codex"}},
+		"SessionEnd":        {{"", "devctx touch --quick --track-state --provider codex"}},
 	}
 	if len(specs) != len(want) {
 		t.Fatalf("events = %d, want %d", len(specs), len(want))
@@ -208,6 +207,46 @@ func TestCodexHookSpecs(t *testing.T) {
 		if !reflect.DeepEqual(got, want[spec.Event]) {
 			t.Errorf("%s = %v, want %v", spec.Event, got, want[spec.Event])
 		}
+		h := spec.Configs[0].Hooks[0]
+		switch spec.Event {
+		case "SessionStart":
+			// register は同期: 以降の touch が context を見つけられるように先に登録を終える
+			if h.Async {
+				t.Errorf("SessionStart must be synchronous")
+			}
+		case "SessionEnd":
+			// Codex の SessionEnd は同期固定・既定 1s のため、timeout を明示する
+			if h.Async || h.Timeout != 3 {
+				t.Errorf("SessionEnd = async %v timeout %d, want sync with timeout 3", h.Async, h.Timeout)
+			}
+		default:
+			if !h.Async {
+				t.Errorf("%s touch hook should be async so it never blocks the agent", spec.Event)
+			}
+		}
+	}
+}
+
+func TestHookConfigMap_EmitsAsyncAndTimeout(t *testing.T) {
+	m := hookConfigMap(HookConfig{Hooks: []Hook{{Type: "command", Command: "devctx touch", Async: true, Timeout: 3}}})
+	h := m["hooks"].([]interface{})[0].(map[string]interface{})
+	if h["async"] != true || h["timeout"] != 3 {
+		t.Fatalf("hook map = %v, want async and timeout", h)
+	}
+	plain := hookConfigMap(HookConfig{Hooks: []Hook{{Type: "command", Command: "devctx register"}}})
+	ph := plain["hooks"].([]interface{})[0].(map[string]interface{})
+	if _, ok := ph["async"]; ok {
+		t.Fatalf("async should be omitted when false: %v", ph)
+	}
+}
+
+func TestMergeHookConfigs_UpgradeSyncsAsyncAndTimeout(t *testing.T) {
+	existing := existingHooks(t, hookConfig("", "devctx touch --quick --provider codex"))
+	newConfig := hookConfigMap(HookConfig{Hooks: []Hook{{Type: "command", Command: "devctx touch --quick --track-state --provider codex", Async: true}}})
+	got := mergeHookConfigs(existing, newConfig)
+	h := got[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if h["command"] != "devctx touch --quick --track-state --provider codex" || h["async"] != true {
+		t.Fatalf("devctx-owned entry should take the new command and async flag: %v", h)
 	}
 }
 
@@ -293,7 +332,7 @@ func TestCodexHooksPath_DefaultsToHomeDotCodex(t *testing.T) {
 	}
 }
 
-func TestInstallHooksToSettings_AddsPostToolUseAndUpgrades(t *testing.T) {
+func TestInstallHooksToSettings_UpgradesWithoutPostToolUse(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".claude", "settings.json")
@@ -317,8 +356,9 @@ func TestInstallHooksToSettings_AddsPostToolUseAndUpgrades(t *testing.T) {
 		t.Fatalf("unrelated key lost: %v", got["model"])
 	}
 	hooks := got["hooks"].(map[string]interface{})
-	if _, ok := hooks["PostToolUse"]; !ok {
-		t.Fatalf("PostToolUse not installed")
+	// Claude の状態は agent view（claude agents --json）から取る方針のため、ツール呼び出しごとの hook は入れない
+	if _, ok := hooks["PostToolUse"]; ok {
+		t.Fatalf("PostToolUse should not be installed for Claude")
 	}
 	prompt := hooks["UserPromptSubmit"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
 	if prompt["command"] != "/bin/devctx touch --quick --track-state" {
