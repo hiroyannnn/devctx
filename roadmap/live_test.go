@@ -187,3 +187,52 @@ func TestIndexRendersWaitingReason(t *testing.T) {
 		t.Error("index.html が agent_waiting_for を参照していない")
 	}
 }
+
+// 取得が失敗しても（panic でも）in-flight が解除され、次の Snapshot で再取得できること。
+func TestLiveRefresherRecoversAfterFailedFetch(t *testing.T) {
+	now := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
+	var calls int32
+	release := make(chan struct{})
+	l := NewLiveRefresher(func(context.Context) agentview.Snapshot {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			<-release
+			return agentview.Snapshot{FetchedAt: clock()} // OK=false（失敗）
+		}
+		return agentview.Snapshot{OK: true, FetchedAt: clock()}
+	})
+	l.now = clock
+
+	l.Snapshot()
+	waitFor(t, func() bool { return atomic.LoadInt32(&calls) == 1 })
+	close(release)
+	advance(6 * time.Second)
+
+	waitFor(t, func() bool { l.Snapshot(); return atomic.LoadInt32(&calls) >= 2 })
+	waitFor(t, func() bool { return l.Snapshot().OK })
+}
+
+func TestLiveRefresherClearsInflightOnPanic(t *testing.T) {
+	now := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+
+	var calls int32
+	l := NewLiveRefresher(func(context.Context) agentview.Snapshot {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			panic("boom")
+		}
+		return agentview.Snapshot{OK: true, FetchedAt: clock()}
+	})
+	l.now = clock
+
+	l.Snapshot()
+	waitFor(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return atomic.LoadInt32(&calls) == 1 && !l.inflight
+	})
+}

@@ -95,6 +95,9 @@ type Runner func(ctx context.Context) ([]byte, error)
 const (
 	fetchTimeout   = 2 * time.Second
 	maxOutputBytes = 1 << 20
+	// killWaitDelay は kill 後に stdout の回収を待つ上限。claude の子孫プロセスが
+	// stdout を握ったままだと、WaitDelay なしでは Run が戻らずタイムアウトが効かない
+	killWaitDelay = 500 * time.Millisecond
 )
 
 // DefaultRunner は `claude agents --json` を実行する。
@@ -105,6 +108,7 @@ func DefaultRunner(ctx context.Context) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "claude", "agents", "--json")
 	var buf bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &buf, remaining: maxOutputBytes}
+	cmd.WaitDelay = killWaitDelay
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}

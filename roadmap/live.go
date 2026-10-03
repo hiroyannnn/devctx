@@ -69,11 +69,18 @@ func (l *LiveRefresher) Snapshot() agentview.Snapshot {
 func (l *LiveRefresher) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), liveFetchTimeout)
 	defer cancel()
-	snap := l.fetch(ctx)
 
-	l.mu.Lock()
-	l.snap = snap
-	l.have = true
-	l.inflight = false
-	l.mu.Unlock()
+	// 失敗・panic でも inflight を必ず戻す。戻し忘れると以後の再取得が永久に止まる。
+	// panic は握りつぶして取得失敗（OK=false）扱いにする。バックグラウンド取得の都合で
+	// ダッシュボード全体を落とすより、hook 状態へのフォールバックを優先する。
+	snap := agentview.Snapshot{FetchedAt: l.now()}
+	defer func() {
+		_ = recover()
+		l.mu.Lock()
+		l.snap = snap
+		l.have = true
+		l.inflight = false
+		l.mu.Unlock()
+	}()
+	snap = l.fetch(ctx)
 }

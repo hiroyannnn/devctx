@@ -126,3 +126,25 @@ func TestDefaultRunnerWithFakeClaude(t *testing.T) {
 		t.Errorf("出力上限超過は失敗扱い: %+v", snap)
 	}
 }
+
+// claude の子孫プロセスが stdout を握り続けても、タイムアウトで Fetch が戻ること。
+// WaitDelay 未設定だと cmd.Run は stdout のコピー完了を待ち続ける。
+func TestFetchReturnsAfterTimeoutEvenIfDescendantHoldsStdout(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\n(sleep 10) &\nsleep 10\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	start := time.Now()
+	snap := Fetch(context.Background(), nil)
+	elapsed := time.Since(start)
+
+	if snap.OK {
+		t.Error("タイムアウトした取得は OK=false")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("Fetch が %v かかった（子孫が stdout を握っていても 3s 以内に戻る想定）", elapsed)
+	}
+}
