@@ -73,12 +73,19 @@ func TestUpsertRegistration_CodexReusesCodexContext(t *testing.T) {
 		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1"},
 		{Name: "feat-x-codex", Worktree: "/w/feat-x", SessionID: "x1", Provider: model.ProviderCodex},
 	}}
+	// Same session re-registered (e.g. resume) reuses its context; a different session
+	// gets its own context (see TestUpsertRegistration_NewCodexSessionInSameWorktreeIsSeparate)
 	ctx, created := upsertRegistration(store, registration{
-		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderCodex, SessionID: "x2",
+		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderCodex, SessionID: "x1", TranscriptPath: "/t/x1.jsonl",
 	}, registerNow)
 
-	if created || ctx.Name != "feat-x-codex" || ctx.SessionID != "x2" {
+	if created || ctx.Name != "feat-x-codex" || ctx.TranscriptPath != "/t/x1.jsonl" {
 		t.Fatalf("created=%v ctx=%+v, want codex context updated", created, ctx)
+	}
+	if manual, created := upsertRegistration(store, registration{
+		Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderCodex,
+	}, registerNow); created || manual.Name != "feat-x-codex" {
+		t.Fatalf("manual register without a session should reuse the worktree's codex context, got created=%v %q", created, manual.Name)
 	}
 }
 
@@ -145,5 +152,35 @@ func TestUpsertRegistration_ManualRegisterKeepsAgentState(t *testing.T) {
 
 	if ctx.AgentState != model.AgentTurnDone {
 		t.Fatalf("manual register without a session should keep state, got %q", ctx.AgentState)
+	}
+}
+
+func TestUpsertRegistration_SessionIDMatchesBeforeWorktree(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "proj-codex", Worktree: "/w/proj", SessionID: "a", Provider: model.ProviderCodex},
+		{Name: "proj-codex-2", Worktree: "/w/proj", SessionID: "b", Provider: model.ProviderCodex},
+	}}
+	ctx, created := upsertRegistration(store, registration{
+		Name: "proj", Worktree: "/w/proj", Provider: model.ProviderCodex, SessionID: "b",
+	}, registerNow)
+
+	if created || ctx.Name != "proj-codex-2" {
+		t.Fatalf("created=%v ctx=%q, want session b's own context updated", created, ctx.Name)
+	}
+	if store.FindByName("proj-codex").SessionID != "a" {
+		t.Fatalf("session a's context must not be overwritten")
+	}
+}
+
+func TestUpsertRegistration_NewCodexSessionInSameWorktreeIsSeparate(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "proj-codex", Worktree: "/w/proj", SessionID: "a", Provider: model.ProviderCodex},
+	}}
+	ctx, created := upsertRegistration(store, registration{
+		Name: "proj", Worktree: "/w/proj", Provider: model.ProviderCodex, SessionID: "c",
+	}, registerNow)
+
+	if !created || ctx.SessionID != "c" || store.FindByName("proj-codex").SessionID != "a" {
+		t.Fatalf("created=%v ctx=%+v; a new codex session should get its own context (codex is tracked per session)", created, ctx)
 	}
 }
