@@ -17,12 +17,12 @@ func TestStoreFinders(t *testing.T) {
 		t.Fatalf("FindByName(auth) = %#v, want session-1", got)
 	}
 
-	if got := store.FindBySessionID("session-2"); got == nil || got.Name != "api-fix" {
-		t.Fatalf("FindBySessionID(session-2) = %#v, want api-fix", got)
+	if got := store.FindByProviderSession(ProviderClaude, "session-2"); got == nil || got.Name != "api-fix" {
+		t.Fatalf("FindByProviderSession(claude, session-2) = %#v, want api-fix", got)
 	}
 
-	if got := store.FindByWorktree("/tmp/auth"); got == nil || got.Name != "auth" {
-		t.Fatalf("FindByWorktree(/tmp/auth) = %#v, want auth", got)
+	if got := store.FindByWorktreeAndProvider("/tmp/auth", ProviderClaude); got == nil || got.Name != "auth" {
+		t.Fatalf("FindByWorktreeAndProvider(/tmp/auth, claude) = %#v, want auth", got)
 	}
 
 	if got := store.FindByName("missing"); got != nil {

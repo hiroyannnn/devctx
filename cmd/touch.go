@@ -52,7 +52,7 @@ Use --quick to skip phase scan and milestone collection (for high-frequency hook
 					return fmt.Errorf("failed to parse hook input: %w", err)
 				}
 				// Find by session ID
-				ctx := store.FindBySessionID(input.SessionID)
+				ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID)
 				if ctx != nil {
 					name = ctx.Name
 				}

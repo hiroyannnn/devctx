@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -51,7 +52,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 			updated := 0
 			for i := range store.Contexts {
 				ctx := &store.Contexts[i]
-				if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+				if needsSessionNameRefresh(*ctx) {
 					if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
 						ctx.SessionName = sessionName
 						fmt.Printf("✓ [%s] %s\n", ctx.Name, sessionName)
@@ -70,26 +71,15 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 			return nil
 		}
 
-		var name string
-		if len(args) > 0 {
-			name = args[0]
-		} else {
-			// Find by current directory
-			cwd := getWorktreeRoot(".")
-			if cwd == "" {
-				return fmt.Errorf("not in a git repository")
-			}
-			ctx := store.FindByWorktree(cwd)
-			if ctx == nil {
-				return fmt.Errorf("no context found for current directory")
-			}
-			name = ctx.Name
+		cwd := getWorktreeRoot(".")
+		if cwd == "" && len(args) == 0 {
+			return fmt.Errorf("not in a git repository")
 		}
-
-		ctx := store.FindByName(name)
-		if ctx == nil {
-			return fmt.Errorf("context [%s] not found", name)
+		ctx, err := resolveContext(store, args, cwd)
+		if err != nil {
+			return err
 		}
+		name := ctx.Name
 
 		// Check if gh is available
 		if _, err := exec.LookPath("gh"); err != nil {
@@ -120,7 +110,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		}
 
 		// Refresh session name from transcript if available
-		if ctx.TranscriptPath != "" && ctx.SessionName == "" {
+		if needsSessionNameRefresh(*ctx) {
 			if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
 				ctx.SessionName = sessionName
 				fmt.Printf("✓ Found session name: %s\n", sessionName)
@@ -288,4 +278,9 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(prCmd)
 	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Refresh session names for all contexts")
+}
+
+// needsSessionNameRefresh は Claude Code の transcript からセッション名を補完すべきかを返す。
+func needsSessionNameRefresh(ctx model.Context) bool {
+	return ctx.EffectiveProvider() == model.ProviderClaude && ctx.TranscriptPath != "" && ctx.SessionName == ""
 }

@@ -72,16 +72,9 @@ Examples:
 			worktree = root
 		}
 
-		ctx := store.FindByWorktree(worktree)
-		if ctx == nil {
-			// Try finding by name from args
-			if len(args) > 0 {
-				ctx = store.FindByName(args[0])
-			}
-		}
-
-		if ctx == nil {
-			return fmt.Errorf("no context found for worktree %s\nRegister a context first with 'devctx register'", worktree)
+		ctx, err := resolveContext(store, args, worktree)
+		if err != nil {
+			return err
 		}
 
 		ctx.InitialPrompt = roadmapInitPrompt
@@ -276,9 +269,10 @@ With --all, analyzes all active contexts.
 With --if-stale, skips analysis if last insight is fresh (default: 5 min cooldown).
 With --background, forks to background and returns immediately.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Background mode: re-exec self as detached process
-		if roadmapAnalyzeBackground {
-			return execAnalyzeBackground(args)
+		// Called from a Claude Code hook (Stop): identify the session from stdin
+		hookSessionID := ""
+		if len(args) == 0 && !roadmapAnalyzeAll && stdinIsPipe() {
+			hookSessionID = readHookSessionID(os.Stdin)
 		}
 
 		s, err := storage.New()
@@ -290,6 +284,15 @@ With --background, forks to background and returns immediately.`,
 			return err
 		}
 
+		// Background mode: re-exec self as detached process
+		if roadmapAnalyzeBackground {
+			// The child has no stdin, so pass the hook session's context by name
+			if ctx := store.FindByProviderSession(model.ProviderClaude, hookSessionID); ctx != nil && len(args) == 0 {
+				args = []string{ctx.Name}
+			}
+			return execAnalyzeBackground(args)
+		}
+
 		var targets []*model.Context
 
 		if roadmapAnalyzeAll {
@@ -298,12 +301,6 @@ With --background, forks to background and returns immediately.`,
 					targets = append(targets, &store.Contexts[i])
 				}
 			}
-		} else if len(args) > 0 {
-			ctx := store.FindByName(args[0])
-			if ctx == nil {
-				return fmt.Errorf("context [%s] not found", args[0])
-			}
-			targets = append(targets, ctx)
 		} else {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -313,9 +310,9 @@ With --background, forks to background and returns immediately.`,
 			if worktreeRoot != "" {
 				cwd = worktreeRoot
 			}
-			ctx := store.FindByWorktree(cwd)
-			if ctx == nil {
-				return fmt.Errorf("no context found for current directory\nSpecify a name or use --all")
+			ctx, err := resolveHookContext(store, args, hookSessionID, cwd)
+			if err != nil {
+				return err
 			}
 			targets = append(targets, ctx)
 		}

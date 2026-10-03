@@ -34,14 +34,12 @@ var tuiCmd = &cobra.Command{
 		}
 
 		// If user selected a context to resume
-		if m, ok := finalModel.(tuiModel); ok && m.selectedForResume != "" {
-			fmt.Printf("cd '%s'", m.resumeWorktree)
-			if m.resumeSessionID != "" {
-				fmt.Printf(" && claude --resume '%s'", m.resumeSessionID)
-			} else {
-				fmt.Printf(" && claude")
+		if m, ok := finalModel.(tuiModel); ok && m.selectedForResume != nil {
+			shellCmd, err := resumeShellCommand(*m.selectedForResume)
+			if err != nil {
+				return err
 			}
-			fmt.Println()
+			fmt.Println(shellCmd)
 		}
 
 		return nil
@@ -86,9 +84,7 @@ type tuiModel struct {
 	list              list.Model
 	store             *model.Store
 	storage           *storage.Storage
-	selectedForResume string
-	resumeWorktree    string
-	resumeSessionID   string
+	selectedForResume *model.Context
 	err               error
 }
 
@@ -192,9 +188,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Enter):
 			if item, ok := m.list.SelectedItem().(contextItem); ok {
-				m.selectedForResume = item.ctx.Name
-				m.resumeWorktree = item.ctx.Worktree
-				m.resumeSessionID = item.ctx.SessionID
+				selected := item.ctx
+				m.selectedForResume = &selected
 				return m, tea.Quit
 			}
 
