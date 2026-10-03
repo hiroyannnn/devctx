@@ -38,14 +38,12 @@ func ViewFor(views map[string]View, ctx model.Context) View {
 	return HookView(ctx)
 }
 
-// GitToplevel は cwd の git toplevel を返す（git 管理外・失敗は空文字）。
-// cmd/register.go の getWorktreeRoot と同じく cmd.Dir 方式で、`git -C` は使わない。
-func GitToplevel(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
+// GitToplevel は dir の git toplevel を返す（git 管理外・失敗は空文字）。
+// `git -C` ではなく cmd.Dir 方式にしているのは、他リポジトリの git 操作を cd 方式に揃える運用に合わせるため。
+// dir が空だとプロセスの cwd で実行される。agent view の cwd 空は呼び出し側（fetchAt）で除外する。
+func GitToplevel(dir string) string {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = cwd
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -71,10 +69,7 @@ func normalizePath(p string) string {
 // 照合は SessionID の完全一致を優先し、無ければ「live セッションの git toplevel が
 // context の worktree と一致し、かつ一意」の場合だけ採用する。リポジトリルートや
 // パス接頭辞での照合は、別 worktree のセッションを誤って結び付けるので行わない。
-func Overlay(contexts []model.Context, snap Snapshot, toplevel func(cwd string) string) map[string]View {
-	if toplevel == nil {
-		toplevel = GitToplevel
-	}
+func Overlay(contexts []model.Context, snap Snapshot) map[string]View {
 	views := make(map[string]View)
 	if len(contexts) == 0 {
 		return views
@@ -94,21 +89,14 @@ func Overlay(contexts []model.Context, snap Snapshot, toplevel func(cwd string) 
 		}
 	}
 
-	// git 呼び出しは cwd ごとに 1 回だけ
-	topCache := make(map[string]string)
 	liveByWorktree := make(map[string][]Session)
 	if snap.OK {
 		for _, s := range snap.Sessions {
 			if owned[s.SessionID] {
 				continue
 			}
-			top, ok := topCache[s.Cwd]
-			if !ok {
-				top = normalizePath(toplevel(s.Cwd))
-				topCache[s.Cwd] = top
-			}
-			if top != "" {
-				liveByWorktree[top] = append(liveByWorktree[top], s)
+			if s.Toplevel != "" {
+				liveByWorktree[s.Toplevel] = append(liveByWorktree[s.Toplevel], s)
 			}
 		}
 	}

@@ -28,6 +28,9 @@ type Session struct {
 	WaitingFor string // waiting のときの理由（permission prompt 等）
 	State      string // background セッションの state
 	StartedAt  time.Time
+	// Toplevel は Cwd の git toplevel（正規化済み。git 管理外は空）。取得時に 1 回だけ解決する。
+	// Overlay が表示のたびに git を起動しないための値で、worktree 照合にだけ使う
+	Toplevel string
 }
 
 // Snapshot はある時点の agent view。
@@ -133,10 +136,10 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 // 失敗・タイムアウト・パースエラーは OK=false。空配列は OK=true だが「live 情報なし」であり、
 // 不在をもって終了とは推論しない（制限環境では生存中でも空が返りうる）。
 func Fetch(ctx context.Context, run Runner) Snapshot {
-	return fetchAt(ctx, run, time.Now)
+	return fetchAt(ctx, run, time.Now, GitToplevel)
 }
 
-func fetchAt(ctx context.Context, run Runner, now func() time.Time) Snapshot {
+func fetchAt(ctx context.Context, run Runner, now func() time.Time, toplevel func(cwd string) string) Snapshot {
 	if run == nil {
 		run = DefaultRunner
 	}
@@ -148,6 +151,20 @@ func fetchAt(ctx context.Context, run Runner, now func() time.Time) Snapshot {
 	sessions, err := Parse(data)
 	if err != nil {
 		return snap
+	}
+	// git は cwd ごとに 1 回。ハンドラや描画経路で起動させないよう、取得側（バックグラウンド）で済ませる
+	tops := make(map[string]string)
+	for i := range sessions {
+		cwd := sessions[i].Cwd
+		if cwd == "" {
+			continue
+		}
+		top, ok := tops[cwd]
+		if !ok {
+			top = normalizePath(toplevel(cwd))
+			tops[cwd] = top
+		}
+		sessions[i].Toplevel = top
 	}
 	snap.Sessions = sessions
 	snap.OK = true

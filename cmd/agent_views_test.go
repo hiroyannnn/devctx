@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,34 +44,58 @@ func TestFormatCardShowsLiveReason(t *testing.T) {
 	}
 }
 
-func TestLiveViewsFetchesOncePerCallWhenNoThrottle(t *testing.T) {
+// one-shot（list / status）は呼び出しごとに同期取得する。
+func TestLiveViewsOneShotFetchesSynchronously(t *testing.T) {
 	calls := stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "busy"}))
-	l := newLiveViews(0)
-	ctxs := []model.Context{{Name: "a", SessionID: "s1"}}
-	if v := l.views(ctxs)["a"]; v.State != model.AgentRunning {
+	l := newLiveViews()
+	if v := l.views([]model.Context{{Name: "a", SessionID: "s1"}})["a"]; v.State != model.AgentRunning {
 		t.Errorf("%+v", v)
 	}
-	l.views(ctxs)
-	if *calls != 2 {
-		t.Errorf("throttle 0 は毎回取得: %d", *calls)
-	}
-}
-
-func TestLiveViewsThrottleReusesSnapshotButRecomputesOverlay(t *testing.T) {
-	calls := stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "busy"}))
-	l := newLiveViews(5 * time.Second)
-	ctx := model.Context{Name: "a", SessionID: "s1"}
-	l.views([]model.Context{ctx})
-
-	// 間隔内の再描画では claude を呼ばず、hook の更新だけは即反映される（取得開始より新しい hook は hook 優先）
-	ctx.AgentState = model.AgentNeedsInput
-	ctx.AgentStateAt = time.Now().Add(time.Hour)
-	v := l.views([]model.Context{ctx})["a"]
 	if *calls != 1 {
 		t.Errorf("calls = %d", *calls)
 	}
-	if v.Source != agentview.SourceHook || v.State != model.AgentNeedsInput {
-		t.Errorf("%+v", v)
+}
+
+// watch / TUI の views() は同期取得しない。初回は hook 状態で、背景取得が済むと live に変わる。
+func TestWatchLiveViewsNeverBlocksOnFetch(t *testing.T) {
+	release := make(chan struct{})
+	fetched := make(chan struct{}, 1)
+	orig := fetchAgentSnapshot
+	fetchAgentSnapshot = func() agentview.Snapshot {
+		fetched <- struct{}{}
+		<-release
+		return liveSnap(agentview.Session{SessionID: "s1", Status: "busy"})
+	}
+	t.Cleanup(func() { fetchAgentSnapshot = orig })
+
+	l := newWatchLiveViews()
+	ctx := model.Context{Name: "a", SessionID: "s1", AgentState: model.AgentTurnDone, AgentStateAt: time.Now().Add(-time.Hour)}
+	done := make(chan agentview.View)
+	go func() { done <- l.views([]model.Context{ctx})["a"] }()
+	select {
+	case v := <-done:
+		if v.Source != agentview.SourceHook {
+			t.Errorf("取得前は hook: %+v", v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("views() が取得を待ってブロックした")
+	}
+
+	<-fetched
+	close(release)
+	waitLive(t, func() bool {
+		return l.views([]model.Context{ctx})["a"].Source == agentview.SourceLive
+	})
+}
+
+func waitLive(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for live snapshot")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -90,13 +115,15 @@ func TestTuiItemShowsLiveReasonAndStoreStaysClean(t *testing.T) {
 	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "waiting", WaitingFor: "permission prompt"}))
 
 	m := newTuiModel(store, s)
-	items := m.list.Items()
-	if len(items) != 1 {
-		t.Fatalf("items = %d", len(items))
+	if len(m.list.Items()) != 1 {
+		t.Fatalf("items = %d", len(m.list.Items()))
 	}
-	if desc := items[0].(contextItem).Description(); !strings.Contains(desc, "claude · needs input · permission prompt") {
-		t.Errorf("desc: %q", desc)
-	}
+	// 初回は取得前。背景取得が済んだ tick で live に変わる
+	waitLive(t, func() bool {
+		next, _ := m.Update(tuiTickMsg{})
+		m = next.(tuiModel)
+		return strings.Contains(m.list.Items()[0].(contextItem).Description(), "claude · needs input · permission prompt")
+	})
 
 	// store を保存する操作（移動）でも live の値は永続化されない
 	m.moveSelected(model.StatusReview)
@@ -125,7 +152,12 @@ func TestKanbanModelUsesLiveViewsAndStoreStaysClean(t *testing.T) {
 	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "busy"}))
 
 	m := newKanbanModel(s)
-	if v := m.views["a"]; v.State != model.AgentRunning || v.Source != agentview.SourceLive {
+	waitLive(t, func() bool {
+		next, _ := m.Update(tickMsg(time.Now()))
+		m = next.(kanbanModel)
+		return m.views["a"].Source == agentview.SourceLive
+	})
+	if v := m.views["a"]; v.State != model.AgentRunning {
 		t.Fatalf("views: %+v", m.views)
 	}
 	if out := m.View(); !strings.Contains(out, "claude · running") {
@@ -194,11 +226,9 @@ func TestTuiItemsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
 		{Name: "b", Status: model.StatusInProgress, Worktree: "/w/x", SessionID: "old-b",
 			AgentState: model.AgentTurnDone, AgentStateAt: time.Now().Add(-time.Hour)},
 	}}
-	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "live-a", Cwd: "/w/x", Status: "busy"}))
-	live := newLiveViews(0)
-	live.toplevel = func(string) string { return "/w/x" }
+	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "live-a", Cwd: "/w/x", Toplevel: "/w/x", Status: "busy"}))
 
-	for _, it := range buildItems(store, live) {
+	for _, it := range buildItems(store, newLiveViews().views(store.Contexts)) {
 		ci := it.(contextItem)
 		if ci.ctx.Name == "b" && ci.view.Source == agentview.SourceLive {
 			t.Errorf("b が Done の a の live セッションを奪った: %+v", ci.view)
@@ -206,9 +236,9 @@ func TestTuiItemsDoNotStealLiveSessionOfDoneContext(t *testing.T) {
 	}
 }
 
-// TUI は操作がなくても定期的に live 状態を取り直す。取得は Update 内で同期実行せず、
-// tick → 取得 Cmd → snapshot Msg → 次の tick の直列で 1 本ずつ回す（tick を積み上げない）。
-func TestTuiPeriodicRefreshUpdatesItemsOffUpdateGoroutine(t *testing.T) {
+// TUI は操作がなくても定期的に再描画し、tick で直近の snapshot を取り込む。
+// 取得は Refresher の背景 goroutine で、Update は同期取得しない（tick のたびに claude を待たない）。
+func TestTuiTickPicksUpBackgroundSnapshotWithoutFetchingInUpdate(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s, err := storage.New()
 	if err != nil {
@@ -218,48 +248,30 @@ func TestTuiPeriodicRefreshUpdatesItemsOffUpdateGoroutine(t *testing.T) {
 		Name: "a", Status: model.StatusInProgress, SessionID: "s1",
 		AgentState: model.AgentTurnDone, AgentStateAt: time.Now().Add(-time.Hour),
 	}}}
-	stubSnapshot(t, liveSnap(agentview.Session{SessionID: "s1", Status: "busy"}))
+	var mu sync.Mutex
+	status := "busy"
+	orig := fetchAgentSnapshot
+	fetchAgentSnapshot = func() agentview.Snapshot {
+		mu.Lock()
+		defer mu.Unlock()
+		return liveSnap(agentview.Session{SessionID: "s1", Status: status})
+	}
+	t.Cleanup(func() { fetchAgentSnapshot = orig })
 
 	m := newTuiModel(store, s)
-	desc := func(m tuiModel) string { return m.list.Items()[0].(contextItem).Description() }
-	if !strings.Contains(desc(m), "claude · running") {
-		t.Fatalf("初期状態: %q", desc(m))
-	}
-
+	desc := func() string { return m.list.Items()[0].(contextItem).Description() }
 	if m.Init() == nil {
 		t.Fatal("Init は最初の tick を返す")
 	}
 
-	fetches := 0
-	m.fetch = func() agentview.Snapshot {
-		fetches++
-		return liveSnap(agentview.Session{SessionID: "s1", Status: "waiting", WaitingFor: "permission prompt"})
-	}
-
-	next, cmd := m.Update(tuiTickMsg{})
-	m = next.(tuiModel)
-	if fetches != 0 {
-		t.Fatal("tick の Update 内で同期取得してはいけない")
-	}
-	if cmd == nil {
-		t.Fatal("tick は取得 Cmd を返す")
-	}
-	msg := cmd()
-	if fetches != 1 {
-		t.Fatalf("取得 Cmd が fetch を呼ぶ: %d", fetches)
-	}
-
-	next, cmd = m.Update(msg)
-	m = next.(tuiModel)
-	if !strings.Contains(desc(m), "claude · needs input · permission prompt") {
-		t.Errorf("snapshot 反映後: %q", desc(m))
-	}
-	if cmd == nil {
-		t.Error("snapshot 受信後に次の tick を予約する")
-	}
-	if fetches != 1 {
-		t.Errorf("snapshot 反映で再取得しない: %d", fetches)
-	}
+	waitLive(t, func() bool {
+		next, cmd := m.Update(tuiTickMsg{})
+		m = next.(tuiModel)
+		if cmd == nil {
+			t.Fatal("tick は次の tick を予約する")
+		}
+		return strings.Contains(desc(), "claude · running")
+	})
 	if store.Contexts[0].AgentState != model.AgentTurnDone {
 		t.Errorf("overlay 値が store に入った: %v", store.Contexts[0].AgentState)
 	}

@@ -161,7 +161,7 @@ var listCmd = &cobra.Command{
 		}
 
 		// Single display（live 状態は 1 回だけ取得する）
-		printKanban(store, 0, newLiveViews(0).views(store.Contexts))
+		printKanban(store, 0, newLiveViews().views(store.Contexts))
 		return nil
 	},
 }
@@ -471,7 +471,7 @@ func newKanbanModel(s *storage.Storage) kanbanModel {
 	}
 
 	contexts := store.ActiveWithRetention(retentionDays)
-	live := newLiveViews(kanbanLiveInterval)
+	live := newWatchLiveViews()
 	return kanbanModel{
 		storage:           s,
 		store:             store,
@@ -485,10 +485,6 @@ func newKanbanModel(s *storage.Storage) kanbanModel {
 		views:             live.views(store.Contexts),
 	}
 }
-
-// kanbanLiveInterval は watch の 2 秒 tick のたびに claude を実行しないための取得間隔。
-// 同期取得（150ms 前後）が 2 秒ごとに入ると入力が引っかかる。
-const kanbanLiveInterval = 5 * time.Second
 
 func (m kanbanModel) Init() tea.Cmd {
 	return tea.Batch(tickCmd(), tea.EnterAltScreen)

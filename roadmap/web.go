@@ -102,6 +102,11 @@ func applyAgentFields(entry *RoadmapEntry, ctx model.Context, view agentview.Vie
 	}
 }
 
+// LiveSource は agent view の最新 snapshot を返す。ハンドラはこれを読むだけで claude を待たない。
+type LiveSource interface {
+	Snapshot() agentview.Snapshot
+}
+
 // Server serves the roadmap web UI.
 type Server struct {
 	StoreLoader   StoreLoader
@@ -111,8 +116,6 @@ type Server struct {
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
 	Live LiveSource
-	// Toplevel は live セッションの cwd から git toplevel を引く。nil なら agentview.GitToplevel
-	Toplevel func(cwd string) string
 
 	cacheMu      sync.RWMutex
 	cachedResult []byte
@@ -129,7 +132,7 @@ func (s *Server) agentViews(all []model.Context) map[string]agentview.View {
 	if s.Live != nil {
 		snap = s.Live.Snapshot()
 	}
-	return agentview.Overlay(all, snap, s.Toplevel)
+	return agentview.Overlay(all, snap)
 }
 
 // NewServer creates a new Server.

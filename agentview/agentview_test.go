@@ -53,33 +53,63 @@ func TestParseErrors(t *testing.T) {
 func TestFetch(t *testing.T) {
 	t0 := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
 	now := func() time.Time { return t0 }
+	noGit := func(string) string { return "" }
 
 	t.Run("ok", func(t *testing.T) {
 		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) {
 			return []byte(`[{"sessionId":"s1","status":"busy"}]`), nil
-		}, now)
+		}, now, noGit)
 		if !snap.OK || len(snap.Sessions) != 1 || !snap.FetchedAt.Equal(t0) {
 			t.Errorf("%+v", snap)
 		}
 	})
 	t.Run("empty array is still OK", func(t *testing.T) {
-		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return []byte(`[]`), nil }, now)
+		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return []byte(`[]`), nil }, now, noGit)
 		if !snap.OK || len(snap.Sessions) != 0 {
 			t.Errorf("%+v", snap)
 		}
 	})
 	t.Run("runner error", func(t *testing.T) {
-		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return nil, errors.New("boom") }, now)
+		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return nil, errors.New("boom") }, now, noGit)
 		if snap.OK {
 			t.Errorf("%+v", snap)
 		}
 	})
 	t.Run("parse error", func(t *testing.T) {
-		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return []byte(`xx`), nil }, now)
+		snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return []byte(`xx`), nil }, now, noGit)
 		if snap.OK {
 			t.Errorf("%+v", snap)
 		}
 	})
+}
+
+// toplevel は cwd ごとに 1 回だけ解決され、正規化されて Session に載る（Overlay が git を起動しないため）。
+func TestFetchResolvesToplevelOncePerCwd(t *testing.T) {
+	real := resolved(t, t.TempDir())
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]int{}
+	top := func(cwd string) string { calls[cwd]++; return link + "/" }
+	raw := `[{"sessionId":"a","cwd":"/w/a","status":"busy"},{"sessionId":"b","cwd":"/w/a","status":"idle"},{"sessionId":"c","status":"idle"}]`
+	snap := fetchAt(context.Background(), func(context.Context) ([]byte, error) { return []byte(raw), nil }, time.Now, top)
+	if calls["/w/a"] != 1 || len(calls) != 1 {
+		t.Errorf("calls = %v（cwd 空は解決しない）", calls)
+	}
+	if snap.Sessions[0].Toplevel != real || snap.Sessions[1].Toplevel != real || snap.Sessions[2].Toplevel != "" {
+		t.Errorf("%+v", snap.Sessions)
+	}
+}
+
+// macOS の /var → /private/var のように TempDir 自体が symlink 配下になりうる
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 func TestMapStatus(t *testing.T) {

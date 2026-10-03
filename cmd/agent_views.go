@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"time"
 
 	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
@@ -15,51 +14,27 @@ var fetchAgentSnapshot = func() agentview.Snapshot {
 	return agentview.Fetch(context.Background(), nil)
 }
 
-// memoToplevel は cwd ごとの git toplevel を保持する。再描画のたびに git を呼ばないため、
-// TUI のようにプロセス寿命の長い呼び出し元はこれを使い回す。
-func memoToplevel() func(string) string {
-	cache := make(map[string]string)
-	return func(cwd string) string {
-		if top, ok := cache[cwd]; ok {
-			return top
-		}
-		top := agentview.GitToplevel(cwd)
-		cache[cwd] = top
-		return top
-	}
-}
-
-// liveViews は agent view の snapshot を保持し、context 一覧に重ねた表示状態を返す。
-// 描画のたびに claude を実行せずに済むよう、minInterval 内は直前の snapshot を使い回す
-// （Overlay 自体は毎回計算するので、hook の更新は即座に反映される）。
+// liveViews は snapshot の供給元を持ち、context 一覧に重ねた表示状態を返す。
+// 供給元は 2 種類で、どちらも描画・tick の経路で同期取得はしない（watch / TUI は Refresher）。
 type liveViews struct {
-	minInterval time.Duration
-	toplevel    func(string) string
-	snap        agentview.Snapshot
-	fetched     bool
-	now         func() time.Time
+	snapshot func() agentview.Snapshot
 }
 
-func newLiveViews(minInterval time.Duration) *liveViews {
-	return &liveViews{minInterval: minInterval, toplevel: memoToplevel(), now: time.Now}
+// newLiveViews は一回きりの表示（list / status）用。呼ぶ時点で 1 回だけ同期取得する。
+func newLiveViews() *liveViews {
+	return &liveViews{snapshot: func() agentview.Snapshot { return fetchAgentSnapshot() }}
+}
+
+// newWatchLiveViews は watch / TUI 用。取得はバックグラウンドの Refresher に任せ、
+// views() は直近の snapshot を読むだけ。初回は取得前なので hook 状態で描き、取得後の tick で live に変わる。
+// 同期取得にしない理由: 2 秒 tick のたびに claude（150ms〜2s）を待つと入力が引っかかるため。
+func newWatchLiveViews() *liveViews {
+	r := agentview.NewRefresher(func(context.Context) agentview.Snapshot { return fetchAgentSnapshot() })
+	return &liveViews{snapshot: r.Snapshot}
 }
 
 // views は all（表示対象に絞らない store の全 context）に overlay を適用し、名前で引ける map を返す。
 // 表示側は自分が描画する context だけを名前で引く。
 func (l *liveViews) views(all []model.Context) map[string]agentview.View {
-	if !l.fetched || l.now().Sub(l.snap.FetchedAt) >= l.minInterval {
-		l.apply(fetchAgentSnapshot())
-	}
-	return l.overlay(all)
-}
-
-// apply は外部（TUI のバックグラウンド取得など）で得た snapshot を保持する。
-func (l *liveViews) apply(snap agentview.Snapshot) {
-	l.snap = snap
-	l.fetched = true
-}
-
-// overlay は保持中の snapshot で overlay だけを計算する（claude は実行しない）。
-func (l *liveViews) overlay(all []model.Context) map[string]agentview.View {
-	return agentview.Overlay(all, l.snap, l.toplevel)
+	return agentview.Overlay(all, l.snapshot())
 }

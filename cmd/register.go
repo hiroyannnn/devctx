@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/roadmap"
 	"github.com/hiroyannnn/devctx/storage"
@@ -240,13 +241,7 @@ func getGitBranch(dir string) string {
 }
 
 func getWorktreeRoot(dir string) string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return agentview.GitToplevel(dir)
 }
 
 func generateName(branch, dir string) string {

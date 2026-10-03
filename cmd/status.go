@@ -62,7 +62,7 @@ Status indicators:
 			return watchStatus(store)
 		}
 
-		return showStatus(store, newLiveViews(0))
+		return showStatus(store, newLiveViews())
 	},
 }
 
@@ -137,8 +137,8 @@ func watchStatus(store *model.Store) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	// watch は 2 秒 tick。claude の実行は間隔を空けて snapshot を使い回す
-	live := newLiveViews(kanbanLiveInterval)
+	// watch は 2 秒 tick。tick では Refresher の直近 snapshot を読むだけで、claude は待たない
+	live := newWatchLiveViews()
 
 	// Initial display
 	showStatus(store, live)

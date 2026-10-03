@@ -90,27 +90,18 @@ type tuiModel struct {
 	selectedForResume *model.Context
 	err               error
 	live              *liveViews
-	// fetch は live 取得。tea.Cmd（UI goroutine の外）からのみ呼ぶ。テストで差し替える
-	fetch func() agentview.Snapshot
 }
 
-// tuiLiveInterval は操作がなくても live 状態を取り直す間隔。
-const tuiLiveInterval = 5 * time.Second
+// tuiRedrawInterval は操作がなくても live 状態を描き直す間隔。取得自体は Refresher が
+// バックグラウンドで行うので、tick は直近の snapshot を読んで再描画するだけ。
+// Update 内で同期取得しない理由: claude の実行（150ms〜2s）が UI を止めるため。
+const tuiRedrawInterval = 2 * time.Second
 
-// tuiTickMsg は定期更新の合図。tuiSnapshotMsg は取得結果。
-// tick → 取得 → 結果受信で次の tick、と直列に回すので、取得が遅くても tick は積み上がらない。
-type (
-	tuiTickMsg     struct{}
-	tuiSnapshotMsg struct{ snap agentview.Snapshot }
-)
+// tuiTickMsg は定期再描画の合図。
+type tuiTickMsg struct{}
 
 func tuiTickCmd() tea.Cmd {
-	return tea.Tick(tuiLiveInterval, func(time.Time) tea.Msg { return tuiTickMsg{} })
-}
-
-func (m tuiModel) fetchCmd() tea.Cmd {
-	fetch := m.fetch
-	return func() tea.Msg { return tuiSnapshotMsg{snap: fetch()} }
+	return tea.Tick(tuiRedrawInterval, func(time.Time) tea.Msg { return tuiTickMsg{} })
 }
 
 type keyMap struct {
@@ -144,11 +135,7 @@ func newKeyMap() keyMap {
 var keys = newKeyMap()
 
 // buildItems は status 順の一覧を作る。live 状態は表示用の view としてのみ持ち、store には入れない。
-func buildItems(store *model.Store, live *liveViews) []list.Item {
-	return buildItemsFromViews(store, live.views(store.Contexts))
-}
-
-func buildItemsFromViews(store *model.Store, views map[string]agentview.View) []list.Item {
+func buildItems(store *model.Store, views map[string]agentview.View) []list.Item {
 	items := make([]list.Item, 0)
 	statuses := []model.Status{
 		model.StatusInProgress,
@@ -165,9 +152,9 @@ func buildItemsFromViews(store *model.Store, views map[string]agentview.View) []
 }
 
 func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
-	// 初回構築と refresh のたびに同期取得する（View() 内では取得しない）
-	live := newLiveViews(0)
-	items := buildItems(store, live)
+	// 初回は取得前なので hook 状態で描き、以降は tick で Refresher の snapshot を取り込む
+	live := newWatchLiveViews()
+	items := buildItems(store, live.views(store.Contexts))
 
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("39"))
@@ -197,7 +184,6 @@ func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
 		store:   store,
 		storage: s,
 		live:    live,
-		fetch:   func() agentview.Snapshot { return fetchAgentSnapshot() },
 	}
 }
 
@@ -213,11 +199,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiTickMsg:
-		return m, m.fetchCmd()
-
-	case tuiSnapshotMsg:
-		m.live.apply(msg.snap)
-		m.list.SetItems(buildItemsFromViews(m.store, m.live.overlay(m.store.Contexts)))
+		m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
 		return m, tuiTickCmd()
 
 	case tea.KeyMsg:
@@ -276,10 +258,7 @@ func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {
-	// 保持中の snapshot で再計算する。ここ（Update 内）では claude を実行しない
-	items := buildItemsFromViews(m.store, m.live.overlay(m.store.Contexts))
-
-	m.list.SetItems(items)
+	m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
 	return m, nil
 }
 
