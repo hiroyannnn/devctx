@@ -1,6 +1,8 @@
 package roadmap
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/hiroyannnn/devctx/model"
@@ -184,6 +186,35 @@ func TestBuildSessionGraph_Empty(t *testing.T) {
 	}
 	if sg.Name != "empty-session" {
 		t.Errorf("Name = %q, want %q", sg.Name, "empty-session")
+	}
+}
+
+func TestBuildSessionGraph_EmptySlicesInJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry RoadmapEntry
+	}{
+		{"goal も tasks も無い", RoadmapEntry{Name: "empty-session"}},
+		{"goal のみ", RoadmapEntry{Name: "goal-only", Goal: "ship it"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(BuildSessionGraph(tt.entry))
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			got := string(data)
+			if strings.Contains(got, `"nodes":null`) {
+				t.Errorf("nodes が null で出力された: %s", got)
+			}
+			if !strings.Contains(got, `"edges":[]`) {
+				t.Errorf(`"edges":[] が含まれない: %s`, got)
+			}
+		})
+	}
+	data, _ := json.Marshal(BuildSessionGraph(RoadmapEntry{Name: "empty-session"}))
+	if !strings.Contains(string(data), `"nodes":[]`) {
+		t.Errorf(`"nodes":[] が含まれない: %s`, data)
 	}
 }
 

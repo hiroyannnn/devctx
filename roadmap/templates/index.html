@@ -1224,8 +1224,9 @@ function buildSemanticGraph(graphData) {
         edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
       }
 
-      if (!isAllProjects && (!session.nodes || session.nodes.length === 0)) {
-        // No DAG data — show warning (skip in All Projects to reduce noise)
+      if (!session.nodes || session.nodes.length === 0) {
+        // No DAG data — All Projects ではノイズになるので warning を出さずに打ち切る
+        if (isAllProjects) return;
         var warnId = sessionPrefix + 'warn';
         nodes.push({
           id: warnId, label: '\u26A0 No roadmap', shape: 'box',
@@ -1241,7 +1242,8 @@ function buildSemanticGraph(graphData) {
       // Map graph node IDs to vis-network IDs — skip Goal nodes (integrated into session)
       var idMap = {};
       // Filter out edges from/to goal for level computation
-      var nonGoalEdges = session.edges.filter(function(e) { return e.from !== 'goal' && e.to !== 'goal'; });
+      var sessionEdges = session.edges || [];
+      var nonGoalEdges = sessionEdges.filter(function(e) { return e.from !== 'goal' && e.to !== 'goal'; });
 
       session.nodes.forEach(function(gn) {
         if (gn.type === 'goal') return; // Goal is merged into session node
@@ -1283,7 +1285,7 @@ function buildSemanticGraph(graphData) {
       });
 
       // Connect fork/rejected edges from session node instead of goal node
-      session.edges.forEach(function(ge) {
+      sessionEdges.forEach(function(ge) {
         if (ge.from === 'goal') {
           // Remap: goal → task becomes session → task
           var toVis = idMap[ge.to];

@@ -95,6 +95,9 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		AgentStateAt:   entry.AgentStateAt,
 		AgentStateLabel: entry.AgentStateLabel,
 		AgentWaiting:    entry.AgentWaiting,
+		// nil だと JSON が null になり、フロントの session.edges.filter 等が落ちる
+		Nodes: []GraphNode{},
+		Edges: []GraphEdge{},
 	}
 
 	if entry.Goal == "" && len(entry.Tasks) == 0 {
