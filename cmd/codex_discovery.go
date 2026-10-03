@@ -180,6 +180,7 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 			SessionName:    index[meta.SessionID].ThreadName,
 			TranscriptPath: path,
 			ProjectPath:    meta.Cwd,
+			Branch:         meta.GitBranch,
 			LastModified:   info.ModTime(),
 			IsRegistered:   store.FindByProviderSession(model.ProviderCodex, meta.SessionID) != nil,
 		})

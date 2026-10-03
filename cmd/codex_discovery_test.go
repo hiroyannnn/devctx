@@ -189,3 +189,19 @@ func TestNewCodexAdapter_HomeFromEnv(t *testing.T) {
 		t.Fatalf("unexpected: %+v", a)
 	}
 }
+
+func TestCodexAdapter_Discover_UsesSessionBranch(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	line := `{"type":"session_meta","payload":{"id":"id-br","timestamp":"2026-10-03T00:00:00Z","cwd":"/w/a",` +
+		`"git":{"branch":"feat/start","commit_hash":"abc"},"originator":"Codex Desktop","source":"vscode","thread_source":"user"}}`
+	writeRollout(t, home, "2026/10/03", "id-br", line, now.Add(-time.Hour))
+
+	sessions, err := codexAdapter{home: home, days: 14, now: func() time.Time { return now }}.Discover(&model.Store{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Branch != "feat/start" {
+		t.Fatalf("Branch should come from session_meta git.branch (the branch the session ran on), got %+v", sessions)
+	}
+}

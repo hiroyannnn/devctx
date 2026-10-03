@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os/exec"
 	"testing"
 	"time"
 
@@ -150,5 +151,27 @@ func TestSelectAdapters(t *testing.T) {
 	}
 	if _, err := selectAdapters("bogus"); err == nil {
 		t.Fatal("unknown provider must error")
+	}
+}
+
+func TestResolveSessionPlacement_KeepsCodexSessionBranch(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "checked-out-now"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	got := resolveSessionPlacement(DiscoveredSession{Provider: model.ProviderCodex, ProjectPath: repo, Branch: "feat/start"})
+	if got.Branch != "feat/start" {
+		t.Fatalf("Branch = %q, want the session's branch, not the repo's current checkout", got.Branch)
+	}
+	if got.Worktree == "" {
+		t.Fatalf("Worktree should be resolved to the git toplevel")
 	}
 }

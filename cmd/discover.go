@@ -297,7 +297,11 @@ func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
 			return sess
 		}
 		sess.RepoRoot = detectRepoRoot(sess.Worktree)
-		sess.Branch = getGitBranch(sess.Worktree)
+		// Why not always read the checkout: the repo may have moved to another branch since the
+		// session ran; session_meta.git.branch is the branch the session actually worked on
+		if sess.Branch == "" {
+			sess.Branch = getGitBranch(sess.Worktree)
+		}
 	default:
 		// Claude は従来どおり cwd をそのまま worktree として扱う
 		sess.Worktree = sess.ProjectPath
