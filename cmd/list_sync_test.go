@@ -24,11 +24,14 @@ func TestSyncCodexSessions(t *testing.T) {
 	writeRollout(t, codexHome, "2026/10/03", "id-auto", metaLine("id-auto", cwd, "automation", `"vscode"`), now.Add(-time.Hour))
 	adapter := codexAdapter{home: codexHome, days: 2, now: func() time.Time { return now }}
 
-	imported, changed, err := syncCodexSessions(s, adapter)
-	if err != nil || len(imported) != 1 || !changed {
-		t.Fatalf("imported=%v changed=%v err=%v", imported, changed, err)
+	imported, updated, err := syncCodexSessions(s, adapter, mustLoadStore(t, s))
+	if err != nil || len(imported) != 1 || updated == nil {
+		t.Fatalf("imported=%v updated=%v err=%v", imported, updated, err)
 	}
 	saved, _ := s.LoadStore()
+	if len(updated.Contexts) != len(saved.Contexts) {
+		t.Fatalf("returned store should be what was written: %+v vs %+v", updated.Contexts, saved.Contexts)
+	}
 	if len(saved.Contexts) != 1 || saved.Contexts[0].Provider != model.ProviderCodex ||
 		saved.Contexts[0].SessionID != "id-new" || saved.Contexts[0].Worktree != cwd {
 		t.Fatalf("unexpected store: %+v", saved.Contexts)
@@ -36,9 +39,9 @@ func TestSyncCodexSessions(t *testing.T) {
 
 	// 2 回目は何も変わらない（import なし）
 	before, _ := os.Stat(filepath.Join(os.Getenv("HOME"), ".config", "devctx", "contexts.yaml"))
-	imported, changed, err = syncCodexSessions(s, adapter)
-	if err != nil || len(imported) != 0 || changed {
-		t.Fatalf("second sync imported=%v changed=%v err=%v", imported, changed, err)
+	imported, updated, err = syncCodexSessions(s, adapter, mustLoadStore(t, s))
+	if err != nil || len(imported) != 0 || updated != nil {
+		t.Fatalf("second sync imported=%v updated=%v err=%v", imported, updated, err)
 	}
 	after, _ := os.Stat(filepath.Join(os.Getenv("HOME"), ".config", "devctx", "contexts.yaml"))
 	if !after.ModTime().Equal(before.ModTime()) {
@@ -64,9 +67,9 @@ func TestSyncCodexSessions_RefreshesRegisteredFromTranscript(t *testing.T) {
 	}
 
 	adapter := codexAdapter{home: codexHome, days: 2, now: func() time.Time { return now }, skipResumedSearch: true}
-	imported, changed, err := syncCodexSessions(s, adapter)
-	if err != nil || len(imported) != 0 || !changed {
-		t.Fatalf("imported=%v changed=%v err=%v", imported, changed, err)
+	imported, updated, err := syncCodexSessions(s, adapter, mustLoadStore(t, s))
+	if err != nil || len(imported) != 0 || updated == nil {
+		t.Fatalf("imported=%v updated=%v err=%v", imported, updated, err)
 	}
 	saved, _ := s.LoadStore()
 	got := saved.Contexts[0]
@@ -82,6 +85,51 @@ func mustLoadStore(t *testing.T, s *storage.Storage) *model.Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestSyncCodexSessions_DryRunDoesNotMutateLoadedStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := storage.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexHome := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	transcript := writeRollout(t, codexHome, "2026/08/01", "id-old", metaLine("id-old", "/w/x", "user", `"cli"`), now.Add(-10*time.Minute))
+	stale := now.Add(-48 * time.Hour)
+	if err := s.SaveStore(&model.Store{Contexts: []model.Context{
+		{Name: "x-codex", Provider: model.ProviderCodex, SessionID: "id-old", TranscriptPath: transcript, LastSeen: stale},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	loaded := mustLoadStore(t, s)
+	adapter := codexAdapter{home: codexHome, days: 2, now: func() time.Time { return now }, skipResumedSearch: true, skipRegistered: true}
+	if _, updated, err := syncCodexSessions(s, adapter, loaded); err != nil || updated == nil {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	if !loaded.Contexts[0].LastSeen.Equal(stale) {
+		t.Fatalf("the caller's store must not be mutated by the dry run: %v", loaded.Contexts[0].LastSeen)
+	}
+}
+
+func TestSyncCodexSessions_KeepsThreadNameWithSyncAdapter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := storage.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexHome := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	writeRollout(t, codexHome, "2026/10/03", "id-new", metaLine("id-new", t.TempDir(), "user", `"vscode"`), now.Add(-time.Hour))
+	idx := `{"id":"id-new","thread_name":"Named thread","updated_at":"2026-10-03T11:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(codexHome, "session_index.jsonl"), []byte(idx), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adapter := codexAdapter{home: codexHome, days: 2, now: func() time.Time { return now }, skipResumedSearch: true, skipRegistered: true}
+	_, updated, err := syncCodexSessions(s, adapter, mustLoadStore(t, s))
+	if err != nil || updated == nil || len(updated.Contexts) != 1 || updated.Contexts[0].SessionName != "Named thread" {
+		t.Fatalf("updated=%+v err=%v", updated, err)
+	}
 }
 
 func TestFirstRunImport(t *testing.T) {

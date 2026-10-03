@@ -106,38 +106,27 @@ var listCmd = &cobra.Command{
 			retentionDays = config.DoneRetentionDays
 		}
 
-		// Names-only mode for shell completion
-		if listNamesOnly {
-			autoSyncCodex(s, config, true)
-			store, err := s.LoadStore()
-			if err != nil {
-				return err
-			}
-			for _, ctx := range store.ActiveWithRetention(retentionDays) {
-				fmt.Println(ctx.Name)
-			}
-			return nil
+		store, err := s.LoadStore()
+		if err != nil {
+			return err
 		}
 
-		// fzf mode for interactive selection (dx): sync first so new Codex sessions are selectable
-		if listFzf {
-			autoSyncCodex(s, config, true)
-			store, err := s.LoadStore()
-			if err != nil {
-				return err
+		// Names-only mode for shell completion / fzf mode for interactive selection (dx):
+		// sync first so new Codex sessions are selectable
+		if listNamesOnly || listFzf {
+			if synced := autoSyncCodex(s, config, store, true); synced != nil {
+				store = synced
 			}
 			for _, ctx := range store.ActiveWithRetention(retentionDays) {
+				if listNamesOnly {
+					fmt.Println(ctx.Name)
+					continue
+				}
 				status := statusIcon(ctx.Status)
 				lastSeen := formatRelativeTime(ctx.LastSeen)
 				fmt.Printf("%s\t%s\t%s\t%s\n", ctx.Name, status, ctx.Branch, lastSeen)
 			}
 			return nil
-		}
-
-		// Auto-discover and import on first run
-		store, err := s.LoadStore()
-		if err != nil {
-			return err
 		}
 
 		// Auto-import if enabled (default: true)
@@ -147,18 +136,20 @@ var listCmd = &cobra.Command{
 				fmt.Println(dimStyle.Render("Auto-importing discovered sessions..."))
 				fmt.Println()
 
-				if _, err := firstRunImport(s, sessions, time.Now()); err != nil {
+				updated, err := firstRunImport(s, sessions, time.Now())
+				if err != nil {
 					return err
+				}
+				if updated != nil {
+					store = updated
 				}
 			}
 		}
 
 		// 直近の対話的な Codex セッションを毎回同期する（Claude の初回取り込みの後: 先に Codex を
 		// 入れると store が空でなくなり、初回取り込みが動かなくなるため）
-		if autoSyncCodex(s, config, false) {
-			if reloaded, err := s.LoadStore(); err == nil {
-				store = reloaded
-			}
+		if synced := autoSyncCodex(s, config, store, false); synced != nil {
+			store = synced
 		}
 
 		// Watch mode with interactive scrolling
@@ -782,36 +773,36 @@ func newCodexSyncAdapter() codexAdapter {
 	a := newCodexAdapter()
 	a.days = codexSyncDays
 	a.skipResumedSearch = true
+	a.skipRegistered = true
 	return a
 }
 
-// autoSyncCodex は AutoImport が有効なとき Codex セッションを同期する。失敗しても list は続ける。
-// quiet なら何も表示しない（補完や fzf の出力を汚さないため）。store を書き換えたら true。
-func autoSyncCodex(s *storage.Storage, config *model.Config, quiet bool) bool {
+// autoSyncCodex は AutoImport が有効なとき、読み込み済みの store を使って Codex セッションを同期する。
+// 失敗しても list は続ける。quiet なら何も表示しない（補完や fzf の出力を汚さないため）。
+// store を書き換えたときだけ、保存した store を返す（呼び出し側は再読み込み不要）。
+func autoSyncCodex(s *storage.Storage, config *model.Config, store *model.Store, quiet bool) *model.Store {
 	if !autoImportEnabled(config) {
-		return false
+		return nil
 	}
-	imported, changed, err := syncCodexSessions(s, newCodexSyncAdapter())
+	imported, updated, err := syncCodexSessions(s, newCodexSyncAdapter(), store)
 	if err != nil {
-		return false
+		return nil
 	}
 	if !quiet && len(imported) > 0 {
 		fmt.Println(dimStyle.Render(fmt.Sprintf("Auto-imported %d Codex session(s)", len(imported))))
 	}
-	return changed
+	return updated
 }
 
 // syncCodexSessions は直近の Codex セッションを取り込み、取り込み済みセッションの LastSeen を
 // TranscriptPath の mtime で進める。変更がなければ contexts.yaml を書き換えない
-// （list のたびに mtime が動かないように）。changed は store を書き換えたか。
-func syncCodexSessions(s *storage.Storage, adapter codexAdapter) (imported []string, changed bool, err error) {
-	store, err := s.LoadStore()
-	if err != nil {
-		return nil, false, err
-	}
+// （list のたびに mtime が動かないように）。書き換えたときは保存した store を updated で返す。
+// Why dry-run on a copy: list のたびにロックして contexts.yaml を再読み込みするより、
+// 読み込み済みの store で変更の有無だけ先に判定する方が安い。
+func syncCodexSessions(s *storage.Storage, adapter codexAdapter, store *model.Store) (imported []string, updated *model.Store, err error) {
 	sessions, err := adapter.Discover(store)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	resolved := resolvePlacements(sessions)
 	// stat はロック外で済ませる
@@ -825,19 +816,36 @@ func syncCodexSessions(s *storage.Storage, adapter codexAdapter) (imported []str
 		}
 	}
 
+	now := time.Now()
+	preview := &model.Store{Contexts: append([]model.Context(nil), store.Contexts...)}
+	if _, changed := applyCodexSync(preview, resolved, transcriptMtimes, now); !changed {
+		return nil, nil, nil
+	}
+
 	err = s.UpdateStore(func(locked *model.Store) error {
-		imported, changed = mergeDiscoveredSessions(locked, resolved, time.Now())
-		for i := range locked.Contexts {
-			c := &locked.Contexts[i]
-			if mtime, ok := transcriptMtimes[c.SessionID]; ok && tracksPerSession(c.EffectiveProvider()) && mtime.After(c.LastSeen) {
-				c.LastSeen = mtime
-				changed = true
-			}
-		}
+		var changed bool
+		imported, changed = applyCodexSync(locked, resolved, transcriptMtimes, now)
 		if !changed {
 			return storage.ErrSkipSave
 		}
+		updated = locked
 		return nil
 	})
-	return imported, changed, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return imported, updated, nil
+}
+
+// applyCodexSync は探索結果のマージと、取り込み済みセッションの LastSeen 更新を store に適用する。
+func applyCodexSync(store *model.Store, sessions []DiscoveredSession, transcriptMtimes map[string]time.Time, now time.Time) (imported []string, changed bool) {
+	imported, changed = mergeDiscoveredSessions(store, sessions, now)
+	for i := range store.Contexts {
+		c := &store.Contexts[i]
+		if mtime, ok := transcriptMtimes[c.SessionID]; ok && tracksPerSession(c.EffectiveProvider()) && mtime.After(c.LastSeen) {
+			c.LastSeen = mtime
+			changed = true
+		}
+	}
+	return imported, changed
 }

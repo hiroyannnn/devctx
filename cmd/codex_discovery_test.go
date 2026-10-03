@@ -231,3 +231,17 @@ func TestRolloutSessionID(t *testing.T) {
 		t.Fatalf("non-rollout file should not match")
 	}
 }
+
+func TestCodexAdapter_Discover_SkipRegistered(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	writeRollout(t, home, "2026/10/03", "id-reg", metaLine("id-reg", "/w/a", "user", `"cli"`), now.Add(-time.Hour))
+	writeRollout(t, home, "2026/10/03", "id-new", metaLine("id-new", "/w/b", "user", `"cli"`), now.Add(-time.Hour))
+	store := &model.Store{Contexts: []model.Context{{Name: "reg", Provider: model.ProviderCodex, SessionID: "id-reg"}}}
+
+	all, _ := codexAdapter{home: home, days: 2, now: func() time.Time { return now }}.Discover(store)
+	quick, _ := codexAdapter{home: home, days: 2, now: func() time.Time { return now }, skipRegistered: true}.Discover(store)
+	if len(all) != 2 || len(quick) != 1 || quick[0].SessionID != "id-new" {
+		t.Fatalf("all=%d quick=%+v; registered rollouts are skipped only when requested (discover --all must still list them)", len(all), quick)
+	}
+}

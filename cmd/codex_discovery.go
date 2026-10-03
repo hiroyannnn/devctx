@@ -102,6 +102,10 @@ type codexAdapter struct {
 	// この探索は全日付ディレクトリを走査するため、毎回走る list の同期では省き、
 	// 取り込み済みセッションの更新は保存済みの TranscriptPath の mtime で追う。
 	skipResumedSearch bool
+	// skipRegistered は登録済みセッションの rollout を開かない（1 行目の読み込みも stat もしない）。
+	// list の同期用: 登録済みの LastSeen は保存済みの TranscriptPath の mtime で追えるため、
+	// 毎回の list で全ファイルを開くコストを省く。discover --all は登録済みも表示するので使わない。
+	skipRegistered bool
 }
 
 // newCodexAdapter は $CODEX_HOME（未設定なら ~/.codex）を見る adapter を返す。
@@ -134,7 +138,14 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 	}
 
 	now := a.now()
-	index := readCodexIndex(filepath.Join(a.home, "session_index.jsonl"))
+	// Why lazy: 同期で新規セッションが無く再開探索も省くときは、index を読む必要がない
+	var index map[string]codexIndexEntry
+	loadIndex := func() map[string]codexIndexEntry {
+		if index == nil {
+			index = readCodexIndex(filepath.Join(a.home, "session_index.jsonl"))
+		}
+		return index
+	}
 	cutoff := now.AddDate(0, 0, -a.days)
 
 	var paths []string
@@ -156,7 +167,7 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 	// 全日付ディレクトリの走査は高いので、対象 id をまとめて 1 回だけ glob する
 	if !a.skipResumedSearch {
 		missing := map[string]bool{}
-		for id, entry := range index {
+		for id, entry := range loadIndex() {
 			if !entry.UpdatedAt.Before(cutoff) && !haveID[id] {
 				missing[id] = true
 			}
@@ -174,6 +185,11 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 	var sessions []DiscoveredSession
 	seenID := map[string]bool{}
 	for _, path := range paths {
+		if a.skipRegistered {
+			if id, ok := rolloutSessionID(path); ok && store.FindByProviderSession(model.ProviderCodex, id) != nil {
+				continue
+			}
+		}
 		meta, err := readCodexSessionMeta(path)
 		if err != nil || !isInteractiveCodexSession(meta) || seenID[meta.SessionID] {
 			continue
@@ -186,7 +202,7 @@ func (a codexAdapter) Discover(store *model.Store) ([]DiscoveredSession, error) 
 		sessions = append(sessions, DiscoveredSession{
 			Provider:       model.ProviderCodex,
 			SessionID:      meta.SessionID,
-			SessionName:    index[meta.SessionID].ThreadName,
+			SessionName:    loadIndex()[meta.SessionID].ThreadName,
 			TranscriptPath: path,
 			ProjectPath:    meta.Cwd,
 			Branch:         meta.GitBranch,
