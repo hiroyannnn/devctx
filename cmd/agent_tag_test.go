@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 )
 
@@ -19,7 +20,7 @@ func TestAgentTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := agentTag(tt.ctx); got != tt.want {
+			if got := agentTag(tt.ctx, agentview.HookView(tt.ctx)); got != tt.want {
 				t.Fatalf("agentTag = %q, want %q", got, tt.want)
 			}
 		})

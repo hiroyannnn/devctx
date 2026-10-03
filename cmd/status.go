@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
@@ -29,6 +30,9 @@ type LiveStatus struct {
 	SessionStatus SessionStatus
 	LastActivity  time.Time
 	LastRole      string
+	// Reason は live の待ち理由（permission prompt 等）。Source は状態の出どころ（live / hook / 空=transcript 推論）
+	Reason string
+	Source string
 }
 
 var watchMode bool
@@ -58,12 +62,12 @@ Status indicators:
 			return watchStatus(store)
 		}
 
-		return showStatus(store)
+		return showStatus(store, newLiveViews(0))
 	},
 }
 
-func showStatus(store *model.Store) error {
-	statuses := getLiveStatuses(store)
+func showStatus(store *model.Store, live *liveViews) error {
+	statuses := getLiveStatuses(store, live.views(store.Active()))
 
 	if len(statuses) == 0 {
 		fmt.Println("No contexts registered.")
@@ -111,6 +115,10 @@ func showStatus(store *model.Store) error {
 			lastActivity = fmt.Sprintf(" (%s)", formatRelativeTime(ls.LastActivity))
 		}
 
+		if ls.Reason != "" {
+			status += idleStyle.Render(" · " + ls.Reason)
+		}
+
 		fmt.Printf("%s %s%s\n", name, status, idleStyle.Render(lastActivity))
 		fmt.Printf("    %s %s\n", statusIcon(ls.Context.Status), ls.Context.Status)
 		if ls.Context.Branch != "" {
@@ -129,21 +137,26 @@ func watchStatus(store *model.Store) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
+	// watch は 2 秒 tick。claude の実行は間隔を空けて snapshot を使い回す
+	live := newLiveViews(kanbanLiveInterval)
+
 	// Initial display
-	showStatus(store)
+	showStatus(store, live)
 
 	for range ticker.C {
 		// Clear and redraw
 		fmt.Print("\033[H\033[2J")
 		fmt.Println("Watching session status... (Ctrl+C to exit)")
 		fmt.Printf("Updated: %s\n\n", time.Now().Format("15:04:05"))
-		showStatus(store)
+		showStatus(store, live)
 	}
 
 	return nil
 }
 
-func getLiveStatuses(store *model.Store) []LiveStatus {
+// getLiveStatuses は context ごとの稼働状態を返す。優先順位は live（agent view）→ hook → transcript 推論。
+// views は agentview.Overlay の結果（nil なら hook と transcript のみ）。
+func getLiveStatuses(store *model.Store, views map[string]agentview.View) []LiveStatus {
 	var statuses []LiveStatus
 
 	for _, ctx := range store.Active() {
@@ -157,6 +170,14 @@ func getLiveStatuses(store *model.Store) []LiveStatus {
 			ls.SessionStatus = status
 			ls.LastActivity = lastActivity
 			ls.LastRole = lastRole
+		}
+
+		// live / hook で状態が分かるなら transcript の mtime 推論より優先する
+		view := agentview.ViewFor(views, ctx)
+		if status, ok := sessionStatusFromAgentState(view.State); ok {
+			ls.SessionStatus = status
+			ls.Reason = view.Reason
+			ls.Source = view.Source
 		}
 
 		statuses = append(statuses, ls)
@@ -230,4 +251,18 @@ func getLastMessageRole(transcriptPath string) string {
 func init() {
 	rootCmd.AddCommand(statusCmd)
 	statusCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode - continuously update status")
+}
+
+// sessionStatusFromAgentState は agent の状態を status 表示用の区分に写す。
+// turn_done もユーザーの番なので waiting 扱い。ended は offline。
+func sessionStatusFromAgentState(state model.AgentState) (SessionStatus, bool) {
+	switch state {
+	case model.AgentRunning:
+		return SessionStatusActive, true
+	case model.AgentNeedsInput, model.AgentTurnDone:
+		return SessionStatusWaiting, true
+	case model.AgentEnded:
+		return SessionStatusOffline, true
+	}
+	return "", false
 }

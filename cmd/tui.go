@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
@@ -52,7 +53,8 @@ func init() {
 
 // Item implements list.Item
 type contextItem struct {
-	ctx model.Context
+	ctx  model.Context
+	view agentview.View
 }
 
 func (i contextItem) Title() string {
@@ -61,7 +63,7 @@ func (i contextItem) Title() string {
 }
 
 func (i contextItem) Description() string {
-	parts := []string{agentTag(i.ctx), i.ctx.Branch}
+	parts := []string{agentTag(i.ctx, i.view), i.ctx.Branch}
 	if i.ctx.Note != "" {
 		note := i.ctx.Note
 		if len(note) > 40 {
@@ -86,6 +88,7 @@ type tuiModel struct {
 	storage           *storage.Storage
 	selectedForResume *model.Context
 	err               error
+	live              *liveViews
 }
 
 type keyMap struct {
@@ -118,22 +121,28 @@ func newKeyMap() keyMap {
 
 var keys = newKeyMap()
 
-func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
+// buildItems は status 順の一覧を作る。live 状態は表示用の view としてのみ持ち、store には入れない。
+func buildItems(store *model.Store, live *liveViews) []list.Item {
+	views := live.views(store.Active())
 	items := make([]list.Item, 0)
-
-	// Group by status
 	statuses := []model.Status{
 		model.StatusInProgress,
 		model.StatusReview,
 		model.StatusBlocked,
 		model.StatusDone,
 	}
-
 	for _, status := range statuses {
 		for _, ctx := range store.ByStatus(status) {
-			items = append(items, contextItem{ctx: ctx})
+			items = append(items, contextItem{ctx: ctx, view: agentview.ViewFor(views, ctx)})
 		}
 	}
+	return items
+}
+
+func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
+	// 初回構築と refresh のたびに同期取得する（View() 内では取得しない）
+	live := newLiveViews(0)
+	items := buildItems(store, live)
 
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("39"))
@@ -162,6 +171,7 @@ func newTuiModel(store *model.Store, s *storage.Storage) tuiModel {
 		list:    l,
 		store:   store,
 		storage: s,
+		live:    live,
 	}
 }
 
@@ -232,19 +242,7 @@ func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {
-	items := make([]list.Item, 0)
-	statuses := []model.Status{
-		model.StatusInProgress,
-		model.StatusReview,
-		model.StatusBlocked,
-		model.StatusDone,
-	}
-
-	for _, status := range statuses {
-		for _, ctx := range m.store.ByStatus(status) {
-			items = append(items, contextItem{ctx: ctx})
-		}
-	}
+	items := buildItems(m.store, m.live)
 
 	m.list.SetItems(items)
 	return m, nil
