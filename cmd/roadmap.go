@@ -234,6 +234,8 @@ The dashboard auto-refreshes every 5 seconds.`,
 
 		scanner := roadmap.NewScanner()
 		server := roadmap.NewServer(s, s, s, scanner, roadmapServePort)
+		// Claude の live 状態は `claude agents --json` で補う。取得失敗時は hook 状態のまま表示される
+		server.Live = roadmap.NewLiveRefresher(nil)
 		return server.ListenAndServe()
 	},
 }

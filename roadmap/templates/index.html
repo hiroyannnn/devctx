@@ -517,9 +517,16 @@ function phaseIndex(phase) {
 // Waiting-for-user amber; keep in sync with .card.agent-waiting in the stylesheet.
 var AGENT_WAITING_STYLE = { color: { border: '#d29922', background: '#2d2208' }, borderWidth: 3 };
 
-// "codex · needs input" line for Mind Map session nodes
+// "needs input · permission prompt": label plus the waiting reason (both server-provided)
+function agentStateText(item) {
+  if (!item.agent_state_label) return '';
+  return item.agent_waiting_for ? item.agent_state_label + ' \u00B7 ' + item.agent_waiting_for : item.agent_state_label;
+}
+
+// "claude · needs input · permission prompt" line for Mind Map session nodes
 function agentLine(item) {
-  return item.agent_state_label ? item.provider + ' \u00B7 ' + item.agent_state_label : item.provider;
+  var text = agentStateText(item);
+  return text ? item.provider + ' \u00B7 ' + text : item.provider;
 }
 
 // Session node style: waiting for the user overrides the attention color
@@ -702,7 +709,9 @@ function createCard(entry) {
   if (entry.agent_state_label) {
     var agentState = document.createElement('span');
     agentState.className = 'badge agent-state' + (entry.agent_waiting ? ' waiting' : '');
-    agentState.textContent = entry.agent_state_label;
+    agentState.textContent = agentStateText(entry);
+    // Subtle hint that the state comes from the live agent view rather than hooks
+    if (entry.agent_state_source === 'live') agentState.title = 'live (claude agents)';
     header.appendChild(agentState);
   }
   if (entry.agent_waiting) card.classList.add('agent-waiting');

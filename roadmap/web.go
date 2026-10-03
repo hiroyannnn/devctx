@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hiroyannnn/devctx/agentview"
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 )
@@ -82,14 +83,20 @@ type RoadmapEntry struct {
 	// 表示用。待ち判定とラベルは model 側を正とし、Web で判定を再実装しない
 	AgentStateLabel string                `json:"agent_state_label,omitempty"`
 	AgentWaiting    bool                  `json:"agent_waiting,omitempty"`
+	// 待ちの理由（permission prompt 等）と状態の出どころ（live / hook）。live は agent view 由来
+	AgentWaitingFor  string                `json:"agent_waiting_for,omitempty"`
+	AgentStateSource string                `json:"agent_state_source,omitempty"`
 }
 
-// applyAgentFields は provider（空なら claude）と hook 由来のエージェント状態を entry に写す。
-func applyAgentFields(entry *RoadmapEntry, ctx model.Context) {
+// applyAgentFields は provider（空なら claude）と、view（live と hook を突き合わせた状態）を entry に写す。
+// AgentStateAt は hook の観測時刻のまま（live には観測時刻がない）。
+func applyAgentFields(entry *RoadmapEntry, ctx model.Context, view agentview.View) {
 	entry.Provider = ctx.EffectiveProvider()
-	entry.AgentState = ctx.AgentState
-	entry.AgentStateLabel = ctx.AgentState.Label()
-	entry.AgentWaiting = ctx.AgentState.WaitsForUser()
+	entry.AgentState = view.State
+	entry.AgentStateLabel = view.State.Label()
+	entry.AgentWaiting = view.State.WaitsForUser()
+	entry.AgentWaitingFor = view.Reason
+	entry.AgentStateSource = view.Source
 	if !ctx.AgentStateAt.IsZero() {
 		entry.AgentStateAt = ctx.AgentStateAt.Format(time.RFC3339)
 	}
@@ -102,6 +109,10 @@ type Server struct {
 	EventLoader   EventLoader
 	Scanner       *Scanner
 	Port          int
+	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
+	Live LiveSource
+	// Toplevel は live セッションの cwd から git toplevel を引く。nil なら agentview.GitToplevel
+	Toplevel func(cwd string) string
 
 	cacheMu      sync.RWMutex
 	cachedResult []byte
@@ -109,6 +120,15 @@ type Server struct {
 }
 
 const cacheTTL = 5 * time.Second
+
+// agentViews は active な context に agent view を重ねた表示状態を返す。store には書き戻さない。
+func (s *Server) agentViews(active []model.Context) map[string]agentview.View {
+	var snap agentview.Snapshot
+	if s.Live != nil {
+		snap = s.Live.Snapshot()
+	}
+	return agentview.Overlay(active, snap, s.Toplevel)
+}
 
 // NewServer creates a new Server.
 func NewServer(loader StoreLoader, insightLoader InsightLoader, eventLoader EventLoader, scanner *Scanner, port int) *Server {
@@ -188,6 +208,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
+	views := s.agentViews(active)
 
 	// Load insights (non-fatal if fails)
 	var insights *model.InsightStore
@@ -224,7 +245,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
-		applyAgentFields(&entry, ctx)
+		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
 
 		// Merge milestone data
 		if events != nil {
@@ -278,6 +299,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
+	views := s.agentViews(active)
 
 	var insights *model.InsightStore
 	if s.InsightLoader != nil {
@@ -314,7 +336,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
-		applyAgentFields(&entry, ctx)
+		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
 
 		if events != nil {
 			summary := events.Summarize(ctx.Name)
@@ -379,6 +401,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active := store.Active()
+	views := s.agentViews(active)
 
 	var insights *model.InsightStore
 	if s.InsightLoader != nil {
@@ -421,7 +444,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			IssueURL: ctx.IssueURL,
 			LastSeen: ctx.LastSeen.Format(time.RFC3339),
 		}
-		applyAgentFields(&entry, ctx)
+		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
 
 		if insights != nil {
 			if insight := insights.Get(ctx.Name); insight != nil {
