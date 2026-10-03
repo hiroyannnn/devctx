@@ -24,7 +24,7 @@ type HookConfig struct {
 type Hook struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
-	// Async は Codex の非同期 hook（エージェントを待たせない）。Claude では使わない
+	// Async は非同期 hook（エージェントを待たせない）。Claude の PermissionRequest / PreToolUse と Codex の状態 hook で使う
 	Async bool `json:"async,omitempty"`
 	// Timeout は秒。Codex の SessionEnd は既定 1s と短いため明示する
 	Timeout int `json:"timeout,omitempty"`
@@ -207,6 +207,7 @@ func devctxCommand(devctxPath, args string) []Hook {
 // 表示（devctx hooks）とインストール（--install）の両方がこれを使う。
 func devctxHookSpecs(devctxPath string) []hookEventSpec {
 	command := func(args string) []Hook { return devctxCommand(devctxPath, args) }
+	asyncCommand := []Hook{{Type: "command", Command: devctxPath + " touch --quick --track-state", Async: true}}
 	return []hookEventSpec{
 		{"SessionStart", []HookConfig{
 			{Matcher: "startup", Hooks: command("register")},
@@ -220,6 +221,11 @@ func devctxHookSpecs(devctxPath string) []hookEventSpec {
 			{Hooks: command("touch --quick --track-state")},
 		}},
 		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state")}}},
+		// 何を待っているか（待ち要求）の記録。許可ダイアログは tool_name を持つ PermissionRequest で、
+		// 質問 UI は許可ではないので PreToolUse を AskUserQuestion に限って拾う。
+		// async にするのは、許可ダイアログの表示をこの hook で遅らせないため
+		{"PermissionRequest", []HookConfig{{Hooks: asyncCommand}}},
+		{"PreToolUse", []HookConfig{{Matcher: "AskUserQuestion", Hooks: asyncCommand}}},
 	}
 }
 
@@ -238,6 +244,9 @@ func codexHookSpecs(devctxPath string) []hookEventSpec {
 		{"PermissionRequest", []HookConfig{{Hooks: track}}},
 		// 許可が承認されてツールが動いたら running に戻す（承認後に Stop まで needs_input が残らないように）
 		{"PostToolUse", []HookConfig{{Hooks: track}}},
+		// 質問ツールは許可ではなく PreToolUse で待ちに入る。拒否には hook が無いので、ユーザー中断（Interrupt）で待ちを解消する
+		{"PreToolUse", []HookConfig{{Matcher: "request_user_input", Hooks: track}}},
+		{"Interrupt", []HookConfig{{Hooks: track}}},
 		{"Stop", []HookConfig{{Hooks: track}}},
 		{"SessionEnd", []HookConfig{{Hooks: end}}},
 	}

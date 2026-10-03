@@ -115,6 +115,9 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 		"Notification":     {"devctx touch --quick --track-state"},
 		"Stop":             {"devctx roadmap analyze --if-stale --background", "devctx touch --quick --track-state"},
 		"SessionEnd":       {"devctx touch --track-state"},
+		// 何を待っているかの記録。許可ダイアログは全ツール、質問は AskUserQuestion だけ
+		"PermissionRequest": {"devctx touch --quick --track-state"},
+		"PreToolUse":        {"devctx touch --quick --track-state"},
 	}
 	if len(configs) != len(want) {
 		t.Fatalf("events = %d, want %d", len(configs), len(want))
@@ -127,6 +130,54 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 			}
 		}
 		assertCommands(t, got, wantCmds...)
+	}
+}
+
+func TestDevctxHookSpecs_PendingRequestHooks(t *testing.T) {
+	configs := hookConfigsByEvent(devctxHookSpecs("devctx"))
+	perm := configs["PermissionRequest"]
+	if len(perm) != 1 || perm[0].Matcher != "" || !perm[0].Hooks[0].Async {
+		t.Errorf("PermissionRequest = %+v, want all tools, async", perm)
+	}
+	pre := configs["PreToolUse"]
+	if len(pre) != 1 || pre[0].Matcher != "AskUserQuestion" || !pre[0].Hooks[0].Async {
+		t.Errorf("PreToolUse = %+v, want AskUserQuestion matcher, async", pre)
+	}
+}
+
+func TestInstallHookSpecsToFile_ClaudeIsIdempotentAndEmitsAsync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	read := func() map[string]interface{} {
+		t.Helper()
+		if err := installHookSpecsToFile(path, devctxHookSpecs("devctx")); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]interface{}
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := read()
+	hooks := first["hooks"].(map[string]interface{})
+	pre := hooks["PreToolUse"].([]interface{})
+	if len(pre) != 1 {
+		t.Fatalf("PreToolUse configs = %d, want 1", len(pre))
+	}
+	cfg := pre[0].(map[string]interface{})
+	h := cfg["hooks"].([]interface{})[0].(map[string]interface{})
+	if cfg["matcher"] != "AskUserQuestion" || h["async"] != true {
+		t.Fatalf("PreToolUse = %v", cfg)
+	}
+	if _, ok := hooks["PermissionRequest"]; !ok {
+		t.Fatal("missing PermissionRequest")
+	}
+	if second := read(); !reflect.DeepEqual(first, second) {
+		t.Fatalf("second install changed the file:\nfirst:  %v\nsecond: %v", first, second)
 	}
 }
 
@@ -191,6 +242,8 @@ func TestCodexHookSpecs(t *testing.T) {
 		"UserPromptSubmit":  {{"", "devctx touch --quick --track-state --provider codex"}},
 		"PermissionRequest": {{"", "devctx touch --quick --track-state --provider codex"}},
 		"PostToolUse":       {{"", "devctx touch --quick --track-state --provider codex"}},
+		"PreToolUse":        {{"request_user_input", "devctx touch --quick --track-state --provider codex"}},
+		"Interrupt":         {{"", "devctx touch --quick --track-state --provider codex"}},
 		"Stop":              {{"", "devctx touch --quick --track-state --provider codex"}},
 		"SessionEnd":        {{"", "devctx touch --quick --track-state --provider codex"}},
 	}
@@ -296,7 +349,7 @@ func TestInstallCodexHooks_PreservesExistingAndIsIdempotent(t *testing.T) {
 	if other["command"] != "other-tool start" || other["timeout"] != float64(5) || other["statusMessage"] != "starting" {
 		t.Fatalf("unrelated hook was modified: %v", other)
 	}
-	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd"} {
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "PostToolUse", "PreToolUse", "Interrupt", "Stop", "SessionEnd"} {
 		if _, ok := hooks[event]; !ok {
 			t.Errorf("missing %s", event)
 		}
