@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -17,6 +16,7 @@ import (
 )
 
 type DiscoveredSession struct {
+	Provider       model.Provider
 	SessionID      string
 	SessionName    string // Claude Code's auto-generated name (slug)
 	TranscriptPath string
@@ -25,19 +25,31 @@ type DiscoveredSession struct {
 	LastModified   time.Time
 	MessageCount   int
 	IsRegistered   bool
+
+	// Branch は Codex では Discover が session_meta から入れ、空のときだけ resolveSessionPlacement が
+	// git から埋める。Claude は resolveSessionPlacement が埋める。
+	Branch string
+	// Worktree / RepoRoot は取り込み先の配置で、git 呼び出しを伴うため contexts.yaml のロック外で
+	// resolveSessionPlacement が埋める。空なら mergeDiscoveredSessions が ProjectPath を使う。
+	Worktree string
+	RepoRoot string
 }
 
 var (
-	discoverImport bool
-	discoverAll    bool
+	discoverImport   bool
+	discoverAll      bool
+	discoverProvider string
 )
 
 var discoverCmd = &cobra.Command{
 	Use:   "discover",
-	Short: "Discover existing Claude Code sessions",
-	Long: `Scan ~/.claude/projects/ to find existing Claude Code sessions.
+	Short: "Discover existing Claude Code and Codex sessions",
+	Long: `Scan ~/.claude/projects/ and ~/.codex/sessions/ ($CODEX_HOME) to find existing
+Claude Code and Codex sessions. Codex sessions are limited to interactive ones
+from the last 14 days (codex exec, subagents and other automated sessions are skipped).
 
 This helps you see sessions that weren't registered with devctx hooks.
+Use --provider to restrict the scan (claude|codex).
 Use --import to automatically register discovered sessions.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := storage.New()
@@ -49,13 +61,17 @@ Use --import to automatically register discovered sessions.`,
 			return err
 		}
 
-		sessions, err := discoverSessions(store)
+		adapters, err := selectAdapters(discoverProvider)
+		if err != nil {
+			return err
+		}
+		sessions, err := discoverFromAdapters(adapters, store)
 		if err != nil {
 			return err
 		}
 
 		if len(sessions) == 0 {
-			fmt.Println("No Claude Code sessions found.")
+			fmt.Println("No sessions found.")
 			return nil
 		}
 
@@ -77,7 +93,7 @@ Use --import to automatically register discovered sessions.`,
 
 		// Import if requested
 		if discoverImport {
-			return importSessions(s, store, displaySessions)
+			return importSessions(s, displaySessions)
 		}
 
 		fmt.Println()
@@ -85,80 +101,6 @@ Use --import to automatically register discovered sessions.`,
 
 		return nil
 	},
-}
-
-func discoverSessions(store *model.Store) ([]DiscoveredSession, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	claudeDir := filepath.Join(home, ".claude", "projects")
-	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	var sessions []DiscoveredSession
-
-	// Walk through project directories
-	entries, err := os.ReadDir(claudeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		projectHash := entry.Name()
-		projectDir := filepath.Join(claudeDir, projectHash)
-
-		// Find transcript files
-		transcripts, err := filepath.Glob(filepath.Join(projectDir, "*.jsonl"))
-		if err != nil {
-			continue
-		}
-
-		for _, transcriptPath := range transcripts {
-			info, err := os.Stat(transcriptPath)
-			if err != nil {
-				continue
-			}
-
-			sessionID := strings.TrimSuffix(filepath.Base(transcriptPath), ".jsonl")
-
-			// Try to get project path from transcript
-			projectPath := extractProjectPath(transcriptPath)
-
-			// Try to get session name (slug) from transcript
-			sessionName := extractSessionName(transcriptPath)
-
-			// Check if already registered
-			isRegistered := store.FindByProviderSession(model.ProviderClaude, sessionID) != nil
-
-			// Count messages
-			msgCount := countMessages(transcriptPath)
-
-			sessions = append(sessions, DiscoveredSession{
-				SessionID:      sessionID,
-				SessionName:    sessionName,
-				TranscriptPath: transcriptPath,
-				ProjectPath:    projectPath,
-				ProjectHash:    projectHash,
-				LastModified:   info.ModTime(),
-				MessageCount:   msgCount,
-				IsRegistered:   isRegistered,
-			})
-		}
-	}
-
-	// Sort by last modified (most recent first)
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].LastModified.After(sessions[j].LastModified)
-	})
-
-	return sessions, nil
 }
 
 func extractProjectPath(transcriptPath string) string {
@@ -258,7 +200,7 @@ func displayDiscoveredSessions(sessions []DiscoveredSession) {
 			sessionShort = sessionShort[:12] + "..."
 		}
 
-		fmt.Printf("%s %s\n", titleStyle.Render(sessionShort), statusTag)
+		fmt.Printf("%s %s %s\n", titleStyle.Render(sessionShort), pathStyle.Render("("+string(sess.Provider)+")"), statusTag)
 
 		if sess.SessionName != "" {
 			nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Italic(true)
@@ -269,39 +211,149 @@ func displayDiscoveredSessions(sessions []DiscoveredSession) {
 			fmt.Printf("  📁 %s\n", pathStyle.Render(shortenPath(sess.ProjectPath)))
 		}
 
-		fmt.Printf("  📝 %d messages  ⏱ %s\n",
-			sess.MessageCount,
-			pathStyle.Render(formatRelativeTime(sess.LastModified)))
+		if sess.MessageCount > 0 {
+			fmt.Printf("  📝 %d messages  ⏱ %s\n",
+				sess.MessageCount,
+				pathStyle.Render(formatRelativeTime(sess.LastModified)))
+		} else {
+			// Codex は行数を数えない（遅いため）ので件数は出さない
+			fmt.Printf("  ⏱ %s\n", pathStyle.Render(formatRelativeTime(sess.LastModified)))
+		}
 		fmt.Println()
 	}
 }
 
-func importSessions(s *storage.Storage, store *model.Store, sessions []DiscoveredSession) error {
-	imported := 0
+func importSessions(s *storage.Storage, sessions []DiscoveredSession) error {
+	imported, _, err := importDiscovered(s, sessions)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range imported {
+		fmt.Printf("✓ Imported [%s]\n", name)
+	}
+	if len(imported) > 0 {
+		fmt.Printf("\n✓ Imported %d session(s)\n", len(imported))
+	}
+	return nil
+}
+
+// importDiscovered は探索結果を store に取り込んで保存する。保存した store を返し、変更がなければ nil。
+func importDiscovered(s *storage.Storage, sessions []DiscoveredSession) (imported []string, updated *model.Store, err error) {
+	// git 呼び出しはロック外で済ませる（ロック保持中に外部コマンドを走らせない）
+	resolved := resolvePlacements(sessions)
+	err = s.UpdateStore(func(store *model.Store) error {
+		var changed bool
+		imported, changed = mergeDiscoveredSessions(store, resolved, time.Now())
+		if !changed {
+			return storage.ErrSkipSave
+		}
+		updated = store
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return imported, updated, nil
+}
+
+// selectAdapters は --provider の値から探索対象の adapter を選ぶ。空なら全 adapter。
+func selectAdapters(provider string) ([]ProviderAdapter, error) {
+	if provider == "" {
+		return providerAdapters(), nil
+	}
+	p, err := model.ParseProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	adapter, ok := adapterFor(p)
+	if !ok {
+		return nil, fmt.Errorf("provider %q has no session discovery", p)
+	}
+	return []ProviderAdapter{adapter}, nil
+}
+
+// discoverFromAdapters は adapter ごとの探索結果を LastModified の新しい順に束ねる。
+func discoverFromAdapters(adapters []ProviderAdapter, store *model.Store) ([]DiscoveredSession, error) {
+	var all []DiscoveredSession
+	for _, a := range adapters {
+		sessions, err := a.Discover(store)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.Provider(), err)
+		}
+		all = append(all, sessions...)
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		return all[i].LastModified.After(all[j].LastModified)
+	})
+	return all, nil
+}
+
+// resolvePlacements は各セッションの取り込み先を解決する（git を呼ぶのでロック外で使う）。
+func resolvePlacements(sessions []DiscoveredSession) []DiscoveredSession {
+	resolved := make([]DiscoveredSession, len(sessions))
+	for i, sess := range sessions {
+		resolved[i] = resolveSessionPlacement(sess)
+	}
+	return resolved
+}
+
+// resolveSessionPlacement は取り込み先の worktree / repo / branch を git から解決する。
+// git 管理外のときの Worktree は ProjectPath へのフォールバックを mergeDiscoveredSessions に一本化しているので、ここでは埋めない。
+func resolveSessionPlacement(sess DiscoveredSession) DiscoveredSession {
+	// 登録済みは merge で LastSeen しか使わないので、git を呼ばない
+	if sess.ProjectPath == "" || sess.IsRegistered {
+		return sess
+	}
+	switch sess.Provider {
+	case model.ProviderCodex:
+		// Codex の cwd は worktree 配下のサブディレクトリのことがあるので、worktree ルートに寄せる
+		sess.Worktree = getWorktreeRoot(sess.ProjectPath)
+		if sess.Worktree == "" {
+			return sess
+		}
+		sess.RepoRoot = detectRepoRoot(sess.Worktree)
+		// Why not always read the checkout: the repo may have moved to another branch since the
+		// session ran; session_meta.git.branch is the branch the session actually worked on
+		if sess.Branch == "" {
+			sess.Branch = getGitBranch(sess.Worktree)
+		}
+	default:
+		// Claude は従来どおり cwd をそのまま worktree として扱う（merge 側のフォールバックに任せる）
+		sess.Branch = getGitBranch(sess.ProjectPath)
+	}
+	return sess
+}
+
+// mergeDiscoveredSessions は探索結果を store に反映する純粋なマージ。
+// 登録済みセッションは LastSeen を mtime が新しい場合のみ進め、AgentState など他の項目には触れない
+// （hook が書いた状態を探索結果で上書きしないため）。
+// 戻り値は新規取り込みした context 名と、store が変わったか（保存要否）。
+func mergeDiscoveredSessions(store *model.Store, sessions []DiscoveredSession, now time.Time) ([]string, bool) {
+	var imported []string
+	changed := false
 
 	for _, sess := range sessions {
-		if sess.IsRegistered {
+		if sess.SessionID == "" {
+			continue
+		}
+		if existing := store.FindByProviderSession(sess.Provider, sess.SessionID); existing != nil {
+			if sess.LastModified.After(existing.LastSeen) {
+				existing.LastSeen = sess.LastModified
+				changed = true
+			}
 			continue
 		}
 
-		// Generate name from project path or session ID
-		name := generateNameFromPath(sess.ProjectPath, sess.SessionID)
-
-		// Check for name collision
-		if store.FindByName(name) != nil {
-			name = name + "-" + sess.SessionID[:6]
-		}
-
-		// Detect branch if possible
-		branch := ""
-		if sess.ProjectPath != "" {
-			branch = getGitBranch(sess.ProjectPath)
+		worktree := sess.Worktree
+		if worktree == "" {
+			worktree = sess.ProjectPath
 		}
 
 		ctx := model.Context{
-			Name:           name,
-			Worktree:       sess.ProjectPath,
-			Branch:         branch,
+			Worktree:       worktree,
+			Branch:         sess.Branch,
+			RepoRoot:       sess.RepoRoot,
 			SessionID:      sess.SessionID,
 			SessionName:    sess.SessionName,
 			TranscriptPath: sess.TranscriptPath,
@@ -310,24 +362,29 @@ func importSessions(s *storage.Storage, store *model.Store, sessions []Discovere
 			LastSeen:       sess.LastModified,
 			Checklist:      make(map[string]bool),
 		}
+		if tracksPerSession(sess.Provider) {
+			ctx.Provider = sess.Provider
+			ctx.Name = uniqueContextName(store, generateName(sess.Branch, worktree), sess.Provider, now)
+		} else {
+			// claude は既存データと同じく provider を空のまま保存する
+			ctx.Name = uniqueClaudeImportName(store, worktree, sess.SessionID)
+		}
 
 		store.Add(ctx)
-		imported++
-		displayName := name
-		if sess.SessionName != "" {
-			displayName = fmt.Sprintf("%s (%s)", name, sess.SessionName)
-		}
-		fmt.Printf("✓ Imported [%s] from %s\n", displayName, shortenPath(sess.ProjectPath))
+		imported = append(imported, ctx.Name)
+		changed = true
 	}
+	return imported, changed
+}
 
-	if imported > 0 {
-		if err := s.SaveStore(store); err != nil {
-			return err
-		}
-		fmt.Printf("\n✓ Imported %d session(s)\n", imported)
+// uniqueClaudeImportName は従来どおりディレクトリ名を使い、衝突したら session ID 先頭 6 文字を足す。
+// それでも衝突する場合に備えて連番で一意にする。
+func uniqueClaudeImportName(store *model.Store, projectPath, sessionID string) string {
+	short := sessionID
+	if len(short) > 6 {
+		short = short[:6]
 	}
-
-	return nil
+	return uniqueNameWithSuffix(store, generateNameFromPath(projectPath, sessionID), short)
 }
 
 func generateNameFromPath(projectPath, sessionID string) string {
@@ -349,5 +406,6 @@ func generateNameFromPath(projectPath, sessionID string) string {
 func init() {
 	rootCmd.AddCommand(discoverCmd)
 	discoverCmd.Flags().BoolVar(&discoverImport, "import", false, "Import discovered sessions")
+	discoverCmd.Flags().StringVar(&discoverProvider, "provider", "", "Limit discovery to a provider (claude|codex); default: all")
 	discoverCmd.Flags().BoolVar(&discoverAll, "all", false, "Show all sessions including registered ones")
 }

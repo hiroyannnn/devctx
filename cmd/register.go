@@ -142,10 +142,24 @@ type registration struct {
 	TranscriptPath string
 }
 
-// upsertRegistration は (worktree, provider) が一致する context を更新し、なければ作成する。
+// findRegistrationTarget は register が更新する既存 context を探す。
+// まずセッション ID で照合し、同じセッションの context を確実に更新する。
+// 見つからない場合、Claude は従来どおり worktree の context を再利用する（1 worktree = 1 context の UX）。
+// Codex は discover がセッション単位で取り込むため、別セッションを worktree で上書きせず新規にする。
+func findRegistrationTarget(store *model.Store, reg registration) *model.Context {
+	if existing := store.FindByProviderSession(reg.Provider, reg.SessionID); existing != nil {
+		return existing
+	}
+	if tracksPerSession(reg.Provider) && reg.SessionID != "" {
+		return nil
+	}
+	return store.FindByWorktreeAndProvider(reg.Worktree, reg.Provider)
+}
+
+// upsertRegistration は既存 context を更新し、なければ作成する。
 // 同じ worktree でも provider が違えば別の context として扱う。
 func upsertRegistration(store *model.Store, reg registration, now time.Time) (*model.Context, bool) {
-	if existing := store.FindByWorktreeAndProvider(reg.Worktree, reg.Provider); existing != nil {
+	if existing := findRegistrationTarget(store, reg); existing != nil {
 		if reg.SessionID != "" {
 			existing.SessionID = reg.SessionID
 			existing.TranscriptPath = reg.TranscriptPath
@@ -190,12 +204,17 @@ func upsertRegistration(store *model.Store, reg registration, now time.Time) (*m
 // uniqueContextName は既存の context と衝突しない名前を返す。
 // 衝突時は claude なら日付、それ以外は provider 名を付け、それでも衝突すれば連番を足す。
 func uniqueContextName(store *model.Store, base string, provider model.Provider, now time.Time) string {
-	if store.FindByName(base) == nil {
-		return base
-	}
 	suffix := now.Format("0102")
 	if provider != model.ProviderClaude {
 		suffix = string(provider)
+	}
+	return uniqueNameWithSuffix(store, base, suffix)
+}
+
+// uniqueNameWithSuffix は base、base-suffix、base-suffix-2、... の順で最初に空いている名前を返す。
+func uniqueNameWithSuffix(store *model.Store, base, suffix string) string {
+	if store.FindByName(base) == nil {
+		return base
 	}
 	candidate := base + "-" + suffix
 	for i := 2; store.FindByName(candidate) != nil; i++ {

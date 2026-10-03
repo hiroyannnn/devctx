@@ -147,7 +147,8 @@ eval "$(devctx shell-init)"
 
 | コマンド | 説明 |
 |---------|------|
-| `devctx discover` | 既存の Claude Code セッションを発見 |
+| `devctx discover` | 既存の Claude Code / Codex セッションを発見（Codex は直近 14 日の対話セッション） |
+| `devctx discover --provider codex` | 対象の provider を絞る（`claude` / `codex`） |
 | `devctx discover --import` | 発見したセッションをインポート |
 | `devctx status` | 全コンテキストのライブ状態を表示 |
 | `devctx status --watch` | 監視モード（継続的に更新） |
@@ -220,6 +221,7 @@ devctx list -w   # または dxw
 done_retention_days: 1
 
 # セッションの自動インポートを無効化（デフォルト: true）
+# 有効時は `devctx list` の実行ごとに、直近 2 日の対話的な Codex セッションも取り込む
 auto_import: false
 
 statuses:

@@ -147,7 +147,8 @@ eval "$(devctx shell-init)"
 
 | Command | Description |
 |---------|-------------|
-| `devctx discover` | Find existing Claude Code sessions |
+| `devctx discover` | Find existing Claude Code and Codex sessions (Codex: interactive sessions from the last 14 days) |
+| `devctx discover --provider codex` | Restrict discovery to one provider (`claude` / `codex`) |
 | `devctx discover --import` | Import discovered sessions |
 | `devctx status` | Show live status of all contexts |
 | `devctx status --watch` | Continuously monitor status |
@@ -220,6 +221,7 @@ Config file: `~/.config/devctx/config.yaml`
 done_retention_days: 1
 
 # Disable auto-import of sessions (default: true)
+# When enabled, `devctx list` also imports recent (last 2 days) interactive Codex sessions on every run
 auto_import: false
 
 statuses:
