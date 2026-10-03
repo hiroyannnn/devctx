@@ -60,6 +60,24 @@ devctx roadmap serve
 
 あとは普段通り Claude Code を使うだけ。セッションは hooks で自動追跡されます。
 
+### Codex Hooks とエージェント状態
+
+```bash
+# Codex hooks を $CODEX_HOME/hooks.json（既定 ~/.codex/hooks.json）にインストール
+devctx hooks --install --provider codex
+```
+
+Codex は新規・変更された hook を trust するまで実行しません。Codex で `/hooks` を実行して devctx のエントリを確認・trust してください（devctx のアップグレードなどでエントリが変わるたびに再 trust が必要です）。`hooks.json` の既存キーや他ツールの hook は保持され、再実行しても差分は出ません。
+
+hook は Mind Map とカードに表示するエージェント状態を記録します。
+
+| 状態 | 契機 |
+|------|------|
+| running | `UserPromptSubmit`、`PostToolUse`（許可を承認すると running に戻る） |
+| needs input | `Notification`（許可 / 確認ダイアログ / 放置、Claude Code）、`PermissionRequest`（Codex） |
+| turn done | `Stop` |
+| ended | `SessionEnd` |
+
 ### オプション設定
 
 ```bash
@@ -119,7 +137,7 @@ eval "$(devctx shell-init)"
 | `devctx new <branch>` | worktree 作成 + cd + claude を一発で |
 | `devctx note <name> [msg]` | メモを追加/表示 |
 | `devctx link <name> <url>` | GitHub Issue/PR をリンク |
-| `devctx hooks [--install]` | Claude Code hooks を設定 |
+| `devctx hooks [--install] [--provider codex]` | Claude Code hooks を設定（`--provider codex` で Codex hooks。Codex の `/hooks` で trust が必要） |
 | `devctx commands [--install]` | Claude スラッシュコマンドを設定 |
 
 ### GitHub 連携

@@ -60,6 +60,24 @@ devctx roadmap serve
 
 That's it. Start using Claude Code as usual — sessions are tracked automatically via hooks.
 
+### Codex Hooks and Agent State
+
+```bash
+# Install Codex hooks into $CODEX_HOME/hooks.json (default ~/.codex/hooks.json)
+devctx hooks --install --provider codex
+```
+
+Codex does not run new or changed hooks until you trust them: run `/hooks` in Codex to review and trust the devctx entries (re-trust is required whenever a devctx entry changes, e.g. after upgrading devctx). Existing keys and other tools' hooks in `hooks.json` are preserved, and re-running the install is idempotent.
+
+Hooks record the agent state shown on the Mind Map and cards:
+
+| State | Set by |
+|-------|--------|
+| running | `UserPromptSubmit`, `PostToolUse` (returns to running once a permission is approved) |
+| needs input | `Notification` (permission / elicitation / idle, Claude Code), `PermissionRequest` (Codex) |
+| turn done | `Stop` |
+| ended | `SessionEnd` |
+
 ### Optional Setup
 
 ```bash
@@ -119,7 +137,7 @@ eval "$(devctx shell-init)"
 | `devctx new <branch>` | Create worktree + cd + claude in one go |
 | `devctx note <name> [msg]` | Add/show a note |
 | `devctx link <name> <url>` | Link GitHub Issue/PR |
-| `devctx hooks [--install]` | Set up Claude Code hooks |
+| `devctx hooks [--install] [--provider codex]` | Set up Claude Code hooks (or Codex hooks with `--provider codex`; trust them via `/hooks` in Codex) |
 | `devctx commands [--install]` | Set up Claude slash commands |
 
 ### GitHub Integration
