@@ -213,3 +213,17 @@ func TestViewFor(t *testing.T) {
 		t.Errorf("%+v", got)
 	}
 }
+
+func TestOverlayWorktreeFallbackIsOneToOne(t *testing.T) {
+	// discover で取り込んだ過去セッションなど、同じ worktree に Claude の context が複数あるとき、
+	// 1 つの live セッションを全員に当てはめない（どれのセッションか判別できないため hook を維持）
+	old1 := claudeCtx("myops-1", "/w/myops", "old-1")
+	old2 := claudeCtx("myops-2", "/w/myops", "old-2")
+	snap := okSnap(Session{SessionID: "live-x", Cwd: "/w/myops", Status: "busy"})
+	views := Overlay([]model.Context{old1, old2}, snap, toplevelOf(map[string]string{"/w/myops": "/w/myops"}))
+	for _, name := range []string{"myops-1", "myops-2"} {
+		if views[name].Source == SourceLive {
+			t.Errorf("%s got live state from an ambiguous worktree match: %+v", name, views[name])
+		}
+	}
+}

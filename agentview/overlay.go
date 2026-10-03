@@ -113,16 +113,31 @@ func Overlay(contexts []model.Context, snap Snapshot, toplevel func(cwd string) 
 		}
 	}
 
+	// worktree 照合の候補になる context（SessionID で live と一致しない Claude context）を worktree ごとに数える。
+	// discover で取り込んだ過去セッションなどが同じ worktree に並ぶと、1 つの live を全員に当てはめてしまうため
+	fallbackCandidates := make(map[string]int)
+	for _, c := range contexts {
+		if c.EffectiveProvider() != model.ProviderClaude {
+			continue
+		}
+		if _, matched := bySession[c.SessionID]; matched && c.SessionID != "" {
+			continue
+		}
+		if wt := normalizePath(c.Worktree); wt != "" {
+			fallbackCandidates[wt]++
+		}
+	}
+
 	for _, ctx := range contexts {
 		if ctx.EffectiveProvider() != model.ProviderClaude {
 			continue
 		}
-		views[ctx.Name] = overlayOne(ctx, snap, bySession, liveByWorktree)
+		views[ctx.Name] = overlayOne(ctx, snap, bySession, liveByWorktree, fallbackCandidates)
 	}
 	return views
 }
 
-func overlayOne(ctx model.Context, snap Snapshot, bySession map[string]Session, liveByWorktree map[string][]Session) View {
+func overlayOne(ctx model.Context, snap Snapshot, bySession map[string]Session, liveByWorktree map[string][]Session, fallbackCandidates map[string]int) View {
 	hook := HookView(ctx)
 	if !snap.OK {
 		return hook
@@ -142,8 +157,8 @@ func overlayOne(ctx model.Context, snap Snapshot, bySession map[string]Session, 
 	}
 	if !found {
 		if wt := normalizePath(ctx.Worktree); wt != "" {
-			// 同 worktree に複数 live があり SessionID でも決まらないなら曖昧。誤表示より hook を残す
-			if cands := liveByWorktree[wt]; len(cands) == 1 {
+			// live も context も 1 対 1 に決まるときだけ当てはめる。どちらかが複数なら曖昧なので hook を残す
+			if cands := liveByWorktree[wt]; len(cands) == 1 && fallbackCandidates[wt] == 1 {
 				sess, found = cands[0], true
 			}
 		}
