@@ -74,14 +74,13 @@ hook は Mind Map とカードに表示するエージェント状態を記録�
 | 状態 | 契機 |
 |------|------|
 | running | `UserPromptSubmit`。Codex は `PostToolUse` でも running に戻す（許可を承認したあと） |
-| needs input | `Notification`（許可 / 確認ダイアログ / 放置、Claude Code）、`PermissionRequest`（Codex） |
-| turn done | `Stop` |
+| needs input | `Notification`（許可 / 確認ダイアログ / 放置、Claude Code）、`PermissionRequest` と `request_user_input` の `PreToolUse`（Codex） |
+| turn done | `Stop`。Codex は `Interrupt` でも |
 | ended | `SessionEnd` |
 
 Codex の状態更新の hook は `"async": true` で動き、エージェントを待たせません。Codex の `SessionEnd` は同期で既定 1 秒しか待たないため、devctx は `timeout: 3` を付け、git を使う phase の更新を省いて登録します。
 
 既知の制約（Codex）:
-- 「質問への回答待ち」（`request_user_input`）を知らせる hook がないため、質問待ちは needs input として表示されません。
 - `PermissionRequest` は Codex が確認を出す直前に発火します。別の hook や自動承認が許可した場合、実際には待ちません。
 - ツールを並列に呼んでいると、別のツールの `PostToolUse` で、許可待ちのまま running に戻ることがあります。
 - `Stop` は他の Stop hook によって継続されることがあるため、turn done は目安です。
@@ -95,6 +94,26 @@ Claude については、ダッシュボード（Mind Map / カード）、`devc
 - agent view に載っていないことを ended とは**みなしません**。制限された環境ではセッションが生きていても空配列が返ることがあるためです。
 - `dx` の fzf 選択とシェル補完（`list --fzf` / `--names-only`）は速度のため hook 状態のみを使います（`dxl` / `dxw` は通常の `list` / `list --watch` なので live 状態を表示します）。hook 自体は `claude agents` を呼びません。
 - live の値は表示専用で、`contexts.yaml` には書き込みません。
+
+### エージェントが待っているもの
+
+needs input のとき、hook の payload から「何を」待っているかも記録し、汎用の理由の代わりに `claude · needs input · Bash: Run tests` のように表示します。
+
+| 種別 | 記録する hook |
+|------|---------------|
+| bash / edit / mcp / plan / network / other | `PermissionRequest`（Claude Code・Codex） |
+| question | `AskUserQuestion`（Claude Code）/ `request_user_input`（Codex）の `PreToolUse` |
+| 解除 | `UserPromptSubmit`、`Stop`、`SessionEnd`、Codex の `Interrupt`、待ち要求と `tool_input` が一致する Codex の `PostToolUse` |
+
+プライバシー: コマンド本文・ファイル内容などの自由記述は保存しません。残すのは短い要約だけです（Bash の `description` かプログラム名（先頭トークンの basename）、ファイルの basename、MCP の `server/tool`、URL のホスト、質問の `header`）。`tool_input` のハッシュは、後続の `PostToolUse` との照合にだけ使います。
+
+既知の制約:
+- 手動で拒否しても hook が発火しないため、要求は次のプロンプト・`Stop`・中断まで残ります。
+- Claude の sandbox のネットワーク要求（`sandbox request`）などのダイアログは分類しません。Claude では live の待ち理由と整合するとき（ツール要求は `permission prompt`、質問は `input needed`）だけ待ち要求を表示します。
+- 保持するのは 1 件です。並列に要求が出た場合は最後の 1 件を表示します。
+- hook は async なので、状態に対してラベルがわずかに遅れることがあります。
+
+新しい hook を入れるには `devctx hooks --install`（Claude Code）と `devctx hooks --install --provider codex` を再実行し、Codex では `/hooks` で変更されたエントリを確認・trust してください。
 
 ### オプション設定
 
