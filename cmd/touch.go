@@ -21,17 +21,22 @@ type hookInput struct {
 var (
 	touchQuick      bool
 	touchTrackState bool
+	touchProvider   string
 )
 
 var touchCmd = &cobra.Command{
 	Use:   "touch [name]",
 	Short: "Update last-seen timestamp for a context",
 	Long: `Update the last-seen timestamp for a context.
-If called from a Claude Code hook, reads session info from stdin.
+If called from a Claude Code / Codex hook (--provider), reads session info from stdin.
 If called with a name, updates that specific context.
 Use --quick to skip phase scan and milestone collection (for high-frequency hooks).
 Use --track-state to record the agent state from the hook event (running / needs_input / turn_done / ended).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		provider, err := model.ParseProvider(touchProvider)
+		if err != nil {
+			return err
+		}
 		s, err := storage.New()
 		if err != nil {
 			return err
@@ -50,14 +55,7 @@ Use --track-state to record the agent state from the hook event (running / needs
 		var updated model.Context
 		var seen bool
 		err = s.UpdateStore(func(store *model.Store) error {
-			var name string
-			if ctx := store.FindByProviderSession(model.ProviderClaude, input.SessionID); ctx != nil {
-				name = ctx.Name
-			}
-			// If name provided as argument, use that
-			if len(args) > 0 {
-				name = args[0]
-			}
+			name := resolveTouchTarget(store, provider, input.SessionID, args)
 			if name == "" {
 				return fmt.Errorf("no context specified and no session ID found")
 			}
@@ -104,6 +102,18 @@ Use --track-state to record the agent state from the hook event (running / needs
 	},
 }
 
+// resolveTouchTarget は touch が更新する context の名前を返す。明示された名前を優先し、
+// なければ hook の session_id を provider 側のセッション ID として探す。見つからなければ空文字。
+func resolveTouchTarget(store *model.Store, provider model.Provider, sessionID string, args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	if ctx := store.FindByProviderSession(provider, sessionID); ctx != nil {
+		return ctx.Name
+	}
+	return ""
+}
+
 // parseHookInput は hook の stdin JSON（1 行）を読む。空入力はゼロ値を返す。
 func parseHookInput(r io.Reader) (hookInput, error) {
 	var input hookInput
@@ -141,6 +151,7 @@ func applyHookState(ctx *model.Context, input hookInput, now time.Time) bool {
 
 func init() {
 	touchCmd.Flags().BoolVar(&touchQuick, "quick", false, "Quick mode: only update last-seen and total time (skip phase scan and milestones)")
+	touchCmd.Flags().StringVar(&touchProvider, "provider", "claude", "Agent provider that owns the hook session (claude/codex/manual)")
 	touchCmd.Flags().BoolVar(&touchTrackState, "track-state", false, "Record agent state from the hook event read from stdin")
 }
 

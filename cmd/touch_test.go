@@ -87,3 +87,30 @@ func TestParseHookInput_Empty(t *testing.T) {
 		t.Fatalf("empty input = %+v, %v; want zero value and nil", in, err)
 	}
 }
+
+func TestResolveTouchTarget(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "claude-ctx", SessionID: "same-id"},
+		{Name: "codex-ctx", Provider: model.ProviderCodex, SessionID: "codex-id"},
+	}}
+	tests := []struct {
+		name      string
+		provider  model.Provider
+		sessionID string
+		args      []string
+		want      string
+	}{
+		{"claude session", model.ProviderClaude, "same-id", nil, "claude-ctx"},
+		{"codex session", model.ProviderCodex, "codex-id", nil, "codex-ctx"},
+		{"provider mismatch does not resolve", model.ProviderClaude, "codex-id", nil, ""},
+		{"unknown session", model.ProviderCodex, "nope", nil, ""},
+		{"explicit name wins", model.ProviderCodex, "codex-id", []string{"other"}, "other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveTouchTarget(store, tt.provider, tt.sessionID, tt.args); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
