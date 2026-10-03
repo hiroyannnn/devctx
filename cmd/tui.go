@@ -145,7 +145,7 @@ func buildItems(store *model.Store, views map[string]agentview.View) []list.Item
 	}
 	for _, status := range statuses {
 		for _, ctx := range store.ByStatus(status) {
-			items = append(items, contextItem{ctx: ctx, view: agentview.ViewFor(views, ctx)})
+			items = append(items, contextItem{ctx: ctx, view: views[ctx.Name]})
 		}
 	}
 	return items

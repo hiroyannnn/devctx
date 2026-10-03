@@ -20,7 +20,7 @@ func TestAgentTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := agentTag(tt.ctx, agentview.HookView(tt.ctx)); got != tt.want {
+			if got := agentTag(tt.ctx, agentview.View{State: tt.ctx.AgentState}); got != tt.want {
 				t.Fatalf("agentTag = %q, want %q", got, tt.want)
 			}
 		})

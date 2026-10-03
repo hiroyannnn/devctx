@@ -19,15 +19,10 @@ import (
 
 // Session は agent view が返す 1 セッション。
 type Session struct {
-	PID        int
 	SessionID  string
 	Cwd        string
-	Kind       string
-	Name       string
 	Status     string // busy / waiting / idle
 	WaitingFor string // waiting のときの理由（permission prompt 等）
-	State      string // background セッションの state
-	StartedAt  time.Time
 	// Toplevel は Cwd の git toplevel（正規化済み。git 管理外は空）。取得時に 1 回だけ解決する。
 	// Overlay が表示のたびに git を起動しないための値で、worktree 照合にだけ使う
 	Toplevel string
@@ -43,15 +38,10 @@ type Snapshot struct {
 }
 
 type rawSession struct {
-	PID        int    `json:"pid"`
 	Cwd        string `json:"cwd"`
-	Kind       string `json:"kind"`
-	StartedAt  int64  `json:"startedAt"`
 	SessionID  string `json:"sessionId"`
-	Name       string `json:"name"`
 	Status     string `json:"status"`
 	WaitingFor string `json:"waitingFor"`
-	State      string `json:"state"`
 }
 
 // Parse は `claude agents --json` の出力を解釈する。
@@ -66,14 +56,7 @@ func Parse(data []byte) ([]Session, error) {
 		if r.SessionID == "" || r.Status == "" {
 			continue
 		}
-		s := Session{
-			PID: r.PID, SessionID: r.SessionID, Cwd: r.Cwd, Kind: r.Kind, Name: r.Name,
-			Status: r.Status, WaitingFor: r.WaitingFor, State: r.State,
-		}
-		if r.StartedAt > 0 {
-			s.StartedAt = time.UnixMilli(r.StartedAt)
-		}
-		sessions = append(sessions, s)
+		sessions = append(sessions, Session{SessionID: r.SessionID, Cwd: r.Cwd, Status: r.Status, WaitingFor: r.WaitingFor})
 	}
 	return sessions, nil
 }
@@ -92,8 +75,8 @@ func (s Session) AgentState() (state model.AgentState, reason string, ok bool) {
 	return "", "", false
 }
 
-// Runner は agent view の生出力を返す。テストでは fake を注入し、実 claude は実行しない。
-type Runner func(ctx context.Context) ([]byte, error)
+// runner は agent view の生出力を返す。テストでは fake を注入し、実 claude は実行しない。
+type runner func(ctx context.Context) ([]byte, error)
 
 const (
 	fetchTimeout   = 2 * time.Second
@@ -103,9 +86,9 @@ const (
 	killWaitDelay = 500 * time.Millisecond
 )
 
-// DefaultRunner は `claude agents --json` を実行する。
+// runClaudeAgents は `claude agents --json` を実行する。
 // stdin は渡さず、出力上限を設けて暴走出力でメモリを食わないようにする。
-func DefaultRunner(ctx context.Context) ([]byte, error) {
+func runClaudeAgents(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", "agents", "--json")
@@ -132,17 +115,14 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// Fetch は run（nil なら DefaultRunner）で agent view を取得する。
+// Fetch は `claude agents --json` で agent view を取得する。
 // 失敗・タイムアウト・パースエラーは OK=false。空配列は OK=true だが「live 情報なし」であり、
 // 不在をもって終了とは推論しない（制限環境では生存中でも空が返りうる）。
-func Fetch(ctx context.Context, run Runner) Snapshot {
-	return fetchAt(ctx, run, time.Now, GitToplevel)
+func Fetch(ctx context.Context) Snapshot {
+	return fetchAt(ctx, runClaudeAgents, time.Now, GitToplevel)
 }
 
-func fetchAt(ctx context.Context, run Runner, now func() time.Time, toplevel func(cwd string) string) Snapshot {
-	if run == nil {
-		run = DefaultRunner
-	}
+func fetchAt(ctx context.Context, run runner, now func() time.Time, toplevel func(cwd string) string) Snapshot {
 	snap := Snapshot{FetchedAt: now()}
 	data, err := run(ctx)
 	if err != nil {

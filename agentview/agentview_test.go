@@ -26,16 +26,13 @@ func TestParse(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("sessionId/status 欠落行は無視される想定: %+v", got)
 	}
-	if got[0].SessionID != "s1" || got[0].Status != "busy" || got[0].PID != 1 || got[0].Name != "A" {
+	if got[0].SessionID != "s1" || got[0].Status != "busy" || got[0].Cwd != "/w/a" {
 		t.Errorf("row0: %+v", got[0])
-	}
-	if want := time.UnixMilli(1791032973049); !got[0].StartedAt.Equal(want) {
-		t.Errorf("StartedAt = %v", got[0].StartedAt)
 	}
 	if got[1].WaitingFor != "permission prompt" {
 		t.Errorf("row1: %+v", got[1])
 	}
-	if got[2].State != "done" {
+	if got[2].SessionID != "s5" || got[2].Status != "idle" {
 		t.Errorf("row2: %+v", got[2])
 	}
 }
@@ -143,7 +140,7 @@ func TestDefaultRunnerWithFakeClaude(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
 
-	snap := Fetch(context.Background(), nil)
+	snap := Fetch(context.Background())
 	if !snap.OK || len(snap.Sessions) != 1 {
 		t.Fatalf("%+v", snap)
 	}
@@ -152,7 +149,7 @@ func TestDefaultRunnerWithFakeClaude(t *testing.T) {
 	if err := os.WriteFile(fake, []byte(big), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if snap := Fetch(context.Background(), nil); snap.OK {
+	if snap := Fetch(context.Background()); snap.OK {
 		t.Errorf("出力上限超過は失敗扱い: %+v", snap)
 	}
 }
@@ -168,7 +165,7 @@ func TestFetchReturnsAfterTimeoutEvenIfDescendantHoldsStdout(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	start := time.Now()
-	snap := Fetch(context.Background(), nil)
+	snap := Fetch(context.Background())
 	elapsed := time.Since(start)
 
 	if snap.OK {

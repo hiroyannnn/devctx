@@ -30,9 +30,8 @@ type LiveStatus struct {
 	SessionStatus SessionStatus
 	LastActivity  time.Time
 	LastRole      string
-	// Reason は live の待ち理由（permission prompt 等）。Source は状態の出どころ（live / hook / 空=transcript 推論）
+	// Reason は live の待ち理由（permission prompt 等）
 	Reason string
-	Source string
 }
 
 var watchMode bool
@@ -155,7 +154,7 @@ func watchStatus(store *model.Store) error {
 }
 
 // getLiveStatuses は context ごとの稼働状態を返す。優先順位は live（agent view）→ transcript 推論。
-// views は agentview.Overlay の結果（nil なら hook と transcript のみ）。
+// views は agentview.Overlay の結果（nil なら transcript 推論のみ）。
 func getLiveStatuses(store *model.Store, views map[string]agentview.View) []LiveStatus {
 	var statuses []LiveStatus
 
@@ -175,11 +174,11 @@ func getLiveStatuses(store *model.Store, views map[string]agentview.View) []Live
 		// agent view の live 状態だけを transcript の mtime 推論より優先する。
 		// Why not hook state: hook の状態は SessionEnd が欠けると古いまま残る（昨日の turn_done 等）ため、
 		// 従来 hook を見ていなかった status の推論を上書きすると後退になる
-		view := agentview.ViewFor(views, ctx)
-		if status, ok := sessionStatusFromAgentState(view.State); ok && view.Source == agentview.SourceLive {
-			ls.SessionStatus = status
-			ls.Reason = view.Reason
-			ls.Source = view.Source
+		if view := views[ctx.Name]; view.Source == agentview.SourceLive {
+			if status, ok := sessionStatusFromAgentState(view.State); ok {
+				ls.SessionStatus = status
+				ls.Reason = view.Reason
+			}
 		}
 
 		statuses = append(statuses, ls)
@@ -255,16 +254,14 @@ func init() {
 	statusCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode - continuously update status")
 }
 
-// sessionStatusFromAgentState は agent の状態を status 表示用の区分に写す。
-// turn_done もユーザーの番なので waiting 扱い。ended は offline。
+// sessionStatusFromAgentState は live の状態を status 表示用の区分に写す。
+// turn_done もユーザーの番なので waiting 扱い。live は ended を返さないので offline への写像は持たない。
 func sessionStatusFromAgentState(state model.AgentState) (SessionStatus, bool) {
-	switch state {
-	case model.AgentRunning:
+	switch {
+	case state == model.AgentRunning:
 		return SessionStatusActive, true
-	case model.AgentNeedsInput, model.AgentTurnDone:
+	case state.WaitsForUser():
 		return SessionStatusWaiting, true
-	case model.AgentEnded:
-		return SessionStatusOffline, true
 	}
 	return "", false
 }

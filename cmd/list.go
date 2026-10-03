@@ -275,7 +275,7 @@ func printKanbanWithSize(store *model.Store, offset int, selectedName string, wi
 					col.WriteString("\n")
 					break
 				}
-				card := formatCard(contexts[i], agentview.ViewFor(views, contexts[i]))
+				card := formatCard(contexts[i], views[contexts[i].Name])
 				// Highlight selected card
 				cardStyle := lane.cardStyle
 				if contexts[i].Name == selectedName {

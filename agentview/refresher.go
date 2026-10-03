@@ -28,11 +28,8 @@ type Refresher struct {
 	lastStart time.Time
 }
 
-// NewRefresher は fetch（nil なら実 claude を叩く Fetch）で更新する Refresher を作る。
+// NewRefresher は fetch（本番は Fetch、テストは fake）で更新する Refresher を作る。
 func NewRefresher(fetch func(ctx context.Context) Snapshot) *Refresher {
-	if fetch == nil {
-		fetch = func(ctx context.Context) Snapshot { return Fetch(ctx, nil) }
-	}
 	return &Refresher{fetch: fetch, now: time.Now}
 }
 

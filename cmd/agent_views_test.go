@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +17,7 @@ func stubSnapshot(t *testing.T, snap agentview.Snapshot) *int {
 	t.Helper()
 	calls := 0
 	orig := fetchAgentSnapshot
-	fetchAgentSnapshot = func() agentview.Snapshot { calls++; return snap }
+	fetchAgentSnapshot = func(context.Context) agentview.Snapshot { calls++; return snap }
 	t.Cleanup(func() { fetchAgentSnapshot = orig })
 	return &calls
 }
@@ -61,7 +62,7 @@ func TestWatchLiveViewsNeverBlocksOnFetch(t *testing.T) {
 	release := make(chan struct{})
 	fetched := make(chan struct{}, 1)
 	orig := fetchAgentSnapshot
-	fetchAgentSnapshot = func() agentview.Snapshot {
+	fetchAgentSnapshot = func(context.Context) agentview.Snapshot {
 		fetched <- struct{}{}
 		<-release
 		return liveSnap(agentview.Session{SessionID: "s1", Status: "busy"})
@@ -173,7 +174,7 @@ func TestKanbanModelUsesLiveViewsAndStoreStaysClean(t *testing.T) {
 func TestListFzfAndNamesOnlyDoNotFetchAgentView(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	orig := fetchAgentSnapshot
-	fetchAgentSnapshot = func() agentview.Snapshot {
+	fetchAgentSnapshot = func(context.Context) agentview.Snapshot {
 		t.Fatal("fzf / names-only は hot path。claude agents を呼んではいけない")
 		return agentview.Snapshot{}
 	}
@@ -208,7 +209,7 @@ func TestGetLiveStatusesPrecedence(t *testing.T) {
 		t.Errorf("live: %+v", g)
 	}
 	// hook の状態は古いまま残りうる（昨日の turn_done 等）ため、status では使わず従来の transcript 推論に任せる
-	if g := got["hook"]; g.SessionStatus != SessionStatusOffline || g.Source != "" {
+	if g := got["hook"]; g.SessionStatus != SessionStatusOffline || g.Reason != "" {
 		t.Errorf("hook state must not override transcript inference: %+v", g)
 	}
 	if g := got["ended"]; g.SessionStatus != SessionStatusOffline {
@@ -251,7 +252,7 @@ func TestTuiTickPicksUpBackgroundSnapshotWithoutFetchingInUpdate(t *testing.T) {
 	var mu sync.Mutex
 	status := "busy"
 	orig := fetchAgentSnapshot
-	fetchAgentSnapshot = func() agentview.Snapshot {
+	fetchAgentSnapshot = func(context.Context) agentview.Snapshot {
 		mu.Lock()
 		defer mu.Unlock()
 		return liveSnap(agentview.Session{SessionID: "s1", Status: status})

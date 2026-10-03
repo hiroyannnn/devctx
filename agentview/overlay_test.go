@@ -156,12 +156,22 @@ func TestOverlayFallbacks(t *testing.T) {
 	}
 }
 
-func TestOverlayOnlyClaude(t *testing.T) {
+// codex は live を重ねず hook 状態の View になる。全 context に View があり、呼び出し側が直接引ける。
+func TestOverlayNonClaudeGetsHookView(t *testing.T) {
 	codex := claudeCtx("cx", "/w", "s1")
 	codex.Provider = model.ProviderCodex
-	got := Overlay([]model.Context{codex}, okSnap(Session{SessionID: "s1", Status: "busy"}))
-	if _, ok := got["cx"]; ok {
-		t.Errorf("codex は対象外: %+v", got)
+	codex.AgentState = model.AgentTurnDone
+	bare := claudeCtx("bare", "/w2", "")
+	bare.Provider = model.ProviderCodex
+	snap := okSnap(Session{SessionID: "s1", Status: "busy"})
+	for name, got := range Overlay([]model.Context{codex, bare}, snap) {
+		want := View{}
+		if name == "cx" {
+			want = View{State: model.AgentTurnDone, Source: SourceHook}
+		}
+		if got != want {
+			t.Errorf("%s: got %+v want %+v", name, got, want)
+		}
 	}
 }
 
@@ -184,18 +194,6 @@ func TestOverlayNormalizesSymlinks(t *testing.T) {
 	got := Overlay([]model.Context{ctx}, snap)["a"]
 	if got.Source != SourceLive {
 		t.Errorf("symlink / 末尾スラッシュ差を吸収する: %+v", got)
-	}
-}
-
-func TestViewFor(t *testing.T) {
-	ctx := claudeCtx("a", "/w", "")
-	ctx.AgentState = model.AgentRunning
-	if got := ViewFor(nil, ctx); got != (View{State: model.AgentRunning, Source: SourceHook}) {
-		t.Errorf("%+v", got)
-	}
-	views := map[string]View{"a": {State: model.AgentTurnDone, Source: SourceLive}}
-	if got := ViewFor(views, ctx); got.State != model.AgentTurnDone {
-		t.Errorf("%+v", got)
 	}
 }
 

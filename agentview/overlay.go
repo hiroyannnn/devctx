@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hiroyannnn/devctx/model"
 )
@@ -21,21 +22,13 @@ type View struct {
 	Source string // SourceLive / SourceHook / ""（未観測）
 }
 
-// HookView は context の hook 由来の状態をそのまま View にする。
-func HookView(ctx model.Context) View {
+// hookView は context の hook 由来の状態をそのまま View にする。
+func hookView(ctx model.Context) View {
 	v := View{State: ctx.AgentState}
 	if ctx.AgentState != "" {
 		v.Source = SourceHook
 	}
 	return v
-}
-
-// ViewFor は overlay 結果から ctx の View を引く。overlay 対象外（codex 等）や nil は hook 状態。
-func ViewFor(views map[string]View, ctx model.Context) View {
-	if v, ok := views[ctx.Name]; ok {
-		return v
-	}
-	return HookView(ctx)
 }
 
 // GitToplevel は dir の git toplevel を返す（git 管理外・失敗は空文字）。
@@ -63,95 +56,108 @@ func normalizePath(p string) string {
 	return p
 }
 
-// Overlay は claude の context ごとに、live（agent view）と hook を突き合わせた表示状態を返す。
-// キーは context Name。codex / manual は対象外。
+// Overlay は全 context の表示状態を返す。キーは context Name。
+// claude の context は live（agent view）と hook を突き合わせ、codex / manual は hook 状態のまま。
+// 呼び出し側が views[ctx.Name] を直接引けるよう、nil 判定や hook へのフォールバックを持たせず全件を埋める。
 //
 // 照合は SessionID の完全一致を優先し、無ければ「live セッションの git toplevel が
 // context の worktree と一致し、かつ一意」の場合だけ採用する。リポジトリルートや
 // パス接頭辞での照合は、別 worktree のセッションを誤って結び付けるので行わない。
 func Overlay(contexts []model.Context, snap Snapshot) map[string]View {
-	views := make(map[string]View)
-	if len(contexts) == 0 {
+	views := make(map[string]View, len(contexts))
+	if !snap.OK {
+		for _, c := range contexts {
+			views[c.Name] = hookView(c)
+		}
 		return views
 	}
 
-	bySession := make(map[string]Session, len(snap.Sessions))
-	for _, s := range snap.Sessions {
-		if _, dup := bySession[s.SessionID]; !dup {
-			bySession[s.SessionID] = s
+	idx := newSessionIndex(contexts, snap.Sessions)
+	for _, c := range contexts {
+		if c.EffectiveProvider() != model.ProviderClaude {
+			views[c.Name] = hookView(c)
+			continue
+		}
+		views[c.Name] = overlayOne(c, snap.FetchedAt, idx)
+	}
+	return views
+}
+
+// sessionIndex は照合に使う live セッションの索引。
+type sessionIndex struct {
+	bySession      map[string]Session
+	liveByWorktree map[string][]Session
+	// worktrees は context ごとの正規化済み worktree。照合と候補数の集計で同じ値を使い回す
+	worktrees map[string]string
+	// fallbackCandidates は worktree 照合の候補になる context（SessionID で live と一致しない Claude context）の数。
+	// discover で取り込んだ過去セッションなどが同じ worktree に並ぶと、1 つの live を全員に当てはめてしまうため
+	fallbackCandidates map[string]int
+}
+
+func newSessionIndex(contexts []model.Context, sessions []Session) sessionIndex {
+	idx := sessionIndex{
+		bySession:          make(map[string]Session, len(sessions)),
+		liveByWorktree:     make(map[string][]Session),
+		worktrees:          make(map[string]string, len(contexts)),
+		fallbackCandidates: make(map[string]int),
+	}
+	for _, s := range sessions {
+		if _, dup := idx.bySession[s.SessionID]; !dup {
+			idx.bySession[s.SessionID] = s
 		}
 	}
 	// 他 context が SessionID で所有しているセッションは worktree 照合の候補から外す
 	owned := make(map[string]bool)
 	for _, c := range contexts {
-		if c.EffectiveProvider() == model.ProviderClaude && c.SessionID != "" {
+		if c.EffectiveProvider() == model.ProviderClaude {
 			owned[c.SessionID] = true
 		}
+		idx.worktrees[c.Name] = normalizePath(c.Worktree)
 	}
-
-	liveByWorktree := make(map[string][]Session)
-	if snap.OK {
-		for _, s := range snap.Sessions {
-			if owned[s.SessionID] {
-				continue
-			}
-			if s.Toplevel != "" {
-				liveByWorktree[s.Toplevel] = append(liveByWorktree[s.Toplevel], s)
-			}
+	for _, s := range sessions {
+		if !owned[s.SessionID] && s.Toplevel != "" {
+			idx.liveByWorktree[s.Toplevel] = append(idx.liveByWorktree[s.Toplevel], s)
 		}
 	}
-
-	// worktree 照合の候補になる context（SessionID で live と一致しない Claude context）を worktree ごとに数える。
-	// discover で取り込んだ過去セッションなどが同じ worktree に並ぶと、1 つの live を全員に当てはめてしまうため
-	fallbackCandidates := make(map[string]int)
 	for _, c := range contexts {
 		if c.EffectiveProvider() != model.ProviderClaude {
 			continue
 		}
-		if _, matched := bySession[c.SessionID]; matched && c.SessionID != "" {
+		if _, matched := idx.bySession[c.SessionID]; matched {
 			continue
 		}
-		if wt := normalizePath(c.Worktree); wt != "" {
-			fallbackCandidates[wt]++
+		if wt := idx.worktrees[c.Name]; wt != "" {
+			idx.fallbackCandidates[wt]++
 		}
 	}
-
-	for _, ctx := range contexts {
-		if ctx.EffectiveProvider() != model.ProviderClaude {
-			continue
-		}
-		views[ctx.Name] = overlayOne(ctx, snap, bySession, liveByWorktree, fallbackCandidates)
-	}
-	return views
+	return idx
 }
 
-func overlayOne(ctx model.Context, snap Snapshot, bySession map[string]Session, liveByWorktree map[string][]Session, fallbackCandidates map[string]int) View {
-	hook := HookView(ctx)
-	if !snap.OK {
-		return hook
+// matchSession は ctx に対応する live セッションを返す。SessionID 一致が優先で、
+// 無ければ live も context も 1 対 1 に決まる worktree 一致だけを採る（どちらかが複数なら曖昧）。
+func (idx sessionIndex) matchSession(ctx model.Context) (Session, bool) {
+	if s, ok := idx.bySession[ctx.SessionID]; ok {
+		return s, true
 	}
-	// ended は終着点。agent view に残っていても hook の終了を覆さない
-	if ctx.AgentState == model.AgentEnded {
-		return hook
+	wt := idx.worktrees[ctx.Name]
+	if wt == "" {
+		return Session{}, false
 	}
-	// 取得開始後に届いた hook は live より新しい
-	if ctx.AgentStateAt.After(snap.FetchedAt) {
-		return hook
+	if cands := idx.liveByWorktree[wt]; len(cands) == 1 && idx.fallbackCandidates[wt] == 1 {
+		return cands[0], true
 	}
+	return Session{}, false
+}
 
-	sess, found := Session{}, false
-	if ctx.SessionID != "" {
-		sess, found = bySession[ctx.SessionID]
+func overlayOne(ctx model.Context, fetchedAt time.Time, idx sessionIndex) View {
+	hook := hookView(ctx)
+	// ended は終着点。agent view に残っていても hook の終了を覆さない。
+	// 取得開始後に届いた hook は live より新しい
+	if ctx.AgentState == model.AgentEnded || ctx.AgentStateAt.After(fetchedAt) {
+		return hook
 	}
-	if !found {
-		if wt := normalizePath(ctx.Worktree); wt != "" {
-			// live も context も 1 対 1 に決まるときだけ当てはめる。どちらかが複数なら曖昧なので hook を残す
-			if cands := liveByWorktree[wt]; len(cands) == 1 && fallbackCandidates[wt] == 1 {
-				sess, found = cands[0], true
-			}
-		}
-	}
-	if !found {
+	sess, ok := idx.matchSession(ctx)
+	if !ok {
 		return hook
 	}
 	state, reason, ok := sess.AgentState()

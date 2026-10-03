@@ -250,7 +250,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
-		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
+		applyAgentFields(&entry, ctx, views[ctx.Name])
 
 		// Merge milestone data
 		if events != nil {
@@ -341,7 +341,7 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
 		}
-		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
+		applyAgentFields(&entry, ctx, views[ctx.Name])
 
 		if events != nil {
 			summary := events.Summarize(ctx.Name)
@@ -449,7 +449,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			IssueURL: ctx.IssueURL,
 			LastSeen: ctx.LastSeen.Format(time.RFC3339),
 		}
-		applyAgentFields(&entry, ctx, agentview.ViewFor(views, ctx))
+		applyAgentFields(&entry, ctx, views[ctx.Name])
 
 		if insights != nil {
 			if insight := insights.Get(ctx.Name); insight != nil {
