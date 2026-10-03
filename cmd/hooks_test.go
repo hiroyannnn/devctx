@@ -2,7 +2,12 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/hiroyannnn/devctx/model"
 )
 
 func hookConfig(matcher string, commands ...string) map[string]interface{} {
@@ -109,6 +114,7 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 		"UserPromptSubmit": {"devctx touch --quick --track-state"},
 		"Notification":     {"devctx touch --quick --track-state"},
 		"Stop":             {"devctx roadmap analyze --if-stale --background", "devctx touch --quick --track-state"},
+		"PostToolUse":      {"devctx touch --quick --track-state"},
 		"SessionEnd":       {"devctx touch --track-state"},
 	}
 	if len(configs) != len(want) {
@@ -176,4 +182,160 @@ func TestMergeHookConfigs_UpgradeKeepsChainedCommands(t *testing.T) {
 	existing := existingHooks(t, hookConfig("", "devctx touch --quick && say done"))
 	got := mergeHookConfigs(existing, hookConfig("", "devctx touch --quick --track-state"))
 	assertCommands(t, commandsOf(t, got), "devctx touch --quick --track-state && say done")
+}
+
+func TestCodexHookSpecs(t *testing.T) {
+	specs := codexHookSpecs("devctx")
+	type entry struct{ matcher, command string }
+	want := map[string][]entry{
+		"SessionStart":      {{"startup|resume", "devctx register --provider codex"}},
+		"UserPromptSubmit":  {{"", "devctx touch --quick --track-state --provider codex"}},
+		"PermissionRequest": {{"", "devctx touch --quick --track-state --provider codex"}},
+		"PostToolUse":       {{"", "devctx touch --quick --track-state --provider codex"}},
+		"Stop":              {{"", "devctx touch --quick --track-state --provider codex"}},
+		"SessionEnd":        {{"", "devctx touch --track-state --provider codex"}},
+	}
+	if len(specs) != len(want) {
+		t.Fatalf("events = %d, want %d", len(specs), len(want))
+	}
+	for _, spec := range specs {
+		var got []entry
+		for _, c := range spec.Configs {
+			for _, h := range c.Hooks {
+				got = append(got, entry{c.Matcher, h.Command})
+			}
+		}
+		if !reflect.DeepEqual(got, want[spec.Event]) {
+			t.Errorf("%s = %v, want %v", spec.Event, got, want[spec.Event])
+		}
+	}
+}
+
+func TestInstallCodexHooks_PreservesExistingAndIsIdempotent(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(codexHome, "hooks.json")
+	initial := `{
+  "description": "my hooks",
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "other-tool start", "timeout": 5, "statusMessage": "starting"}]}
+    ]
+  }
+}`
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	install := func() map[string]interface{} {
+		t.Helper()
+		if err := installCodexHooks(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]interface{}
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	first := install()
+	if first["description"] != "my hooks" {
+		t.Fatalf("description lost: %v", first["description"])
+	}
+	hooks := first["hooks"].(map[string]interface{})
+	start := hooks["SessionStart"].([]interface{})
+	if len(start) != 2 {
+		t.Fatalf("SessionStart configs = %d, want 2 (other + devctx)", len(start))
+	}
+	other := start[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if other["command"] != "other-tool start" || other["timeout"] != float64(5) || other["statusMessage"] != "starting" {
+		t.Fatalf("unrelated hook was modified: %v", other)
+	}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PermissionRequest", "PostToolUse", "Stop", "SessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Errorf("missing %s", event)
+		}
+	}
+
+	second := install()
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("second install changed the file:\nfirst:  %v\nsecond: %v", first, second)
+	}
+}
+
+func TestInstallCodexHooks_CreatesMissingFile(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "nested", ".codex")
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := installCodexHooks(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(codexHome, "hooks.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexHooksPath_DefaultsToHomeDotCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", home)
+	got, err := codexHooksPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".codex", "hooks.json"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestInstallHooksToSettings_AddsPostToolUseAndUpgrades(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 旧バージョンのインストール結果: --track-state なし
+	old := `{"model":"opus","hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/bin/devctx touch --quick"}]}]}}`
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installHooksToSettings(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var got map[string]interface{}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "opus" {
+		t.Fatalf("unrelated key lost: %v", got["model"])
+	}
+	hooks := got["hooks"].(map[string]interface{})
+	if _, ok := hooks["PostToolUse"]; !ok {
+		t.Fatalf("PostToolUse not installed")
+	}
+	prompt := hooks["UserPromptSubmit"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+	if prompt["command"] != "/bin/devctx touch --quick --track-state" {
+		t.Fatalf("existing hook not upgraded: %v", prompt["command"])
+	}
+}
+
+func TestParseHooksProvider(t *testing.T) {
+	for in, want := range map[string]model.Provider{"": model.ProviderClaude, "claude": model.ProviderClaude, "codex": model.ProviderCodex} {
+		got, err := parseHooksProvider(in)
+		if err != nil || got != want {
+			t.Errorf("parseHooksProvider(%q) = %q, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"manual", "gemini"} {
+		if _, err := parseHooksProvider(in); err == nil {
+			t.Errorf("parseHooksProvider(%q) should fail", in)
+		}
+	}
 }

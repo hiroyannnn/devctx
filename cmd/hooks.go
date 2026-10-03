@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/spf13/cobra"
 )
 
@@ -26,14 +27,23 @@ type Hook struct {
 
 var hooksCmd = &cobra.Command{
 	Use:   "hooks",
-	Short: "Setup Claude Code hooks for devctx integration",
-	Long: `Configure Claude Code hooks to automatically register and update contexts.
+	Short: "Setup Claude Code / Codex hooks for devctx integration",
+	Long: `Configure Claude Code or Codex hooks to automatically register and update contexts.
 
-This command outputs the JSON configuration to add to your Claude settings.
-Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
+This command outputs the JSON configuration to add to your settings.
+Claude Code (default): add this to ~/.claude/settings.json or .claude/settings.json in your project.
+Codex (--provider codex): add this to $CODEX_HOME/hooks.json (default ~/.codex/hooks.json).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		provider, err := parseHooksProvider(hooksProvider)
+		if err != nil {
+			return err
+		}
 		// Use PATH-based name so hooks survive binary rebuilds / user changes
 		devctxPath := "devctx"
+
+		if provider == model.ProviderCodex {
+			return printCodexHooks(devctxPath)
+		}
 
 		settings := ClaudeSettings{Hooks: devctxHookConfigs(devctxPath)}
 
@@ -52,17 +62,41 @@ Add this to ~/.claude/settings.json or .claude/settings.json in your project.`,
 	},
 }
 
-var installHooks bool
+var (
+	installHooks  bool
+	hooksProvider string
+)
 
 func init() {
-	hooksCmd.Flags().BoolVar(&installHooks, "install", false, "Automatically install hooks to ~/.claude/settings.json")
+	hooksCmd.Flags().BoolVar(&installHooks, "install", false, "Automatically install hooks to ~/.claude/settings.json (or $CODEX_HOME/hooks.json with --provider codex)")
+	hooksCmd.Flags().StringVar(&hooksProvider, "provider", "claude", "Agent provider to install hooks for (claude/codex)")
 
 	hooksCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
-		if installHooks {
-			return installHooksToSettings()
+		if !installHooks {
+			return nil
 		}
-		return nil
+		provider, err := parseHooksProvider(hooksProvider)
+		if err != nil {
+			return err
+		}
+		if provider == model.ProviderCodex {
+			return installCodexHooks()
+		}
+		return installHooksToSettings()
 	}
+}
+
+// parseHooksProvider は hooks コマンドが対応する provider（claude / codex）だけを受け付ける。
+// manual には hook の仕組みが無いので、ParseProvider が通っても弾く。
+func parseHooksProvider(s string) (model.Provider, error) {
+	provider, err := model.ParseProvider(s)
+	if err != nil {
+		return "", err
+	}
+	if provider != model.ProviderClaude && provider != model.ProviderCodex {
+		return "", fmt.Errorf("hooks are only available for claude/codex (got %q)", s)
+	}
+	return provider, nil
 }
 
 func installHooksToSettings() error {
@@ -72,15 +106,34 @@ func installHooksToSettings() error {
 	}
 
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	// Use PATH-based name so hooks survive binary rebuilds / user changes
+	if err := installHookSpecsToFile(settingsPath, devctxHookSpecs("devctx")); err != nil {
+		return err
+	}
 
-	// Ensure .claude directory exists
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+	fmt.Printf("✓ Hooks installed to %s\n", settingsPath)
+	fmt.Println("  Run /hooks in Claude Code to review and approve.")
+	fmt.Println()
+	fmt.Println("Next:")
+	fmt.Println("  devctx roadmap serve            # Open the Mind Map dashboard")
+	fmt.Println()
+	fmt.Println("Optional:")
+	fmt.Println("  devctx commands --install        # Slash commands (/devctx-review, etc.)")
+	fmt.Println("  eval \"$(devctx shell-init)\"      # Shell shortcuts (dx, dxl, etc.)")
+	return nil
+}
+
+// installHookSpecsToFile は JSON ファイル（Claude の settings.json / Codex の hooks.json）の "hooks" に
+// devctx の hook を追加・更新する。他のトップレベルキーや devctx 以外の hook はそのまま残す。
+// Why not 型付き構造体で読み書き: description / timeout / statusMessage など未知のキーを書き戻しで落とすため。
+func installHookSpecsToFile(path string, specs []hookEventSpec) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 
 	// Read existing settings
 	var settings map[string]interface{}
-	data, err := os.ReadFile(settingsPath)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -92,16 +145,13 @@ func installHooksToSettings() error {
 		}
 	}
 
-	// Use PATH-based name so hooks survive binary rebuilds / user changes
-	devctxPath := "devctx"
-
 	// Add or update hooks
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	if !ok {
 		hooks = make(map[string]interface{})
 	}
 
-	for _, spec := range devctxHookSpecs(devctxPath) {
+	for _, spec := range specs {
 		var newConfigs []map[string]interface{}
 		for _, c := range spec.Configs {
 			newConfigs = append(newConfigs, hookConfigMap(c))
@@ -117,19 +167,49 @@ func installHooksToSettings() error {
 		return err
 	}
 
-	if err := os.WriteFile(settingsPath, output, 0644); err != nil {
+	return os.WriteFile(path, output, 0644)
+}
+
+// codexHooksPath は Codex の hooks.json の場所を返す。CODEX_HOME 未設定なら ~/.codex。
+func codexHooksPath() (string, error) {
+	if dir := os.Getenv("CODEX_HOME"); dir != "" {
+		return filepath.Join(dir, "hooks.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex", "hooks.json"), nil
+}
+
+func printCodexHooks(devctxPath string) error {
+	hooks := make(map[string][]HookConfig)
+	for _, spec := range codexHookSpecs(devctxPath) {
+		hooks[spec.Event] = spec.Configs
+	}
+	jsonBytes, err := json.MarshalIndent(ClaudeSettings{Hooks: hooks}, "", "  ")
+	if err != nil {
 		return err
 	}
+	fmt.Println("Add the following to your Codex hooks ($CODEX_HOME/hooks.json, default ~/.codex/hooks.json):")
+	fmt.Println()
+	fmt.Println(string(jsonBytes))
+	fmt.Println()
+	fmt.Println("Or run: devctx hooks --install --provider codex to automatically add to the Codex hooks file")
+	return nil
+}
 
-	fmt.Printf("✓ Hooks installed to %s\n", settingsPath)
-	fmt.Println("  Run /hooks in Claude Code to review and approve.")
-	fmt.Println()
-	fmt.Println("Next:")
-	fmt.Println("  devctx roadmap serve            # Open the Mind Map dashboard")
-	fmt.Println()
-	fmt.Println("Optional:")
-	fmt.Println("  devctx commands --install        # Slash commands (/devctx-review, etc.)")
-	fmt.Println("  eval \"$(devctx shell-init)\"      # Shell shortcuts (dx, dxl, etc.)")
+func installCodexHooks() error {
+	path, err := codexHooksPath()
+	if err != nil {
+		return err
+	}
+	if err := installHookSpecsToFile(path, codexHookSpecs("devctx")); err != nil {
+		return err
+	}
+	fmt.Printf("✓ Hooks installed to %s\n", path)
+	fmt.Println("  Codex does not run new or changed hooks until you trust them.")
+	fmt.Println("  Run /hooks in Codex to review and trust the devctx hooks (re-trust is needed whenever a devctx entry changes).")
 	return nil
 }
 
@@ -153,11 +233,31 @@ func devctxHookSpecs(devctxPath string) []hookEventSpec {
 		// Agent state: running on prompt, waiting on notification / turn end
 		{"UserPromptSubmit", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
 		{"Notification", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
+		// 許可を承認してツールが動き出したら running に戻す（--quick の間引きで高頻度でも書き込みは増えない）
+		{"PostToolUse", []HookConfig{{Hooks: command("touch --quick --track-state")}}},
 		{"Stop", []HookConfig{
 			{Hooks: command("roadmap analyze --if-stale --background")},
 			{Hooks: command("touch --quick --track-state")},
 		}},
 		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state")}}},
+	}
+}
+
+// codexHookSpecs は devctx が Codex に登録する hook 定義。
+// Codex には Notification が無く、許可待ちは PermissionRequest で届く。
+// Why not roadmap analyze: Stop ごとの LLM 解析は Claude 用の機能で、Codex では対象外。
+func codexHookSpecs(devctxPath string) []hookEventSpec {
+	command := func(args string) []Hook {
+		return []Hook{{Type: "command", Command: devctxPath + " " + args}}
+	}
+	track := command("touch --quick --track-state --provider codex")
+	return []hookEventSpec{
+		{"SessionStart", []HookConfig{{Matcher: "startup|resume", Hooks: command("register --provider codex")}}},
+		{"UserPromptSubmit", []HookConfig{{Hooks: track}}},
+		{"PermissionRequest", []HookConfig{{Hooks: track}}},
+		{"PostToolUse", []HookConfig{{Hooks: track}}},
+		{"Stop", []HookConfig{{Hooks: track}}},
+		{"SessionEnd", []HookConfig{{Hooks: command("touch --track-state --provider codex")}}},
 	}
 }
 
