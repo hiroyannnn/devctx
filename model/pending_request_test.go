@@ -72,6 +72,18 @@ func TestClassifyPending_InputHash(t *testing.T) {
 	}
 }
 
+// PreToolUse / PermissionRequest と PostToolUse で tool_input の直列化（キー順・空白）が違っても同じ要求とみなす
+func TestClassifyPending_InputHashIgnoresJSONFormatting(t *testing.T) {
+	a := ClassifyPending("request_user_input", json.RawMessage(`{"questions":[{"header":"H","question":"Q"}],"id":1}`), pendingNow)
+	b := ClassifyPending("request_user_input", json.RawMessage("{ \"id\": 1,\n \"questions\": [ {\"question\":\"Q\", \"header\":\"H\"} ] }"), pendingNow)
+	if a.InputHash != b.InputHash {
+		t.Errorf("hash differs by formatting: %q vs %q", a.InputHash, b.InputHash)
+	}
+	if !a.matches("request_user_input", json.RawMessage(`{"id":1,"questions":[{"question":"Q","header":"H"}]}`)) {
+		t.Error("reordered PostToolUse input should match the pending request")
+	}
+}
+
 func TestPendingRequestLabel(t *testing.T) {
 	tests := []struct {
 		p    PendingRequest

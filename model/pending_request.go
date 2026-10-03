@@ -31,7 +31,7 @@ type PendingRequest struct {
 	// Summary は自由記述を保存しない要約（Bash の description / プログラム名 / ファイル名 / MCP の server/tool / 質問の header）。
 	// Why not コマンド本文: トークンや鍵が含まれうるため store に残さない
 	Summary string `yaml:"summary,omitempty"`
-	// InputHash は tool_input 生バイトの sha256 先頭 16 桁。本文を持たずに PostToolUse と対応付けるために使う
+	// InputHash は正規化した tool_input の sha256 先頭 16 桁。本文を持たずに PostToolUse と対応付けるために使う
 	InputHash string    `yaml:"input_hash,omitempty"`
 	At        time.Time `yaml:"at"`
 }
@@ -59,12 +59,27 @@ func (p PendingRequest) Label() string {
 	return p.Tool + ": " + p.Summary
 }
 
+// canonicalJSON はキー順・空白を揃えた JSON を返す（不正なら生バイト）。
+// 生バイトのまま比べないのは、PreToolUse / PermissionRequest と PostToolUse で直列化が同一である保証が無く、
+// ずれると待ち要求が PostToolUse で解消されずターン終了まで残るため。
+func canonicalJSON(raw json.RawMessage) []byte {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 // ClassifyPending は PermissionRequest 等の tool_name / tool_input から待ち要求を作る。
 // tool_input が壊れていても分類は落とさず、Summary を空にして返す（待ち状態そのものは記録したいため）。
 func ClassifyPending(toolName string, toolInput json.RawMessage, now time.Time) PendingRequest {
 	p := PendingRequest{Tool: toolName, Kind: PendingOther, At: now}
 	if len(toolInput) > 0 {
-		sum := sha256.Sum256(toolInput)
+		sum := sha256.Sum256(canonicalJSON(toolInput))
 		p.InputHash = hex.EncodeToString(sum[:])[:16]
 	}
 
