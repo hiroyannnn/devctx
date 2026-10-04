@@ -124,6 +124,12 @@ type Server struct {
 	cacheMu      sync.RWMutex
 	cachedResult []byte
 	cacheExpiry  time.Time
+
+	// phaseMu は phaseCache と、その miss 時の scan を守る（scanPhases）
+	phaseMu    sync.Mutex
+	phaseCache map[phaseKey]cachedPhase
+	// now は phase キャッシュと /api/roadmap の応答キャッシュの時計。nil なら time.Now（テストで TTL を待たずに進めるため）
+	now func() time.Time
 }
 
 const cacheTTL = 5 * time.Second
@@ -212,26 +218,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
-	// Return cached result if still valid
-	s.cacheMu.RLock()
-	if s.cachedResult != nil && time.Now().Before(s.cacheExpiry) {
-		data := s.cachedResult
-		s.cacheMu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
-		return
-	}
-	s.cacheMu.RUnlock()
-
+// loadRoadmapEntries は /api/roadmap と /api/roadmap-map が共有する entry 組み立て。
+// 返す entries は active と同じ順・同じ長さ（呼び出し側が index で ctx と突き合わせる）。
+// Why not /api/roadmap-graph も寄せる: graph は Phase を scan せず ctx.Phase をそのまま使い、載せる項目も違う。
+// phaseValidUntil は entries に載せた scan 結果の期限（scanPhases の validUntil）。
+func (s *Server) loadRoadmapEntries() (active []model.Context, entries []RoadmapEntry, phaseValidUntil time.Time, err error) {
 	store, err := s.StoreLoader.LoadStore()
 	if err != nil {
-		log.Printf("roadmap: failed to load store: %v", err)
-		http.Error(w, "failed to load session data", http.StatusInternalServerError)
-		return
+		return nil, nil, time.Time{}, err
 	}
 
-	active := store.Active()
+	active = store.Active()
 	views := s.agentViews(store.Contexts)
 
 	// Load insights (non-fatal if fails)
@@ -246,12 +243,13 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 		events, _ = s.EventLoader.LoadEvents()
 	}
 
-	entries := make([]RoadmapEntry, 0, len(active))
+	scanned, phaseValidUntil := s.scanPhases(active)
+	entries = make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
 		phase := ctx.Phase
-		// If no cached phase, do a fast scan for this context
-		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
-			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
+		// If no cached phase, use the fast scan result for this context
+		if s.needsPhaseScan(ctx) {
+			phase = scanned[phaseKey{ctx.Worktree, ctx.Branch}]
 		}
 
 		entry := RoadmapEntry{
@@ -296,6 +294,27 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 
 		entries = append(entries, entry)
 	}
+	return active, entries, phaseValidUntil, nil
+}
+
+func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
+	// Return cached result if still valid
+	s.cacheMu.RLock()
+	if s.cachedResult != nil && s.clock().Before(s.cacheExpiry) {
+		data := s.cachedResult
+		s.cacheMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+	s.cacheMu.RUnlock()
+
+	_, entries, phaseValidUntil, err := s.loadRoadmapEntries()
+	if err != nil {
+		log.Printf("roadmap: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
 
 	data, err := json.Marshal(entries)
 	if err != nil {
@@ -307,7 +326,11 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	// Cache the result
 	s.cacheMu.Lock()
 	s.cachedResult = data
-	s.cacheExpiry = time.Now().Add(cacheTTL)
+	s.cacheExpiry = s.clock().Add(cacheTTL)
+	// 使った phase の期限より長く応答を使い回さない（phase の古さを TTL 以内に保つ）
+	if !phaseValidUntil.IsZero() && phaseValidUntil.Before(s.cacheExpiry) {
+		s.cacheExpiry = phaseValidUntil
+	}
 	s.cacheMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -315,73 +338,19 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
-	store, err := s.StoreLoader.LoadStore()
+	active, entries, _, err := s.loadRoadmapEntries()
 	if err != nil {
 		log.Printf("roadmap-map: failed to load store: %v", err)
 		http.Error(w, "failed to load session data", http.StatusInternalServerError)
 		return
 	}
 
-	active := store.Active()
-	views := s.agentViews(store.Contexts)
-
-	var insights *model.InsightStore
-	if s.InsightLoader != nil {
-		insights, _ = s.InsightLoader.LoadInsights()
-	}
-
-	var events *model.EventStore
-	if s.EventLoader != nil {
-		events, _ = s.EventLoader.LoadEvents()
-	}
-
 	// Group by project (repo root)
 	projectMap := make(map[string]*ProjectGroup)
 	var projectOrder []string
 
-	for _, ctx := range active {
-		phase := ctx.Phase
-		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
-			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
-		}
-
-		entry := RoadmapEntry{
-			Name:          ctx.Name,
-			Branch:        ctx.Branch,
-			Status:        ctx.Status,
-			Phase:         phase,
-			InitialPrompt: ctx.InitialPrompt,
-			Worktree:      ctx.Worktree,
-			PRURL:         ctx.PRURL,
-			IssueURL:      ctx.IssueURL,
-			Note:          ctx.Note,
-			SessionName:   ctx.SessionName,
-			CreatedAt:     ctx.CreatedAt.Format(time.RFC3339),
-			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
-			RepoRoot:      ctx.RepoRoot,
-		}
-		applyAgentFields(&entry, ctx, views[ctx.Name])
-
-		if events != nil {
-			summary := events.Summarize(ctx.Name)
-			if summary.CommitCount > 0 || summary.SessionCount > 0 {
-				entry.Milestones = &summary
-			}
-		}
-
-		if insights != nil {
-			if insight := insights.Get(ctx.Name); insight != nil {
-				entry.Goal = insight.Goal
-				entry.CurrentFocus = insight.CurrentFocus
-				entry.NextStep = insight.NextStep
-				entry.AttentionState = insight.AttentionState
-				entry.Topics = insight.Topics
-				entry.Tasks = insight.Tasks
-				if !insight.InferredAt.IsZero() {
-					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
-				}
-			}
-		}
+	for i, ctx := range active {
+		entry := entries[i]
 
 		// Why: symlink 経由と実パスで同じ repo が別グループに割れないよう、islands と共通の RepoKey で束ねる
 		projectKey := model.RepoKey(ctx)
