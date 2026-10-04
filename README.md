@@ -176,7 +176,8 @@ devctx island list                             # └── 求人票を直す [t
 In the Mind Map, tasks are white boxes with a blue border, prefixed `☐` (open) or `✓` (done, dimmed).
 
 - **Right-click** a task: "プロンプトとしてコピー" / "完了にする" (or "未完了に戻す") / "名前を変更" / "削除". There is no "親から外す" because a task needs a parent. An island or repo offers "タスクを追加". Keyboard on a task: `Enter` adds a sibling task, `F2` / `Space` renames, `Delete` deletes; `Tab` does nothing.
-- **Drag** a task onto an island or repo to move it. Tasks are never drop targets, and dropping a task on the root does nothing.
+- **Drag** a task onto an island or repo to move it. Tasks are never drop targets, and the root is not highlighted as a target while dragging a task (it needs a parent).
+- `island rm --reparent` on a top-level island that has task children is refused ("tasks need a parent; move them first"); move the tasks with `island attach` first. `island list` warns about a task with no parent (hand-edited yaml).
 - **プロンプトとしてコピー** puts the task name and a marker line on the clipboard:
 
   ```
