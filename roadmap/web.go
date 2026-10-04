@@ -152,6 +152,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/roadmap-graph", s.handleAPIRoadmapGraph)
 	mux.HandleFunc("/api/islands", s.handleAPIIslands)
 	mux.HandleFunc("/api/islands/ops", s.handleAPIIslandOps)
+	mux.HandleFunc("/api/islands/known-repos", s.handleAPIKnownRepos)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
 	return s.guard(mux)
