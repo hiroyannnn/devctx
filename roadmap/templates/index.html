@@ -1739,7 +1739,7 @@ function buildSemanticGraph(graphData) {
 
 // ── Island editing ──
 // 編集は All Projects の Mind Map だけ（island は All Projects にしか描かれない）。変更は POST /api/islands/ops に送り、
-// 結果は refresh() で取り直して描画に反映する（クライアントで木を書き換えない）。
+// 結果は応答（更新後の木）か refresh() で server の木を取り直して描画に反映する（クライアントで木を書き換えない）。
 // Why not 楽観更新: 木の検証（循環・存在）は server の model が正で、クライアントで再実装すると食い違うため。
 
 // 純関数（DOM / vis に依存しない）。
@@ -1830,6 +1830,11 @@ function removeInput() {
   }
 }
 
+// 編集 UI（メニュー / 名前入力 / 削除確認）の DOM を全部外す。保留分の反映やフォーカス移動はしない。
+function closeEditUI() {
+  removeMenu(); removeInput(); removeConfirm();
+}
+
 // 保留していた更新があり、編集 UI がすべて閉じていれば反映する（変化の有無は applyRefreshed が再判定する）。
 function flushPending() {
   if (editingActive() || !pendingData) return;
@@ -1842,7 +1847,7 @@ function flushPending() {
 // 閉じたあとはキー操作を続けられるようグラフにフォーカスを戻す。blur（別の要素をクリック）で閉じる場合は、
 // クリックされた側のフォーカスを奪わないよう noFocus を渡す。
 function endEditing(noFocus) {
-  removeMenu(); removeInput(); removeConfirm();
+  closeEditUI();
   var canvasEl = document.getElementById('graph-canvas');
   if (!noFocus && canvasEl && graphRootId) canvasEl.focus({ preventScroll: true });
   flushPending();
@@ -1850,7 +1855,7 @@ function endEditing(noFocus) {
 
 // 描画の作り直し（フィルタ・プロジェクト切り替え）で消える UI を捨てる。保留分も捨てる（次の refresh が取り直す）。
 function cancelEditing() {
-  removeMenu(); removeInput(); removeConfirm();
+  closeEditUI();
   pendingData = null;
 }
 
@@ -1886,33 +1891,37 @@ async function postIslandOp(body) {
   }
 }
 
-// 操作後に選択するノード。add は作ったノード、rename / attach / detach は対象、remove は親（トップレベルなら無し）。
-function selectAfterOp(body, data) {
-  if (body.op === 'add') return (data && data.ref) || null;
+// 操作後に選択するノード（add 以外）。rename / attach / detach は対象、remove は親（トップレベルなら無し）。
+// add は作ったノードが応答の ref で決まる。
+function selectAfterOp(body) {
   if (body.op === 'rename') return body.ref;
   if (body.op === 'attach' || body.op === 'detach') return body.child;
   if (body.op === 'remove') return parentRefOf(body.ref, cachedIslands) || null;
   return null;
 }
 
+// 操作を送り、成功なら応答の木（GET /api/islands と同形）で描画する。
+// Why not 成功後に refresh(): 応答に更新後の木が入っているので、全体取得（roadmap-map / graph / islands の 3 本）を省ける。
+// 失敗（409 等）は server の現状と食い違っているので、全体を取り直す。
 async function runIslandOp(body) {
-  var select = selectAfterOp(body, null); // remove の親は、消える前の木から引く
+  var select = selectAfterOp(body); // remove の親は、消える前の木から引く
   var res = await postIslandOp(body);
-  if (!res.ok) {
+  if (!res.ok || !res.data || !res.data.islands) {
     var err = res.data && res.data.error;
     if (res.status === 409 && err === 'children changed') {
       showToast('子が変わりました。もう一度確認してください');
     } else {
       showToast(err || ('HTTP ' + res.status));
     }
-  } else {
-    pendingSelect = body.op === 'add' ? selectAfterOp(body, res.data) : select;
+    refresh();
+    return;
   }
-  // 成功でも失敗（409 等）でも、server の現状に取り直す
-  var mySeq = refreshSeq + 1;
-  await refresh();
-  // 後から始まった取得（ポーリング）に追い越されたときは、その描画が選択を消費するので消さない
-  if (refreshSeq === mySeq) pendingSelect = null;
+  pendingSelect = body.op === 'add' ? (res.data.ref || null) : select;
+  // 進行中の取得（ポーリング）は、この操作より前の木を持っているので捨てさせる
+  refreshSeq++;
+  applyRefreshed({ mapData: cachedData, graphData: cachedGraphData, islandsData: normalizeIslands(res.data.islands) });
+  // 編集 UI が開いていて保留になった場合だけ、選択を保留の反映まで残す
+  if (!pendingData) pendingSelect = null;
 }
 
 // ノードの DOM 座標（graph-canvas 内）の矩形
@@ -1926,7 +1935,7 @@ function nodeDomBox(nodeId) {
 // ノード上（rename）または親ノードの横（add）に名前入力を出す。Enter で確定、Esc / blur でキャンセル。
 // mode 'add' は root より右にある親なら右側、左なら左側に出す（子が広がる側と合わせる）。
 function openNameInput(o) {
-  removeMenu(); removeInput(); removeConfirm();
+  closeEditUI();
   var container = document.getElementById('graph-container');
   var canvasEl = document.getElementById('graph-canvas');
   var box = nodeDomBox(o.anchorId);
@@ -2003,7 +2012,7 @@ function startDeleteIsland(ref) {
     runIslandOp({ op: 'remove', ref: ref, children: [] });
     return;
   }
-  removeMenu(); removeInput(); removeConfirm();
+  closeEditUI();
   var panel = document.createElement('div');
   panel.className = 'island-confirm';
   panel.setAttribute('role', 'dialog');
@@ -2050,6 +2059,7 @@ function runEditAction(action, id, kind) {
   } else if (action === 'rename') {
     startRenameIsland(id);
   } else if (action === 'detach') {
+    endEditing(); // メニューを閉じ、保留分を反映してから送る
     runIslandOp({ op: 'detach', child: id });
   } else if (action === 'delete') {
     startDeleteIsland(id);
@@ -2089,16 +2099,10 @@ function openContextMenu(nodeId, x, y) {
   var node = graphNodes.get(nodeId);
   var kind = editableKind(node);
   if (!kind) return false;
-  removeMenu(); removeInput(); removeConfirm();
+  closeEditUI();
   var items = contextMenuItems(kind, !!parentRefOf(nodeId, cachedIslands));
   editState.menu = buildContextMenu(items, x, y, function(action) {
-    removeMenu(); // 次の操作（入力欄・確認）へ移るので、保留分はまだ反映しない
-    if (action === 'addChild' || action === 'rename' || action === 'delete') {
-      runEditAction(action, nodeId, kind);
-    } else {
-      endEditing();
-      runEditAction(action, nodeId, kind);
-    }
+    runEditAction(action, nodeId, kind);
   });
   var first = editState.menu.querySelector('.ctx-item');
   if (first) first.focus();
@@ -2474,12 +2478,33 @@ async function fetchOptionalJSON(url) {
   } catch (e) { return null; }
 }
 
-// refresh は並行しうる（ポーリングと操作後の取り直し）。古い取得が新しい取得の後に届いて、
-// 直前の編集を巻き戻して描画しないよう、最後に始めた取得だけを反映する。
+// refresh は同時に 1 本だけ走らせる。ポーリングは走行中なら見送り、操作失敗後などの明示的な要求は
+// 走行中なら終了後に 1 回だけ再実行する。
+// Why: 取得が 5 秒より長引いたときにポーリングが重なって、古い取得が新しい取得を追い越すのを防ぐ。
+// refreshSeq は、取得の途中で操作の応答（より新しい木）が反映されたとき、その取得を捨てるための世代。
 var refreshSeq = 0;
-async function refresh() {
+var refreshInFlight = false;
+var refreshRerun = false;
+async function refresh(opts) {
   if (projectChanging) return; // skip refresh during project change
-  var seq = ++refreshSeq;
+  if (refreshInFlight) {
+    if (!(opts && opts.poll)) refreshRerun = true;
+    return;
+  }
+  refreshInFlight = true;
+  try {
+    await fetchAndApply();
+  } finally {
+    refreshInFlight = false;
+  }
+  if (refreshRerun) {
+    refreshRerun = false;
+    await refresh();
+  }
+}
+
+async function fetchAndApply() {
+  var seq = refreshSeq;
   try {
     var res = await fetch('/api/roadmap-map');
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2544,7 +2569,7 @@ if (currentView !== 'project') {
 } else {
   refresh();
 }
-setInterval(refresh, 5000);
+setInterval(function() { refresh({ poll: true }); }, 5000);
 </script>
 </body>
 </html>
