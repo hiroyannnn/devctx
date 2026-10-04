@@ -235,12 +235,13 @@ func (s *Server) loadRoadmapEntries() ([]model.Context, []RoadmapEntry, error) {
 		events, _ = s.EventLoader.LoadEvents()
 	}
 
+	scanned := s.scanPhases(active)
 	entries := make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
 		phase := ctx.Phase
-		// If no cached phase, do a fast scan for this context
-		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
-			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
+		// If no cached phase, use the fast scan result for this context
+		if s.needsPhaseScan(ctx) {
+			phase = scanned[phaseKey{ctx.Worktree, ctx.Branch}]
 		}
 
 		entry := RoadmapEntry{
