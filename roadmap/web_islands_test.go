@@ -112,6 +112,46 @@ func TestHandleAPIIslands_LoaderError(t *testing.T) {
 
 // index.html は埋め込み静的ファイルでブラウザ無しでは動作を試せないため、
 // island 描画に必要な取得・共通 helper・安定ノード ID が残っていることだけを守る。
+func TestHandleIndex_WiresIslandEditing(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+
+	for _, want := range []string{
+		"fetch('/api/islands/ops'",                        // 編集は専用 endpoint に JSON で送る
+		"headers: { 'Content-Type': 'application/json' }", // Origin はブラウザが付ける。Content-Type だけ明示
+		"function editingActive()",                        // 編集中は refresh で再描画しない
+		"pendingData = ",                                  // 編集中に届いた更新は保留して、閉じたら反映する
+		"function buildContextMenu(",                      // 右クリックメニュー（DOM は createElement のみ）
+		"graphNetwork.on('oncontext'",                     // vis の右クリック
+		"function contextMenuItems(",                      // 種別ごとのメニュー項目（純関数）
+		"function keyAction(",                             // キーボード操作の対応表（純関数）
+		"addEventListener('keydown', onGraphKeydown)",     // ハンドラを定義するだけで配線し忘れない
+		"function selectAfterOp(",                         // 全 op が同じ再描画経路で選択を引き継ぐ
+		"var islandSides = {};",                           // 部分木の左右は再描画をまたいで保つ
+		"var refreshSeq = 0;",
+		"function closeEditUIOnOutsideMouseDown()",       // 外側クリックで閉じても、更新の反映はクリックが済んでから
+		"function deleteConfirmModel(",                   // 削除は子がいなくても必ず確認する
+		"function graphFocusEl()",                        // キー操作の受け手は vis の frame
+		"function closeEditUI()",                         // 編集 UI を閉じる処理は 1 か所
+		"var refreshInFlight = false;",                   // ポーリングが重ならない
+		"normalizeIslands(res.data.islands)",             // 成功後は応答の木で描画する（全体取得しない）                             // 古い取得が新しい取得を巻き戻さない
+		"function siblingParentRef(",                     // Enter で兄弟を足すときの親
+		"function childrenRefsOf(",                       // 削除確認で見せる子（server に children として送る）
+		"keyboard: { enabled: true, bindToWindow: false", // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
+		"graphNetwork.moveTo({ scale: keep.scale",        // 再描画で視点（拡大率・位置）を保つ
+		"子が変わりました。もう一度確認してください",                          // children の 409 のトースト
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index.html does not contain %q", want)
+		}
+	}
+	// 編集 UI の DOM は innerHTML で組まない（島の名前は利用者入力）
+	if strings.Contains(body, "innerHTML") {
+		t.Error("index.html must not use innerHTML")
+	}
+}
+
 func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 	w := httptest.NewRecorder()
 	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))

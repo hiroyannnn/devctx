@@ -120,7 +120,7 @@ To get the new hooks, re-run `devctx hooks --install` (Claude Code) and `devctx 
 An **island** is a theme node you make by hand (e.g. `人事強化`), shown in the **All Projects** Mind Map. It does not need a repo. Islands and repos form **one tree**: a repo can sit under an island, and an island can sit under a repo. Agent sessions attach to their repo automatically; repos you do not attach stay at the top level.
 
 ```bash
-devctx island add 人事強化 --id hr            # --id is needed to refer to a non-ASCII name
+devctx island add 人事強化 --id hr            # --id is needed to refer to a non-ASCII name (otherwise island-N)
 devctx island attach devctx --to hr            # repo "devctx" under island "hr"
 devctx island add 採用フロー --id hiring --parent island:hr
 devctx island attach island:m3 --to repo:.     # island "m3" under the repo of the current directory
@@ -128,6 +128,8 @@ devctx island detach devctx                    # back to the top level
 devctx island rm hr --reparent                 # children move up to hr's parent
 devctx island list                             # tree, with active sessions per repo
 ```
+
+When the id is derived from the name and is already taken, devctx appends `-2`, `-3`, ... (`API` → `api`, `api-2`); an explicit `--id` that is taken is an error. Renaming never changes an id.
 
 Refs are `island:<id>` or `repo:<path>` (`repo:.` is the repo of the current directory). A bare name matches an island id, then a repo basename. If it matches both an island and a repo, or several repos share the basename, devctx lists the candidates as typed refs and changes nothing. `island rm` refuses while the island has children unless you pass `--reparent`. Cycles (including island → repo → island) are rejected.
 
@@ -145,7 +147,22 @@ repos:
     parent: island:hr
 ```
 
-The Mind Map is read-only for islands in this version; edit them with the CLI. A parent that no longer exists is shown at the top level, and `island list` warns about it.
+A parent that no longer exists is shown at the top level, and `island list` warns about it.
+
+#### Editing in the dashboard
+
+In **All Projects**, the Mind Map edits the same tree as the CLI (changes go through the same lock, so they do not clobber each other).
+
+- **Right-click** a node: the root offers "島を追加"; an island offers "子の島を追加" / "名前を変更" / "親から外す" (only if it has a parent) / "削除"; a repo offers "子の島を追加" / "親から外す". Session nodes have no menu.
+- **Keyboard** (click the map to focus it, select a root / island / repo node): `Tab` adds a child island, `Enter` adds a sibling (under the root for top-level nodes), `F2` or `Space` renames, `Delete` / `Backspace` deletes (islands only). `Enter` / `Esc` confirm / cancel the name input.
+- Deleting an island that has children asks for confirmation and moves the children up to its parent. If the children changed since you looked (CLI or another tab), nothing is deleted and the map refreshes.
+- While a menu, input or confirmation is open the map does not redraw; the latest data is applied when you close it. Zoom and pan are kept across redraws.
+- Only repos devctx already knows (from sessions or `islands.yaml`) can be attached.
+- vis-network's own keyboard pan/zoom is off (it listens on the whole window and would fight the name input); use the mouse to pan and zoom.
+
+#### Security note
+
+The dashboard listens on `127.0.0.1` only, and now also checks every request: the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (guards against DNS rebinding, GET included), and changes (`POST /api/islands/ops`) additionally need `Content-Type: application/json` and an `Origin` equal to `http://<Host>`. Open the dashboard at `http://127.0.0.1:<port>` or `http://localhost:<port>`; other host names (a LAN IP, a tunnel, a reverse proxy) get `403`.
 
 ### Optional Setup
 

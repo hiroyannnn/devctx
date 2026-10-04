@@ -238,6 +238,7 @@ The dashboard auto-refreshes every 5 seconds.`,
 		// Claude の live 状態は `claude agents --json` で補う。取得失敗時は hook 状態のまま表示される
 		server.Live = agentview.NewRefresher(agentview.Fetch)
 		server.IslandLoader = s
+		server.IslandUpdater = s
 		return server.ListenAndServe()
 	},
 }

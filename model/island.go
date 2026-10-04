@@ -58,6 +58,19 @@ func ParseRef(ref string) (RefKind, string, error) {
 	return "", "", fmt.Errorf("invalid ref %q: want island:<id> or repo:<path>", ref)
 }
 
+// ParseIslandRef は "island:<id>" だけを受け、id を返す。repo ref など別種別はエラー。
+// Why: rename / remove のように island しか取れない操作の入口（CLI と Web）で、種別検査を 1 か所にそろえる。
+func ParseIslandRef(ref string) (string, error) {
+	kind, v, err := ParseRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if kind != RefIsland {
+		return "", fmt.Errorf("%s is not an island ref (want island:<id>)", ref)
+	}
+	return v, nil
+}
+
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
@@ -101,7 +114,14 @@ func (s *IslandStore) checkRefExists(ref string) error {
 	return nil
 }
 
-// AddIsland は island を追加する。id が空なら name の slug、ASCII が残らなければ island-N。
+// IDExistsError は明示した island id の衝突（--id）。名前から作る id は衝突時に連番を付けるのでこれにならない。
+type IDExistsError struct{ ID string }
+
+func (e *IDExistsError) Error() string {
+	return fmt.Sprintf("island id %q already exists; choose another id", e.ID)
+}
+
+// AddIsland は island を追加する。id が空なら name の slug（使用済みなら -2, -3 ...）、ASCII が残らなければ island-N。
 func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -117,8 +137,18 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 		if !idPattern.MatchString(id) {
 			return Island{}, fmt.Errorf("invalid island id %q: use lowercase letters, digits and '-'", id)
 		}
+		if s.findIsland(id) != nil {
+			return Island{}, &IDExistsError{ID: id}
+		}
 	case slug(name) != "":
-		id = slug(name)
+		// 名前から作る id は衝突時に -2, -3 ... を付ける。
+		// Why: 改名しても id は残るので、画面に見えない id と衝突する（"API 設計" を "API レビュー" に改名後、また "API" を足す等）。
+		// Web には id を選ぶ手段が無く、衝突のたびに足せなくなるのを避ける。
+		base := slug(name)
+		id = base
+		for n := 2; s.findIsland(id) != nil; n++ {
+			id = base + "-" + strconv.Itoa(n)
+		}
 	default:
 		for n := 1; ; n++ {
 			id = "island-" + strconv.Itoa(n)
@@ -126,9 +156,6 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 				break
 			}
 		}
-	}
-	if s.findIsland(id) != nil {
-		return Island{}, fmt.Errorf("island id %q already exists; pass --id to choose another", id)
 	}
 	is := Island{ID: id, Name: name, Parent: parent}
 	s.Islands = append(s.Islands, is)
@@ -152,6 +179,12 @@ func (s *IslandStore) RenameIsland(id, name string) error {
 // RemoveIsland は island を消す。子がいる場合は reparent=true のときだけ、子を消す island の親へ付け替える。
 // Why not 子ごと消す: 手で組んだ構造の巻き込み削除は取り返しがつかない。
 func (s *IslandStore) RemoveIsland(id string, reparent bool) error {
+	// 生の Parent ではなく解決後の親へ。dangling な親を子へ引き継がない
+	return s.removeIsland(id, reparent, s.ParentOf(IslandRef(id)))
+}
+
+// removeIsland は、子を newParent へ付け替えて island を消す。
+func (s *IslandStore) removeIsland(id string, reparent bool, newParent string) error {
 	is := s.findIsland(id)
 	if is == nil {
 		return fmt.Errorf("island %q not found", id)
@@ -161,8 +194,6 @@ func (s *IslandStore) RemoveIsland(id string, reparent bool) error {
 	if len(children) > 0 && !reparent {
 		return fmt.Errorf("island %q has %d child(ren) (%s); use --reparent to move them up", id, len(children), strings.Join(children, ", "))
 	}
-	// 生の Parent ではなく解決後の親へ。dangling な親を子へ引き継がない
-	newParent := s.ParentOf(ref)
 	for _, c := range children {
 		// 付け替え先は削除対象の親なので存在・循環の検査は不要（木の中で 1 段持ち上げるだけ）
 		s.setParentUnchecked(c, newParent)
@@ -174,6 +205,48 @@ func (s *IslandStore) RemoveIsland(id string, reparent bool) error {
 		}
 	}
 	return nil
+}
+
+// ChildrenChangedError は、呼び出し側が見た子の集合と、ロック内の現在の子が食い違ったことを表す。
+type ChildrenChangedError struct{ Current []string }
+
+func (e *ChildrenChangedError) Error() string {
+	return fmt.Sprintf("children changed (now: %s)", strings.Join(e.Current, ", "))
+}
+
+// RemoveIslandExpecting は、呼び出し側が見た子の集合 expect が現在の子と（集合として）一致するときだけ、
+// 子を親へ付け替えて island を消す。子がいなければ expect に関わらず消す。食い違えば *ChildrenChangedError で何も変えない。
+// Why: UI が見せていない子（別タブ・CLI の同時編集で増えた子）を、黙って付け替えないため。
+// 子と付け替え先は、UI と同じ循環を断ち切った木（Resolved）で決める。生の木で比べると、手編集の輪（A↔B）で
+// UI に見えない子との不一致が続き、409 が解消しなくなる。輪を閉じていた辺（UI では切れている子）は先頭へ落とす。
+func (s *IslandStore) RemoveIslandExpecting(id string, expect []string) error {
+	if !s.HasIsland(id) {
+		return s.RemoveIsland(id, false) // not found のエラー
+	}
+	ref := IslandRef(id)
+	resolved := s.Resolved()
+	current := resolved.Children(ref)
+	want := map[string]bool{}
+	for _, r := range expect {
+		want[r] = true
+	}
+	same := len(want) == len(current)
+	visible := map[string]bool{}
+	for _, r := range current {
+		visible[r] = true
+		if !want[r] {
+			same = false
+		}
+	}
+	if len(current) > 0 && !same {
+		return &ChildrenChangedError{Current: current}
+	}
+	for _, c := range s.Children(ref) {
+		if !visible[c] {
+			s.setParentUnchecked(c, "")
+		}
+	}
+	return s.removeIsland(id, len(current) > 0, resolved.ParentOf(ref))
 }
 
 func (s *IslandStore) setParentUnchecked(child, parent string) {

@@ -114,6 +114,8 @@ type Server struct {
 	EventLoader   EventLoader
 	// IslandLoader は /api/islands の供給元。nil なら空の木を返す（NewServer の引数を増やさず既存の呼び出しを保つ）
 	IslandLoader IslandLoader
+	// IslandUpdater は POST /api/islands/ops の書き込み先。nil なら 503（編集は有効化した呼び出しだけに限る）
+	IslandUpdater IslandUpdater
 	Scanner       *Scanner
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
@@ -142,29 +144,42 @@ func NewServer(loader StoreLoader, insightLoader InsightLoader, eventLoader Even
 	return &Server{StoreLoader: loader, InsightLoader: insightLoader, EventLoader: eventLoader, Scanner: scanner, Port: port}
 }
 
-// ListenAndServe starts the HTTP server on localhost only.
-func (s *Server) ListenAndServe() error {
+// Handler は全 endpoint をまとめ、リクエストガード（Host / Origin 検査）で包んだ http.Handler を返す。
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
 	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
 	mux.HandleFunc("/api/roadmap-graph", s.handleAPIRoadmapGraph)
 	mux.HandleFunc("/api/islands", s.handleAPIIslands)
+	mux.HandleFunc("/api/islands/ops", s.handleAPIIslandOps)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
+	return s.guard(mux)
+}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
-	url := fmt.Sprintf("http://%s", addr)
+// ListenAndServe starts the HTTP server on localhost only.
+func (s *Server) ListenAndServe() error {
+	// 先に listen する。--port 0 では、実際の port が分かってから Host の許可表を作る必要がある
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port))
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Serve は listener で配信する。Port には実際の待ち受け port を入れる。
+func (s *Server) Serve(ln net.Listener) error {
+	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
+		s.Port = addr.Port
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d", s.Port)
 	fmt.Printf("Session Roadmap: %s\n", url)
 	fmt.Println("Press Ctrl+C to stop")
 
 	// Auto-open browser after listener is established
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
 	go openBrowser(url)
 
-	return http.Serve(ln, mux)
+	return http.Serve(ln, s.Handler())
 }
 
 // openBrowser opens the given URL in the default browser.

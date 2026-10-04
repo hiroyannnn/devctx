@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 
@@ -37,50 +36,10 @@ func (r refResolver) bind(s *storage.Storage, is *model.IslandStore) refResolver
 		if err != nil {
 			return nil, err
 		}
-		repos, _ := scanRepos(store, is)
+		repos, _ := model.ScanRepos(store, is)
 		return repos, nil
 	})
 	return r
-}
-
-// scanRepos は contexts と islands に現れる repo（重複なし・昇順）と、repo ごとのアクティブな context 数を 1 回の走査で返す。
-// done の context も repo としては含める（完了済みでも island に束ねたい repo は残るため）が、件数には数えない。
-// is は LoadIslands で正規化済みであること。ここでは再正規化しない（RepoKey も正規化済み）。
-func scanRepos(store *model.Store, is *model.IslandStore) ([]string, map[string]int) {
-	seen := map[string]bool{}
-	var out []string
-	active := map[string]int{}
-	add := func(root string) {
-		if root != "" && !seen[root] {
-			seen[root] = true
-			out = append(out, root)
-		}
-	}
-	for _, c := range store.Contexts {
-		key := model.RepoKey(c)
-		add(key)
-		if key != "" && c.Status != model.StatusDone {
-			active[key]++
-		}
-	}
-	for _, rn := range is.Repos {
-		add(rn.Root)
-	}
-	// 親としてだけ参照される repo（contexts も repo ノードも無い）も一覧に入れる。
-	// Why: CLI の list が Web（親 repo を薄いノードで補う）と同じ木を出せるように
-	addParentRepo := func(parent string) {
-		if kind, v, err := model.ParseRef(parent); err == nil && kind == model.RefRepo {
-			add(v)
-		}
-	}
-	for _, isl := range is.Islands {
-		addParentRepo(isl.Parent)
-	}
-	for _, rn := range is.Repos {
-		addParentRepo(rn.Parent)
-	}
-	sort.Strings(out)
-	return out, active
 }
 
 // currentRepo は現在ディレクトリの repo root を返す。

@@ -73,18 +73,27 @@ web (/r/web, 1 active)
 	}
 }
 
-func TestIslandAddRejectsDuplicateAndStoresNothing(t *testing.T) {
+func TestIslandAddDerivedIDGetsSuffixButExplicitDuplicateIsRejected(t *testing.T) {
 	s, base := islandFixture(t)
 	var out bytes.Buffer
 	if err := islandAdd(s, &out, base, "HR", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	err := islandAdd(s, &out, base, "hr", "", "")
-	if err == nil || !strings.Contains(err.Error(), "--id") {
-		t.Fatalf("err = %v", err)
+	// 名前から作る id は衝突しても連番で足せる
+	if err := islandAdd(s, &out, base, "hr", "", ""); err != nil {
+		t.Fatal(err)
 	}
 	is, _ := s.LoadIslands()
-	if len(is.Islands) != 1 {
+	if len(is.Islands) != 2 || is.Islands[1].ID != "hr-2" {
+		t.Fatalf("islands = %+v", is.Islands)
+	}
+	// 明示した --id の衝突は従来どおりエラーで、何も保存しない
+	err := islandAdd(s, &out, base, "Other", "hr", "")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v", err)
+	}
+	is, _ = s.LoadIslands()
+	if len(is.Islands) != 2 {
 		t.Errorf("islands = %+v", is.Islands)
 	}
 }
