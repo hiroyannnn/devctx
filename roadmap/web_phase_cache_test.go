@@ -112,3 +112,29 @@ func TestRoadmapMap_ScansEachWorktreeBranchOnce(t *testing.T) {
 		t.Errorf("scans of /w/b = %d, want 0", got)
 	}
 }
+
+func TestRoadmapAPIs_SharePhaseCacheWithinTTL(t *testing.T) {
+	server, git := newPhaseTestServer()
+	clock := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	server.now = func() time.Time { return clock }
+
+	getRoadmapMapPhases(t, server)
+	// /api/roadmap は自前の応答キャッシュが空なので entry を組み立てるが、phase は map の scan 結果を使う
+	server.handleAPIRoadmap(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/roadmap", nil))
+	clock = clock.Add(phaseCacheTTL - time.Millisecond)
+	phases := getRoadmapMapPhases(t, server)
+
+	if got := git.scanCount("/w/a"); got != 2 {
+		t.Errorf("scans of /w/a within TTL = %d, want 2", got)
+	}
+	if phases["a1"] != model.PhasePushed || phases["a4"] != model.PhaseCommitted {
+		t.Errorf("cached phases = %v, want a1=pushed a4=committed", phases)
+	}
+
+	clock = clock.Add(time.Millisecond)
+	getRoadmapMapPhases(t, server)
+
+	if got := git.scanCount("/w/a"); got != 4 {
+		t.Errorf("scans of /w/a after TTL = %d, want 4", got)
+	}
+}

@@ -124,6 +124,12 @@ type Server struct {
 	cacheMu      sync.RWMutex
 	cachedResult []byte
 	cacheExpiry  time.Time
+
+	// phaseMu は phaseCache と、その miss 時の scan を守る（scanPhases）
+	phaseMu    sync.Mutex
+	phaseCache map[phaseKey]cachedPhase
+	// now は phase キャッシュの時計。nil なら time.Now（テストで TTL を待たずに進めるため）
+	now func() time.Time
 }
 
 const cacheTTL = 5 * time.Second
