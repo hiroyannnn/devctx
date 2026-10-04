@@ -129,7 +129,8 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 		"function balancedLayout(",                          // 左右バランス配置の純関数
 		"function postProcess(nodes, edges, isAllProjects)", // 両 builder が通る後処理の単一入口
 		"function islandNodeId(",                            // ノード ID を手組みしない
-		"applyMindmapTheme(nodes);",                         // 両 builder で共通のテーマ適用
+		"if (n.borderWidth === undefined) n.borderWidth = T.borderWidth;", // session の待ち強調（太い枠）を上書きしない
+		"applyMindmapTheme(nodes);",                                       // 両 builder で共通のテーマ適用
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)

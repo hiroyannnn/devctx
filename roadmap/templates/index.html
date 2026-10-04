@@ -1169,7 +1169,8 @@ function applyMindmapTheme(nodes) {
     n.shape = 'box';
     n.shapeProperties = Object.assign({}, n.shapeProperties, { borderRadius: T.radius });
     n.margin = Object.assign({}, T.margin);
-    n.borderWidth = n.borderWidth === undefined || uniform[n._type] ? T.borderWidth : n.borderWidth;
+    // builder が与えた太さは残す（session の待ち = 3 / attention = 2 の強調を潰さない）。未指定のノードだけ既定にする
+    if (n.borderWidth === undefined) n.borderWidth = T.borderWidth;
     n.borderWidthSelected = T.borderWidthSelected;
     if (!n.shadow) n.shadow = Object.assign({}, T.shadow); // フォーカス中ノードの青いグローは残す
     n.widthConstraint = { maximum: T.maxWidth };
