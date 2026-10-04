@@ -145,7 +145,22 @@ repos:
     parent: island:hr
 ```
 
-The Mind Map is read-only for islands in this version; edit them with the CLI. A parent that no longer exists is shown at the top level, and `island list` warns about it.
+A parent that no longer exists is shown at the top level, and `island list` warns about it.
+
+#### Editing in the dashboard
+
+In **All Projects**, the Mind Map edits the same tree as the CLI (changes go through the same lock, so they do not clobber each other).
+
+- **Right-click** a node: the root offers "島を追加"; an island offers "子の島を追加" / "名前を変更" / "親から外す" (only if it has a parent) / "削除"; a repo offers "子の島を追加" / "親から外す". Session nodes have no menu.
+- **Keyboard** (click the map to focus it, select a root / island / repo node): `Tab` adds a child island, `Enter` adds a sibling (under the root for top-level nodes), `F2` or `Space` renames, `Delete` / `Backspace` deletes (islands only). `Enter` / `Esc` confirm / cancel the name input.
+- Deleting an island that has children asks for confirmation and moves the children up to its parent. If the children changed since you looked (CLI or another tab), nothing is deleted and the map refreshes.
+- While a menu, input or confirmation is open the map does not redraw; the latest data is applied when you close it. Zoom and pan are kept across redraws.
+- Only repos devctx already knows (from sessions or `islands.yaml`) can be attached.
+- vis-network's own keyboard pan/zoom is off (it listens on the whole window and would fight the name input); use the mouse to pan and zoom.
+
+#### Security note
+
+The dashboard listens on `127.0.0.1` only, and now also checks every request: the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (guards against DNS rebinding, GET included), and changes (`POST /api/islands/ops`) additionally need `Content-Type: application/json` and an `Origin` equal to `http://<Host>`. Open the dashboard at `http://127.0.0.1:<port>` or `http://localhost:<port>`; other host names (a LAN IP, a tunnel, a reverse proxy) get `403`.
 
 ### Optional Setup
 
