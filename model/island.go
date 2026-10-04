@@ -161,7 +161,8 @@ func (s *IslandStore) RemoveIsland(id string, reparent bool) error {
 	if len(children) > 0 && !reparent {
 		return fmt.Errorf("island %q has %d child(ren) (%s); use --reparent to move them up", id, len(children), strings.Join(children, ", "))
 	}
-	newParent := is.Parent
+	// 生の Parent ではなく解決後の親へ。dangling な親を子へ引き継がない
+	newParent := s.ParentOf(ref)
 	for _, c := range children {
 		// 付け替え先は削除対象の親なので存在・循環の検査は不要（木の中で 1 段持ち上げるだけ）
 		s.setParentUnchecked(c, newParent)
@@ -282,24 +283,44 @@ func (s *IslandStore) Children(ref string) []string {
 	return out
 }
 
-// Resolved は dangling な親を "" にした複製を返す（receiver は変えない）。API 応答用。
+// Resolved は dangling な親と循環を断ち切った複製を返す（receiver は変えない）。API と CLI の list が使う。
+// 循環は island → repo の順にファイルの並びで処理し、輪を閉じる辺（後から処理した側の親）を ""（トップレベル）にする。
+// Why: 手編集で循環した yaml でも、描画側が全ノードを root から辿れる非循環の木を受け取れるようにする。
+// Why not 循環の全ノードをトップレベルに落とす: 手で組んだ構造の大半が残るよう、切る辺は 1 本に抑える。
 func (s *IslandStore) Resolved() IslandStore {
 	out := IslandStore{
 		Islands: make([]Island, len(s.Islands)),
 		Repos:   make([]RepoNode, len(s.Repos)),
 	}
+	accepted := map[string]string{} // 採用済みの子 → 親。ここは常に非循環
+	closesLoop := func(ref, parent string) bool {
+		for cur := parent; cur != ""; cur = accepted[cur] {
+			if cur == ref {
+				return true
+			}
+		}
+		return false
+	}
+	resolve := func(ref string) string {
+		parent := s.ParentOf(ref)
+		if parent == "" || closesLoop(ref, parent) {
+			return ""
+		}
+		accepted[ref] = parent
+		return parent
+	}
 	for i, is := range s.Islands {
-		is.Parent = s.ParentOf(IslandRef(is.ID))
+		is.Parent = resolve(IslandRef(is.ID))
 		out.Islands[i] = is
 	}
 	for i, rn := range s.Repos {
-		rn.Parent = s.ParentOf(RepoRef(rn.Root))
+		rn.Parent = resolve(RepoRef(rn.Root))
 		out.Repos[i] = rn
 	}
 	return out
 }
 
-// Validate は dangling な親があれば全件を列挙したエラーを返す。CLI の list が警告に使う。
+// Validate は解決できない親（dangling または循環）があれば全件を列挙したエラーを返す。CLI の list が警告に使う。
 // 判定は Resolved と同じ（元の Parent があるのに解決後は ""）なので、API と CLI で食い違わない。
 func (s *IslandStore) Validate() error {
 	r := s.Resolved()
@@ -315,28 +336,36 @@ func (s *IslandStore) Validate() error {
 		}
 	}
 	if len(bad) > 0 {
-		return fmt.Errorf("dangling parent: %s", strings.Join(bad, "; "))
+		return fmt.Errorf("invalid parent (dangling or cyclic): %s", strings.Join(bad, "; "))
 	}
 	return nil
 }
 
 // Normalize は repo のパスを NormalizePath にそろえる（repo ノードの root と、island / repo の repo 型の親 ref）。
-// 正規化後に同じ root になった repo ノードは先勝ちで 1 つにする。
+// 正規化後に同じ root になった repo ノードは先勝ちで 1 つにする（先に親が無ければ後の親を引き継ぐ）。
+// 正規化の結果、自分自身の下になった親は外す。
 // Why: contexts のグルーピング（RepoKey）と同じキーに読み込み時点でそろえ、CLI と Web が同じ木を見るようにする。
 // 手編集で symlink 経由のパスが書かれていても突き合うようにするため。
 func (s *IslandStore) Normalize() {
 	for i := range s.Islands {
 		s.Islands[i].Parent = normalizeRepoRef(s.Islands[i].Parent)
 	}
-	seen := map[string]bool{}
+	index := map[string]int{}
 	repos := s.Repos[:0]
 	for _, rn := range s.Repos {
 		rn.Root = NormalizePath(rn.Root)
 		rn.Parent = normalizeRepoRef(rn.Parent)
-		if seen[rn.Root] {
+		if rn.Parent == RepoRef(rn.Root) { // symlink 経由で自分自身の下になったもの
+			rn.Parent = ""
+		}
+		if i, dup := index[rn.Root]; dup {
+			// 先勝ちだが、先の側に親が無ければ後の親を拾う（親を黙って落とさない）
+			if repos[i].Parent == "" {
+				repos[i].Parent = rn.Parent
+			}
 			continue
 		}
-		seen[rn.Root] = true
+		index[rn.Root] = len(repos)
 		repos = append(repos, rn)
 	}
 	s.Repos = repos

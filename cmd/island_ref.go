@@ -19,6 +19,13 @@ type refResolver struct {
 	repos func() ([]string, error)
 	// repoFromCwd は "repo:." のための現在ディレクトリの repo。git を呼ぶので差し替え可能にしている
 	repoFromCwd func() (string, error)
+	// repoFromDir は dir が git 管理下ならその repo root（worktree は本体の root）、そうでなければ ""。nil なら判定しない
+	repoFromDir func(dir string) string
+}
+
+// newRefResolver は本番用の resolver（git で現在ディレクトリ・指定パスの repo を判定する）。
+func newRefResolver() refResolver {
+	return refResolver{repoFromCwd: currentRepo, repoFromDir: detectRepoRoot}
 }
 
 // bind は islands（UpdateIslands のロック内のもの）を束ねた resolver を返す。
@@ -58,6 +65,19 @@ func scanRepos(store *model.Store, is *model.IslandStore) ([]string, map[string]
 	}
 	for _, rn := range is.Repos {
 		add(rn.Root)
+	}
+	// 親としてだけ参照される repo（contexts も repo ノードも無い）も一覧に入れる。
+	// Why: CLI の list が Web（親 repo を薄いノードで補う）と同じ木を出せるように
+	addParentRepo := func(parent string) {
+		if kind, v, err := model.ParseRef(parent); err == nil && kind == model.RefRepo {
+			add(v)
+		}
+	}
+	for _, isl := range is.Islands {
+		addParentRepo(isl.Parent)
+	}
+	for _, rn := range is.Repos {
+		addParentRepo(rn.Parent)
 	}
 	sort.Strings(out)
 	return out, active
@@ -134,6 +154,13 @@ func (r refResolver) resolveRepoPath(path string) (string, error) {
 	// ディスク上にあれば、未登録の repo でも木に載せられる（contexts が無い repo の下にテーマを置くため）。
 	// 先にこちらを見るので、既存ディレクトリの指定では contexts を読まない
 	if fi, err := os.Stat(root); err == nil && fi.IsDir() {
+		// repo 内のサブディレクトリを渡されても、contexts と同じ repo root に寄せる。
+		// git 管理外のディレクトリはそのまま（repo を持たないテーマの置き場にできる）
+		if r.repoFromDir != nil {
+			if top := r.repoFromDir(root); top != "" {
+				return model.RepoRef(model.NormalizePath(top)), nil
+			}
+		}
 		return model.RepoRef(root), nil
 	}
 	repos, err := r.repos()

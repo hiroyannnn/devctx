@@ -168,7 +168,7 @@ func TestIslandListWarnsOnDanglingParent(t *testing.T) {
 	if err := islandList(s, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Orphan [island:orphan]") || !strings.Contains(out.String(), "warning: dangling parent") {
+	if !strings.Contains(out.String(), "Orphan [island:orphan]") || !strings.Contains(out.String(), "warning: invalid parent") {
 		t.Errorf("output:\n%s", out.String())
 	}
 }
@@ -211,5 +211,28 @@ func TestIslandOpsLoadContextsOnlyWhenNeeded(t *testing.T) {
 	}
 	if err := islandAttach(s, &out, base, "web", "hr"); err == nil {
 		t.Error("bare repo name needs contexts; want error")
+	}
+}
+
+// 親としてだけ参照される repo（contexts も RepoNode も無い）の下の island も list に出る。Web は同じ木を描く。
+func TestIslandListShowsRepoReferencedOnlyAsParent(t *testing.T) {
+	s, base := islandFixture(t)
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "Theme", "hr", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := islandAttach(s, &out, base, "island:hr", "repo:"+dir); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if err := islandList(s, &out); err != nil {
+		t.Fatal(err)
+	}
+	root := model.NormalizePath(dir)
+	want := filepath.Base(root) + " (" + root + ", 0 active)\n└── Theme [island:hr]\n"
+	if out.String() != want {
+		t.Errorf("list output:\n%q\nwant:\n%q", out.String(), want)
 	}
 }

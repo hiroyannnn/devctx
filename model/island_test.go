@@ -393,3 +393,122 @@ func TestResolvedEncodesAsJSONWithEmptyArrays(t *testing.T) {
 		t.Errorf("json = %s", b)
 	}
 }
+
+func TestNormalizeMergesDuplicateRepoParentsAndClearsSelfParent(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "app")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "app-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	key := NormalizePath(real)
+
+	t.Run("later parent fills in when the first has none", func(t *testing.T) {
+		s := &IslandStore{Repos: []RepoNode{{Root: link}, {Root: real, Parent: "island:a"}}}
+		s.Normalize()
+		if len(s.Repos) != 1 || s.Repos[0].Root != key || s.Repos[0].Parent != "island:a" {
+			t.Errorf("repos = %+v", s.Repos)
+		}
+	})
+	t.Run("first parent wins when both have one", func(t *testing.T) {
+		s := &IslandStore{Repos: []RepoNode{{Root: link, Parent: "island:a"}, {Root: real, Parent: "island:b"}}}
+		s.Normalize()
+		if len(s.Repos) != 1 || s.Repos[0].Parent != "island:a" {
+			t.Errorf("repos = %+v", s.Repos)
+		}
+	})
+	t.Run("a repo under itself (via symlink) loses the parent", func(t *testing.T) {
+		s := &IslandStore{Repos: []RepoNode{{Root: real, Parent: "repo:" + link}}}
+		s.Normalize()
+		if s.Repos[0].Parent != "" {
+			t.Errorf("repos = %+v", s.Repos)
+		}
+	})
+}
+
+func TestResolvedBreaksCycles(t *testing.T) {
+	// ファイル順に処理し、輪を閉じる辺を切る。どちらの木でも ParentOf を辿って必ず根に着く
+	acyclic := func(t *testing.T, r IslandStore) {
+		t.Helper()
+		refs := []string{}
+		for _, is := range r.Islands {
+			refs = append(refs, IslandRef(is.ID))
+		}
+		for _, rn := range r.Repos {
+			refs = append(refs, RepoRef(rn.Root))
+		}
+		for _, ref := range refs {
+			cur := ref
+			for i := 0; i <= len(refs); i++ {
+				if cur = r.ParentOf(cur); cur == "" {
+					break
+				}
+				if i == len(refs) {
+					t.Fatalf("%s still loops", ref)
+				}
+			}
+		}
+	}
+
+	t.Run("island to island", func(t *testing.T) {
+		s := &IslandStore{Islands: []Island{
+			{ID: "a", Name: "A", Parent: "island:b"},
+			{ID: "b", Name: "B", Parent: "island:a"},
+		}}
+		r := s.Resolved()
+		acyclic(t, r)
+		if r.Islands[0].Parent != "island:b" || r.Islands[1].Parent != "" {
+			t.Errorf("resolved = %+v (a keeps its parent, the edge closing the loop is cut)", r.Islands)
+		}
+		if s.Islands[1].Parent != "island:a" {
+			t.Error("Resolved must not mutate the receiver")
+		}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "island:b -> island:a") {
+			t.Errorf("Validate = %v", err)
+		}
+	})
+	t.Run("island to repo to island", func(t *testing.T) {
+		s := &IslandStore{
+			Islands: []Island{{ID: "m3", Name: "M3", Parent: "repo:/r/a"}},
+			Repos:   []RepoNode{{Root: "/r/a", Parent: "island:m3"}},
+		}
+		r := s.Resolved()
+		acyclic(t, r)
+		if r.Islands[0].Parent != "repo:/r/a" || r.Repos[0].Parent != "" {
+			t.Errorf("resolved = %+v", r)
+		}
+	})
+	t.Run("self parent", func(t *testing.T) {
+		s := &IslandStore{Islands: []Island{{ID: "x", Name: "X", Parent: "island:x"}}}
+		if r := s.Resolved(); r.Islands[0].Parent != "" {
+			t.Errorf("resolved = %+v", r)
+		}
+	})
+	t.Run("valid tree is untouched", func(t *testing.T) {
+		if !reflect.DeepEqual(newTree().Resolved(), func() IslandStore { n := newTree(); return n.Resolved() }()) {
+			t.Error("unstable")
+		}
+		if r := newTree().Resolved(); r.Islands[1].Parent != "island:hr" || r.Islands[2].Parent != "repo:/r/a" || r.Repos[0].Parent != "island:hr" {
+			t.Errorf("resolved = %+v", r)
+		}
+	})
+}
+
+func TestRemoveIslandReparentDoesNotPropagateDanglingParent(t *testing.T) {
+	s := &IslandStore{Islands: []Island{
+		{ID: "mid", Name: "M", Parent: "island:gone"},
+		{ID: "leaf", Name: "L", Parent: "island:mid"},
+	}, Repos: []RepoNode{{Root: "/r/x", Parent: "island:mid"}}}
+	if err := s.RemoveIsland("mid", true); err != nil {
+		t.Fatal(err)
+	}
+	if s.Islands[0].Parent != "" {
+		t.Errorf("leaf parent = %q, want top level (dangling parent must not be inherited)", s.Islands[0].Parent)
+	}
+	if len(s.Repos) != 0 {
+		t.Errorf("repos = %+v", s.Repos)
+	}
+}

@@ -45,7 +45,7 @@ var islandAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return islandAdd(s, cmd.OutOrStdout(), refResolver{repoFromCwd: currentRepo}, args[0], islandAddID, islandAddParent)
+		return islandAdd(s, cmd.OutOrStdout(), newRefResolver(), args[0], islandAddID, islandAddParent)
 	},
 }
 
@@ -84,7 +84,7 @@ var islandAttachCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return islandAttach(s, cmd.OutOrStdout(), refResolver{repoFromCwd: currentRepo}, args[0], islandAttachTo)
+		return islandAttach(s, cmd.OutOrStdout(), newRefResolver(), args[0], islandAttachTo)
 	},
 }
 
@@ -97,7 +97,7 @@ var islandDetachCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return islandDetach(s, cmd.OutOrStdout(), refResolver{repoFromCwd: currentRepo}, args[0])
+		return islandDetach(s, cmd.OutOrStdout(), newRefResolver(), args[0])
 	},
 }
 

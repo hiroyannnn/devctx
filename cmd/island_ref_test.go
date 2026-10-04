@@ -136,3 +136,44 @@ func TestResolveRef_ReposAreLoadedLazily(t *testing.T) {
 		t.Errorf("calls = %d, want 1", calls)
 	}
 }
+
+func TestResolveRef_ExplicitRepoPathUsesTheGitRepoRoot(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	r := testResolver(nil, &model.IslandStore{})
+	r.repoFromDir = func(d string) string {
+		asked = append(asked, d)
+		if strings.HasPrefix(d, model.NormalizePath(dir)) {
+			return "/fake/repo"
+		}
+		return ""
+	}
+
+	t.Run("subdirectory of a git repo maps to the repo root", func(t *testing.T) {
+		got, err := r.resolve("repo:" + sub)
+		if err != nil || got != "repo:/fake/repo" {
+			t.Errorf("got %q, %v", got, err)
+		}
+	})
+	t.Run("directory outside git keeps the normalized directory", func(t *testing.T) {
+		r2 := r
+		r2.repoFromDir = func(string) string { return "" }
+		got, err := r2.resolve("repo:" + sub)
+		if err != nil || got != "repo:"+model.NormalizePath(sub) {
+			t.Errorf("got %q, %v", got, err)
+		}
+	})
+	t.Run("known but missing path is accepted as is without asking git", func(t *testing.T) {
+		asked = nil
+		r3 := testResolver([]string{"/r/gone"}, &model.IslandStore{})
+		r3.repoFromDir = r.repoFromDir
+		got, err := r3.resolve("repo:/r/gone")
+		if err != nil || got != "repo:/r/gone" || len(asked) != 0 {
+			t.Errorf("got %q, %v, asked %v", got, err, asked)
+		}
+	})
+}
