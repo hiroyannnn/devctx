@@ -115,7 +115,6 @@ func TestIslandOps_AddErrors(t *testing.T) {
 		status int
 		substr string
 	}{
-		{"duplicate id", `{"op":"add","name":"hr"}`, http.StatusConflict, "different name"},
 		{"empty name", `{"op":"add","name":"  "}`, http.StatusBadRequest, "empty"},
 		{"name too long", `{"op":"add","name":"` + long + `"}`, http.StatusBadRequest, "too long"},
 		{"control char in name", `{"op":"add","name":"a\nb"}`, http.StatusBadRequest, "control"},
@@ -489,5 +488,13 @@ func TestIslandOps_ErrorsStayJSON(t *testing.T) {
 		if w.Code < 400 || errorOf(resp) == "" || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
 			t.Errorf("%s: status = %d, ct = %q", body, w.Code, w.Header().Get("Content-Type"))
 		}
+	}
+}
+
+func TestIslandOps_AddWithCollidingSlugGetsASuffix(t *testing.T) {
+	s, _ := newOpsServer(&model.IslandStore{Islands: []model.Island{{ID: "hr", Name: "改名済み"}}})
+	w, resp := postOps(t, s, `{"op":"add","name":"HR"}`)
+	if w.Code != http.StatusOK || resp["ref"] != "island:hr-2" {
+		t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 }

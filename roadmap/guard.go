@@ -15,11 +15,17 @@ import (
 //     サーバは preflight に応答しない）。Origin 一致の確認は、それでも届いたリクエストへの二重の備え。
 //
 // Why not CSRF トークン: 状態を持たない単一ユーザーの localhost ツールで、Origin 検査だけで足りる。
+// --port 0 は、実際に待ち受けた port を Serve が Port に入れてから Handler を作る（guard は作成時の Port で許可表を固める）。
 // Why not [::1] を許可: 待ち受けが 127.0.0.1 だけなので、到達できないホスト名を許可する意味がない。
 func (s *Server) guard(next http.Handler) http.Handler {
 	allowedHosts := map[string]bool{
 		fmt.Sprintf("127.0.0.1:%d", s.Port): true,
 		fmt.Sprintf("localhost:%d", s.Port): true,
+	}
+	if s.Port == 80 {
+		// ブラウザは既定ポートを Host から省く
+		allowedHosts["127.0.0.1"] = true
+		allowedHosts["localhost"] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !allowedHosts[r.Host] {

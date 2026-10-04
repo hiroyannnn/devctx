@@ -159,16 +159,24 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe starts the HTTP server on localhost only.
 func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
-	url := fmt.Sprintf("http://%s", addr)
+	// 先に listen する。--port 0 では、実際の port が分かってから Host の許可表を作る必要がある
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.Port))
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Serve は listener で配信する。Port には実際の待ち受け port を入れる。
+func (s *Server) Serve(ln net.Listener) error {
+	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
+		s.Port = addr.Port
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d", s.Port)
 	fmt.Printf("Session Roadmap: %s\n", url)
 	fmt.Println("Press Ctrl+C to stop")
 
 	// Auto-open browser after listener is established
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
 	go openBrowser(url)
 
 	return http.Serve(ln, s.Handler())

@@ -1,6 +1,7 @@
 package roadmap
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,5 +61,76 @@ func TestHandler_RequestGuard(t *testing.T) {
 				t.Errorf("status = %d, want %d (body %q)", w.Code, tt.want, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandler_RequestGuardPort80AllowsHostWithoutPort(t *testing.T) {
+	// ブラウザは :80 を Host から省く
+	h := (&Server{Port: 80}).Handler()
+	for host, want := range map[string]int{
+		"127.0.0.1":    http.StatusOK,
+		"localhost":    http.StatusOK,
+		"127.0.0.1:80": http.StatusOK,
+		"evil.com":     http.StatusForbidden,
+	} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = host
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != want {
+			t.Errorf("host %q: status = %d, want %d", host, w.Code, want)
+		}
+	}
+	// Origin も Host と同じ形（ポートなし）で一致すれば通る
+	req := httptest.NewRequest("POST", "/api/islands", strings.NewReader("{}"))
+	req.Host = "localhost"
+	req.Header.Set("Origin", "http://localhost")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: status = %d", w.Code)
+	}
+	// :80 でない port では、ポートなしの Host は許可しない
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost"
+	w = httptest.NewRecorder()
+	(&Server{Port: 3333}).Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("port 3333 without port: status = %d", w.Code)
+	}
+}
+
+func TestServe_PortZeroUsesTheActualListeningPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{Port: 0}
+	go srv.Serve(ln)
+	defer ln.Close()
+
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	get := func(host string) int {
+		req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/", nil)
+		req.Host = host
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if got := get("127.0.0.1:" + port); got != http.StatusOK {
+		t.Errorf("actual port: status = %d", got)
+	}
+	if got := get("localhost:" + port); got != http.StatusOK {
+		t.Errorf("localhost: status = %d", got)
+	}
+	if got := get("127.0.0.1:0"); got != http.StatusForbidden {
+		t.Errorf("port 0 host: status = %d", got)
+	}
+	if got := get("evil.com"); got != http.StatusForbidden {
+		t.Errorf("evil host: status = %d", got)
 	}
 }

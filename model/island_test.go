@@ -71,13 +71,36 @@ func TestAddIsland(t *testing.T) {
 			t.Errorf("ids = %q, %q", a.ID, b.ID)
 		}
 	})
-	t.Run("duplicate id is rejected and hints --id", func(t *testing.T) {
+	t.Run("derived id gets a numeric suffix when taken", func(t *testing.T) {
+		// 改名しても id は残るので、見えない id と衝突しうる（"API 設計" → "API レビュー" と改名後に同じ slug "api" を足す等）
 		s := &IslandStore{}
-		if _, err := s.AddIsland("HR", "", ""); err != nil {
+		var ids []string
+		for _, name := range []string{"API", "api", "Api!", "API"} {
+			got, err := s.AddIsland(name, "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, got.ID)
+		}
+		if !reflect.DeepEqual(ids, []string{"api", "api-2", "api-3", "api-4"}) {
+			t.Errorf("ids = %v", ids)
+		}
+	})
+	t.Run("derived id skips suffixes that are already used", func(t *testing.T) {
+		s := &IslandStore{Islands: []Island{{ID: "api", Name: "x"}, {ID: "api-2", Name: "y"}}}
+		got, err := s.AddIsland("api", "", "")
+		if err != nil || got.ID != "api-3" {
+			t.Errorf("got %+v, %v", got, err)
+		}
+	})
+	t.Run("duplicate explicit id is rejected", func(t *testing.T) {
+		s := &IslandStore{}
+		if _, err := s.AddIsland("HR", "hr", ""); err != nil {
 			t.Fatal(err)
 		}
-		_, err := s.AddIsland("hr", "", "")
-		if err == nil || !strings.Contains(err.Error(), "--id") {
+		_, err := s.AddIsland("Other", "hr", "")
+		var dup *IDExistsError
+		if !errors.As(err, &dup) || dup.ID != "hr" {
 			t.Errorf("err = %v", err)
 		}
 		if len(s.Islands) != 1 {
@@ -515,18 +538,17 @@ func TestRemoveIslandReparentDoesNotPropagateDanglingParent(t *testing.T) {
 	}
 }
 
-func TestAddIsland_DuplicateIDReturnsTypedError(t *testing.T) {
+func TestAddIsland_DuplicateExplicitIDReturnsTypedError(t *testing.T) {
 	s := &IslandStore{}
-	if _, err := s.AddIsland("HR", "", ""); err != nil {
+	if _, err := s.AddIsland("HR", "hr", ""); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.AddIsland("hr", "", "")
+	_, err := s.AddIsland("hr2", "hr", "")
 	var dup *IDExistsError
 	if !errors.As(err, &dup) || dup.ID != "hr" {
 		t.Fatalf("err = %v, want *IDExistsError{hr}", err)
 	}
-	// CLI の案内文は従来のまま
-	if !strings.Contains(err.Error(), "pass --id to choose another") {
+	if !strings.Contains(err.Error(), "choose another id") {
 		t.Errorf("message = %q", err.Error())
 	}
 }
@@ -604,6 +626,38 @@ func TestRemoveIslandExpecting(t *testing.T) {
 		var cc *ChildrenChangedError
 		if err == nil || errors.As(err, &cc) {
 			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+func TestRemoveIslandExpecting_UsesTheCycleBrokenTree(t *testing.T) {
+	// 手編集で A <-> B の輪ができても、UI が見ている（Resolved 後の）木と同じ子で判定し、409 を繰り返さない。
+	// Resolved は先に処理した A→B を残し、輪を閉じる B→A を切る。
+	loop := func() *IslandStore {
+		return &IslandStore{Islands: []Island{
+			{ID: "a", Name: "A", Parent: "island:b"},
+			{ID: "b", Name: "B", Parent: "island:a"},
+		}}
+	}
+	t.Run("removing the head of the surviving edge", func(t *testing.T) {
+		s := loop()
+		if err := s.RemoveIslandExpecting("a", nil); err != nil { // UI では a に子は見えない
+			t.Fatalf("err = %v", err)
+		}
+		if s.HasIsland("a") || s.ParentOf("island:b") != "" {
+			t.Errorf("store = %+v", s)
+		}
+	})
+	t.Run("removing the other side reparents to the resolved parent, not to itself", func(t *testing.T) {
+		s := loop()
+		if err := s.RemoveIslandExpecting("b", []string{"island:a"}); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if s.HasIsland("b") {
+			t.Fatal("b must be removed")
+		}
+		if got := s.Islands[0]; got.ID != "a" || got.Parent != "" {
+			t.Errorf("a = %+v, want top-level (no self parent)", got)
 		}
 	})
 }

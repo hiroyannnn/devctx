@@ -120,7 +120,7 @@ To get the new hooks, re-run `devctx hooks --install` (Claude Code) and `devctx 
 An **island** is a theme node you make by hand (e.g. `人事強化`), shown in the **All Projects** Mind Map. It does not need a repo. Islands and repos form **one tree**: a repo can sit under an island, and an island can sit under a repo. Agent sessions attach to their repo automatically; repos you do not attach stay at the top level.
 
 ```bash
-devctx island add 人事強化 --id hr            # --id is needed to refer to a non-ASCII name
+devctx island add 人事強化 --id hr            # --id is needed to refer to a non-ASCII name (otherwise island-N)
 devctx island attach devctx --to hr            # repo "devctx" under island "hr"
 devctx island add 採用フロー --id hiring --parent island:hr
 devctx island attach island:m3 --to repo:.     # island "m3" under the repo of the current directory
@@ -128,6 +128,8 @@ devctx island detach devctx                    # back to the top level
 devctx island rm hr --reparent                 # children move up to hr's parent
 devctx island list                             # tree, with active sessions per repo
 ```
+
+When the id is derived from the name and is already taken, devctx appends `-2`, `-3`, ... (`API` → `api`, `api-2`); an explicit `--id` that is taken is an error. Renaming never changes an id.
 
 Refs are `island:<id>` or `repo:<path>` (`repo:.` is the repo of the current directory). A bare name matches an island id, then a repo basename. If it matches both an island and a repo, or several repos share the basename, devctx lists the candidates as typed refs and changes nothing. `island rm` refuses while the island has children unless you pass `--reparent`. Cycles (including island → repo → island) are rejected.
 

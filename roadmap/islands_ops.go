@@ -193,12 +193,9 @@ func applyIslandOp(is *model.IslandStore, known func() (map[string]bool, error),
 				return "", err
 			}
 		}
+		// id は名前から作る（衝突時は model が連番を付ける）ので、id 衝突の応答は無い
 		added, err := is.AddIsland(req.Name, "", parent)
-		var dup *model.IDExistsError
-		switch {
-		case errors.As(err, &dup):
-			return "", conflict(map[string]any{"error": fmt.Sprintf("island id %q already exists; use a different name", dup.ID)})
-		case err != nil:
+		if err != nil {
 			return "", badRequest("%v", err)
 		}
 		return model.IslandRef(added.ID), nil
