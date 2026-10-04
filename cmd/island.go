@@ -244,6 +244,9 @@ func islandList(s *storage.Storage, out io.Writer) error {
 // renderIslandTree はトップレベル（親なし、または親が実在しない）の island → repo の順に木を描く。
 // 親を持たない repo も、既知なら全て出す（island に未接続の repo も一覧で見えるように）。
 func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, active map[string]int) {
+	// 解決後の木で描く。生の親で辿ると、手編集でタスクの下に置かれたノードが、トップレベルとタスクの下に二重に出る
+	resolved := is.Resolved()
+	is = &resolved
 	names := map[string]string{}
 	for _, i := range is.Islands {
 		if i.Kind == model.KindTask {

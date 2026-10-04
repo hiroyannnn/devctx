@@ -324,3 +324,65 @@ func TestRemoveIslandExpectingRefusesHiddenTaskChild(t *testing.T) {
 		t.Errorf("got %+v", s.Islands)
 	}
 }
+
+// 消したタスクの id を、後からテーマ島が名乗ると、古いプロンプトの marker がテーマ島を指してしまう。
+func TestAddIslandDoesNotTakeTaskIDs(t *testing.T) {
+	newS := func() *IslandStore {
+		s := newTree()
+		a, _ := s.AddTask("a", "island:hr") // t1
+		b, _ := s.AddTask("b", "island:hr") // t2
+		_ = s.RemoveIsland(a.ID, false)
+		_ = s.RemoveIsland(b.ID, false)
+		return s // TaskSeq = 2、t1 / t2 は空き
+	}
+	t.Run("derived id gets a suffix", func(t *testing.T) {
+		s := newS()
+		got, err := s.AddIsland("T1", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != "t1-2" {
+			t.Errorf("id = %s, want t1-2", got.ID)
+		}
+	})
+	t.Run("explicit id is refused", func(t *testing.T) {
+		s := newS()
+		before := len(s.Islands)
+		for _, id := range []string{"t1", "t2"} {
+			if _, err := s.AddIsland("x", id, ""); err == nil || !strings.Contains(err.Error(), "reserved for tasks") {
+				t.Errorf("%s: err = %v", id, err)
+			}
+		}
+		if len(s.Islands) != before {
+			t.Error("store changed")
+		}
+	})
+	t.Run("ids beyond TaskSeq and non-task-shaped ids are free", func(t *testing.T) {
+		s := newS()
+		for _, id := range []string{"t3", "t10", "t1x", "t", "tt1"} {
+			if _, err := s.AddIsland("x"+id, id, ""); err != nil {
+				t.Errorf("%s: %v", id, err)
+			}
+		}
+	})
+	t.Run("AddTask still skips islands that already hold the id", func(t *testing.T) {
+		s := newS()
+		s.Islands = append(s.Islands, Island{ID: "t3", Name: "手書き"})
+		got, err := s.AddTask("c", "island:hr")
+		if err != nil || got.ID != "t4" {
+			t.Errorf("got %+v, err %v", got, err)
+		}
+	})
+}
+
+func TestValidateReportsUnknownKindAndDoneOnNonTask(t *testing.T) {
+	s := newTree()
+	s.Islands = append(s.Islands,
+		Island{ID: "e", Name: "E", Kind: "epic", Parent: "island:hr"},
+		Island{ID: "d", Name: "D", Done: true, Parent: "island:hr"},
+	)
+	err := s.Validate()
+	if err == nil || !strings.Contains(err.Error(), `unknown kind "epic": island:e`) || !strings.Contains(err.Error(), "done on non-task: island:d") {
+		t.Errorf("Validate = %v", err)
+	}
+}

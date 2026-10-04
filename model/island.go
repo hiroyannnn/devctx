@@ -182,6 +182,19 @@ func (s *IslandStore) clearParents(refs ...string) error {
 	return nil
 }
 
+var taskIDPattern = regexp.MustCompile(`^t(\d+)$`)
+
+// reservedForTask は id が、採番済みのタスク id（t1 .. t<TaskSeq>）かを返す。
+// Why: 削除したタスクの id を後からテーマ島が名乗ると、古いプロンプトの [devctx:task:<id>] がテーマ島を指してしまう。
+func (s *IslandStore) reservedForTask(id string) bool {
+	m := taskIDPattern.FindStringSubmatch(id)
+	if m == nil {
+		return false
+	}
+	n, err := strconv.Atoi(m[1])
+	return err == nil && n >= 1 && n <= s.TaskSeq
+}
+
 // IDExistsError は明示した island id の衝突（--id）。名前から作る id は衝突時に連番を付けるのでこれにならない。
 type IDExistsError struct{ ID string }
 
@@ -208,13 +221,16 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 		if s.findIsland(id) != nil {
 			return Island{}, &IDExistsError{ID: id}
 		}
+		if s.reservedForTask(id) {
+			return Island{}, fmt.Errorf("island id %q is reserved for tasks; choose another id", id)
+		}
 	case slug(name) != "":
 		// 名前から作る id は衝突時に -2, -3 ... を付ける。
 		// Why: 改名しても id は残るので、画面に見えない id と衝突する（"API 設計" を "API レビュー" に改名後、また "API" を足す等）。
 		// Web には id を選ぶ手段が無く、衝突のたびに足せなくなるのを避ける。
 		base := slug(name)
 		id = base
-		for n := 2; s.findIsland(id) != nil; n++ {
+		for n := 2; s.findIsland(id) != nil || s.reservedForTask(id); n++ {
 			id = base + "-" + strconv.Itoa(n)
 		}
 	default:
@@ -526,7 +542,7 @@ func (s *IslandStore) Resolved() IslandStore {
 // 判定は Resolved と同じ（元の Parent があるのに解決後は ""）なので、API と CLI で食い違わない。
 func (s *IslandStore) Validate() error {
 	r := s.Resolved()
-	var bad, underTask, orphanTasks []string
+	var bad, underTask, orphanTasks, badKinds, doneOnNonTask []string
 	report := func(ref, parent string) {
 		entry := fmt.Sprintf("%s -> %s", ref, parent)
 		if errors.Is(s.checkParentAllowed(parent), errTaskParent) {
@@ -543,6 +559,12 @@ func (s *IslandStore) Validate() error {
 		if is.Kind == KindTask && is.Parent == "" {
 			orphanTasks = append(orphanTasks, IslandRef(is.ID))
 		}
+		if is.Kind != "" && is.Kind != KindTask {
+			badKinds = append(badKinds, fmt.Sprintf("unknown kind %q: %s", is.Kind, IslandRef(is.ID)))
+		}
+		if is.Done && is.Kind != KindTask {
+			doneOnNonTask = append(doneOnNonTask, IslandRef(is.ID))
+		}
 	}
 	for i, rn := range s.Repos {
 		if rn.Parent != "" && r.Repos[i].Parent == "" {
@@ -552,6 +574,10 @@ func (s *IslandStore) Validate() error {
 	var msgs []string
 	if len(orphanTasks) > 0 {
 		msgs = append(msgs, fmt.Sprintf("task without parent: %s", strings.Join(orphanTasks, ", ")))
+	}
+	msgs = append(msgs, badKinds...)
+	if len(doneOnNonTask) > 0 {
+		msgs = append(msgs, fmt.Sprintf("done on non-task: %s", strings.Join(doneOnNonTask, ", ")))
 	}
 	if len(bad) > 0 {
 		msgs = append(msgs, fmt.Sprintf("invalid parent (dangling or cyclic): %s", strings.Join(bad, "; ")))

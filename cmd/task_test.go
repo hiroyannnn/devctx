@@ -132,3 +132,31 @@ func TestIslandListWarnsOnTaskWithoutParent(t *testing.T) {
 		t.Errorf("list output:\n%s", out.String())
 	}
 }
+
+// 手編集でタスクの下に置かれたノードは、解決後の木（トップレベル）にだけ出し、タスクの下には重ねて出さない。
+func TestIslandListShowsNodeUnderTaskOnce(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "HR", "hr", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskAdd(s, &out, base, "T", "hr"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateIslands(func(is *model.IslandStore) error {
+		is.Islands = append(is.Islands, model.Island{ID: "x", Name: "手編集", Parent: "island:t1"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := islandList(s, &out); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "手編集 [island:x]"); n != 1 {
+		t.Errorf("shown %d times:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "│   └── 手編集") || strings.Contains(out.String(), "    └── 手編集") {
+		t.Errorf("shown under the task:\n%s", out.String())
+	}
+}
