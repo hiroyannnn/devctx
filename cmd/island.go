@@ -18,6 +18,10 @@ var islandCmd = &cobra.Command{
 form one tree: a repo can sit under an island, and an island can sit under a repo.
 Agent sessions attach to their repo automatically.
 
+Tasks are islands of kind "task": rename / rm / attach work on them too, but a task
+needs a parent and nothing can be placed under it. Create and complete them with
+"devctx task add" / "devctx task done".
+
 Refs are island:<id> or repo:<path>. A bare name matches an island id, else a
 repo basename; if it matches more than one, devctx lists the candidates and stops.
 "repo:." means the repo of the current directory.

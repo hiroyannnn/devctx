@@ -1852,13 +1852,15 @@ function descendantsOf(ref, islandsData) {
 }
 
 // ドラッグの落とし先の候補（ノード ID の配列）。island / repo / root のうち、ドラッグ中のノードとその子孫を除く。
-// タスクは落とし先にならない（タスクの下には何も置けない）。
+// タスクは落とし先にならない（タスクの下には何も置けない）。ドラッグ中のノードがタスクなら root も外す。
 function dropCandidateIds(nodes, draggedId, islandsData) {
   var banned = descendantsOf(draggedId, islandsData);
   banned[draggedId] = true;
+  var draggedIsTask = isTaskRef(draggedId, islandsData);
   return nodes.filter(function(n) {
     var kind = editableKind(n);
-    return kind && kind !== 'task' && !banned[n.id];
+    // タスクのドロップは root では無操作（dropOpFor）。強調だけ出ると操作できそうに見えるので候補から外す
+    return kind && kind !== 'task' && !(draggedIsTask && kind === 'root') && !banned[n.id];
   }).map(function(n) { return n.id; });
 }
 
@@ -2201,6 +2203,7 @@ function startRenameIsland(ref) {
   var current = node && node._data ? node._data.name : '';
   openNameInput({
     mode: 'rename', anchorId: ref, initial: current,
+    placeholder: node && node._type === 'task' ? 'タスクの名前' : undefined,
     onCommit: function(name) {
       if (name !== current) runIslandOp({ op: 'rename', ref: ref, name: name });
     }
