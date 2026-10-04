@@ -31,6 +31,8 @@ const (
 // islandOp は /api/islands/ops の入力。op ごとに使うフィールドが違う。
 type islandOp struct {
 	Op       string   `json:"op"`
+	Kind     string   `json:"kind"` // add のみ。"" はテーマ island、"task" はタスク
+	Done     *bool    `json:"done"` // done のみ。省略（nil）は 400
 	Name     string   `json:"name"`
 	Parent   string   `json:"parent"`
 	Ref      string   `json:"ref"`
@@ -85,13 +87,13 @@ func decodeIslandOp(w http.ResponseWriter, r *http.Request) (islandOp, *opError)
 		return req, plainError(http.StatusBadRequest, "malformed JSON body")
 	}
 	switch req.Op {
-	case "add", "rename", "remove", "attach", "detach":
+	case "add", "rename", "remove", "attach", "detach", "done":
 		return req, nil
 	}
 	return req, plainError(http.StatusBadRequest, fmt.Sprintf("unknown op %q", req.Op))
 }
 
-// handleAPIIslandOps は Mind Map の island 編集（add / rename / remove / attach / detach）を受ける。
+// handleAPIIslandOps は Mind Map の island 編集（add / rename / remove / attach / detach / done）を受ける。
 // 入力は境界でここだけが検証し、木の整合（存在・循環・子の変化）は model に任せる。
 // 成功時は更新後の木（GET /api/islands と同じ形）も返す。
 // Why: UI が操作直後に /api/islands を取り直さず、この応答の木をそのまま描画に使えるようにするため。
@@ -203,6 +205,18 @@ func applyIslandOp(is *model.IslandStore, known func() (map[string]bool, error),
 				return "", err
 			}
 		}
+		switch req.Kind {
+		case "":
+		case model.KindTask:
+			// タスクは親が必須。model が空の親を弾く（400）
+			added, err := is.AddTask(req.Name, parent)
+			if err != nil {
+				return "", badRequest("%v", err)
+			}
+			return model.IslandRef(added.ID), nil
+		default:
+			return "", badRequest("unknown kind %q", req.Kind)
+		}
 		// id は名前から作る（衝突時は model が連番を付ける）ので、id 衝突の応答は無い
 		added, err := is.AddIsland(req.Name, "", parent)
 		if err != nil {
@@ -233,6 +247,17 @@ func applyIslandOp(is *model.IslandStore, known func() (map[string]bool, error),
 			return "", conflict(map[string]any{"error": "children changed", "children": current})
 		}
 		return "", badRequestIf(err)
+
+	case "done":
+		id, err := model.ParseIslandRef(req.Ref)
+		if err != nil {
+			return "", badRequest("%v", err)
+		}
+		// Why: 省略を false（未完了へ戻す）と読むと、typo のリクエストが完了を黙って取り消す
+		if req.Done == nil {
+			return "", badRequest("done is required (true or false)")
+		}
+		return "", badRequestIf(is.SetTaskDone(id, *req.Done))
 
 	case "attach":
 		child, err := canon(req.Child)

@@ -25,6 +25,7 @@ func (f *fakeIslandUpdater) UpdateIslands(fn func(*model.IslandStore) error) err
 	cp := &model.IslandStore{
 		Islands: append([]model.Island(nil), f.store.Islands...),
 		Repos:   append([]model.RepoNode(nil), f.store.Repos...),
+		TaskSeq: f.store.TaskSeq,
 	}
 	if err := fn(cp); err != nil {
 		if err == storage.ErrSkipSave {
@@ -496,5 +497,98 @@ func TestIslandOps_AddWithCollidingSlugGetsASuffix(t *testing.T) {
 	w, resp := postOps(t, s, `{"op":"add","name":"HR"}`)
 	if w.Code != http.StatusOK || resp["ref"] != "island:hr-2" {
 		t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestIslandOps_AddTask(t *testing.T) {
+	s, up := newOpsServer(&model.IslandStore{Islands: []model.Island{{ID: "hr", Name: "HR"}}})
+
+	w, resp := postOps(t, s, `{"op":"add","kind":"task","name":"求人票を直す","parent":"island:hr"}`)
+	if w.Code != http.StatusOK || resp["ref"] != "island:t1" {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if got := up.store.Islands[1]; got.Kind != "task" || got.Parent != "island:hr" || got.ID != "t1" {
+		t.Errorf("stored = %+v", got)
+	}
+	// 応答の木は kind / done を JSON で返す
+	if !strings.Contains(w.Body.String(), `"kind":"task"`) {
+		t.Errorf("tree lacks kind: %s", w.Body.String())
+	}
+
+	// repo の下にも置ける（既知 repo のみ）
+	if w, _ := postOps(t, s, `{"op":"add","kind":"task","name":"x","parent":"repo:/r/app"}`); w.Code != http.StatusOK {
+		t.Errorf("repo parent: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	bad := []struct{ name, body string }{
+		{"parent is required", `{"op":"add","kind":"task","name":"x"}`},
+		{"unknown kind", `{"op":"add","kind":"epic","name":"x","parent":"island:hr"}`},
+		{"unknown repo parent", `{"op":"add","kind":"task","name":"x","parent":"repo:/nowhere"}`},
+		{"task parent", `{"op":"add","kind":"task","name":"x","parent":"island:t1"}`},
+		{"name too long", `{"op":"add","kind":"task","name":"` + strings.Repeat("あ", 81) + `","parent":"island:hr"}`},
+	}
+	for _, tt := range bad {
+		t.Run(tt.name, func(t *testing.T) {
+			before := len(up.store.Islands)
+			w, resp := postOps(t, s, tt.body)
+			if w.Code != http.StatusBadRequest || errorOf(resp) == "" {
+				t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if len(up.store.Islands) != before {
+				t.Error("store changed")
+			}
+		})
+	}
+}
+
+func TestIslandOps_TaskDone(t *testing.T) {
+	s, up := newOpsServer(&model.IslandStore{
+		Islands: []model.Island{{ID: "hr", Name: "HR"}, {ID: "t1", Name: "T", Kind: "task", Parent: "island:hr"}},
+		TaskSeq: 1,
+	})
+	if w, _ := postOps(t, s, `{"op":"done","ref":"island:t1","done":true}`); w.Code != http.StatusOK || !up.store.Islands[1].Done {
+		t.Fatalf("done: status = %d", w.Code)
+	}
+	if w, _ := postOps(t, s, `{"op":"done","ref":"island:t1","done":false}`); w.Code != http.StatusOK || up.store.Islands[1].Done {
+		t.Fatalf("undo: status = %d", w.Code)
+	}
+	for name, body := range map[string]string{
+		"theme island": `{"op":"done","ref":"island:hr","done":true}`,
+		"missing":      `{"op":"done","ref":"island:nope","done":true}`,
+		"repo ref":     `{"op":"done","ref":"repo:/r/app","done":true}`,
+		"done omitted": `{"op":"done","ref":"island:t1"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if w, resp := postOps(t, s, body); w.Code != http.StatusBadRequest || errorOf(resp) == "" {
+				t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestIslandOps_NothingUnderATask(t *testing.T) {
+	s, up := newOpsServer(&model.IslandStore{
+		Islands: []model.Island{{ID: "hr", Name: "HR"}, {ID: "t1", Name: "T", Kind: "task", Parent: "island:hr"}},
+		TaskSeq: 1,
+	})
+	for name, body := range map[string]string{
+		"add island under task":    `{"op":"add","name":"x","parent":"island:t1"}`,
+		"attach repo under task":   `{"op":"attach","child":"repo:/r/app","parent":"island:t1"}`,
+		"attach island under task": `{"op":"attach","child":"island:hr","parent":"island:t1"}`,
+		"detach a task":            `{"op":"detach","child":"island:t1"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := *up.store
+			if w, resp := postOps(t, s, body); w.Code != http.StatusBadRequest || errorOf(resp) == "" {
+				t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if !reflect.DeepEqual(*up.store, before) {
+				t.Error("store changed")
+			}
+		})
+	}
+	// タスクは island の下へ付け替えられる
+	if w, _ := postOps(t, s, `{"op":"attach","child":"island:t1","parent":"repo:/r/web"}`); w.Code != http.StatusOK {
+		t.Errorf("move task: status = %d", w.Code)
 	}
 }
