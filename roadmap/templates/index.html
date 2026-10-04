@@ -1092,8 +1092,11 @@ function summarizeGroup(group) {
 // Why not vis の hierarchical だけで左右に割る: LR は全ノードを root の右に並べるので、後処理で座標を作り直す。
 // 戻り値の positions は部分木に属する全ノードの新しい座標、side は各ノードの 'left' / 'right'。
 var LAYOUT_GAP = 24;
+// root の子ごとの左右（直前の描画）。再描画をまたいで部分木の側を保つ。プロジェクト切り替えで捨てる
+var islandSides = {};
 
-function balancedLayout(nodes, edges, rootId) {
+function balancedLayout(nodes, edges, rootId, prevSides) {
+  prevSides = prevSides || {};
   var byId = {};
   nodes.forEach(function(n) { byId[n.id] = n; });
   var rootNode = byId[rootId];
@@ -1129,13 +1132,25 @@ function balancedLayout(nodes, edges, rootId) {
     return { head: head, members: members };
   });
 
-  // 大きい部分木から軽い側へ（同数なら右）。振り分けの順序と各側の積み順はラベル順で決め、再描画で並びが揺れないようにする
+  // 既存の部分木は前回の側に留め、新しい部分木だけを軽い側へ（同数なら右）割り振る。
+  // Why: 島を 1 つ足すたびに全体を貪欲法で振り直すと、無関係な部分木が左右を行き来して位置を見失う。
+  // 新規の振り分けは大きい順・ラベル順で決め、再描画で並びが揺れないようにする。各側の積み順もラベル順。
   var left = [], right = [], leftCount = 0, rightCount = 0;
-  subtrees.slice().sort(function(a, b) {
+  var headSides = {};
+  function assign(st, sideName) {
+    headSides[st.head] = sideName;
+    if (sideName === 'left') { left.push(st); leftCount += st.members.length; }
+    else { right.push(st); rightCount += st.members.length; }
+  }
+  var fresh = [];
+  subtrees.forEach(function(st) {
+    if (prevSides[st.head] === 'left' || prevSides[st.head] === 'right') assign(st, prevSides[st.head]);
+    else fresh.push(st);
+  });
+  fresh.sort(function(a, b) {
     return b.members.length - a.members.length || byLabel(a.head, b.head);
   }).forEach(function(st) {
-    if (leftCount < rightCount) { left.push(st); leftCount += st.members.length; }
-    else { right.push(st); rightCount += st.members.length; }
+    assign(st, leftCount < rightCount ? 'left' : 'right');
   });
 
   var positions = {};
@@ -1166,7 +1181,7 @@ function balancedLayout(nodes, edges, rootId) {
   }
   place(right, false);
   place(left, true);
-  return { positions: positions, side: side };
+  return { positions: positions, side: side, headSides: headSides };
 }
 
 // ── Islands ──
@@ -1793,6 +1808,8 @@ function keyAction(key, kind) {
 var editState = { menu: null, input: null, confirm: null };
 var pendingData = null;   // 編集中に届いた {mapData, graphData, islandsData}
 var pendingSelect = null; // 操作成功後の再描画で選択するノード（add の戻り値）
+var graphLaidOut = false; // 直近の描画の左右バランス配置が済んだか（視点の保存はこのとき以外は信用しない）
+var carriedKeep = null;   // レイアウト前の描画が引き継ぐ予定の {scale, position, selected}
 var graphRootId = null;   // 直近の描画の root ID。null なら編集不可（単一プロジェクト表示）
 
 function editingActive() {
@@ -1869,7 +1886,17 @@ async function postIslandOp(body) {
   }
 }
 
+// 操作後に選択するノード。add は作ったノード、rename / attach / detach は対象、remove は親（トップレベルなら無し）。
+function selectAfterOp(body, data) {
+  if (body.op === 'add') return (data && data.ref) || null;
+  if (body.op === 'rename') return body.ref;
+  if (body.op === 'attach' || body.op === 'detach') return body.child;
+  if (body.op === 'remove') return parentRefOf(body.ref, cachedIslands) || null;
+  return null;
+}
+
 async function runIslandOp(body) {
+  var select = selectAfterOp(body, null); // remove の親は、消える前の木から引く
   var res = await postIslandOp(body);
   if (!res.ok) {
     var err = res.data && res.data.error;
@@ -1878,12 +1905,14 @@ async function runIslandOp(body) {
     } else {
       showToast(err || ('HTTP ' + res.status));
     }
-  } else if (res.data && res.data.ref) {
-    pendingSelect = res.data.ref;
+  } else {
+    pendingSelect = body.op === 'add' ? selectAfterOp(body, res.data) : select;
   }
   // 成功でも失敗（409 等）でも、server の現状に取り直す
+  var mySeq = refreshSeq + 1;
   await refresh();
-  pendingSelect = null;
+  // 後から始まった取得（ポーリング）に追い越されたときは、その描画が選択を消費するので消さない
+  if (refreshSeq === mySeq) pendingSelect = null;
 }
 
 // ノードの DOM 座標（graph-canvas 内）の矩形
@@ -2109,8 +2138,15 @@ function renderGraphView(groups, graphData, opts) {
   cancelEditing(); // ノードごと作り直すので、開いている編集 UI は残せない
   var keep = null;
   if (opts.preserveView && graphNetwork && graphRootId) {
-    keep = { scale: graphNetwork.getScale(), position: graphNetwork.getViewPosition(), selected: graphNetwork.getSelectedNodes()[0] || null };
+    // 直前の描画がまだレイアウト前（afterDrawing 前）なら、作りたての network の scale=1・選択なしを拾わず、
+    // その描画が引き継ごうとしていた値をそのまま持ち越す。refresh が立て続けに描画するとき視点・選択が失われるため
+    keep = graphLaidOut
+      ? { scale: graphNetwork.getScale(), position: graphNetwork.getViewPosition(), selected: graphNetwork.getSelectedNodes()[0] || null }
+      : carriedKeep;
   }
+  if (keep && opts.select) keep = { scale: keep.scale, position: keep.position, selected: opts.select };
+  carriedKeep = keep;
+  graphLaidOut = false;
   graphGroups = groups;
   updateProjectSelect(groups);
 
@@ -2181,9 +2217,12 @@ function renderGraphView(groups, graphData, opts) {
         var box = graphNetwork.getBoundingBox(id);
         return { id: id, label: graphNodes.get(id).label, x: pos[id].x, y: pos[id].y, h: box.bottom - box.top };
       });
-      layout = balancedLayout(measured, graphEdges.get(), rootId);
+      layout = balancedLayout(measured, graphEdges.get(), rootId, islandSides);
+      if (layout) islandSides = layout.headSides;
     }
     graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
+    graphLaidOut = true;
+    carriedKeep = null;
     if (layout) {
       graphNodes.update(Object.keys(layout.positions).map(function(id) {
         return { id: id, x: layout.positions[id].x, y: layout.positions[id].y };
@@ -2399,6 +2438,7 @@ function filterSessions(sessions) {
 var projectChanging = false;
 async function onProjectChange() {
   cancelEditing();
+  islandSides = {};
   projectChanging = true;
   selectedProject = document.getElementById('project-select').value;
   // Fetch graph data for DAG view
@@ -2434,8 +2474,12 @@ async function fetchOptionalJSON(url) {
   } catch (e) { return null; }
 }
 
+// refresh は並行しうる（ポーリングと操作後の取り直し）。古い取得が新しい取得の後に届いて、
+// 直前の編集を巻き戻して描画しないよう、最後に始めた取得だけを反映する。
+var refreshSeq = 0;
 async function refresh() {
   if (projectChanging) return; // skip refresh during project change
+  var seq = ++refreshSeq;
   try {
     var res = await fetch('/api/roadmap-map');
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2453,6 +2497,7 @@ async function refresh() {
       // 取得失敗時は直前の木を保つ（一時的な失敗で island が消えて見えないように）
       if (extras[1]) islandsData = normalizeIslands(extras[1]);
     }
+    if (seq !== refreshSeq) return;
     applyRefreshed({ mapData: newData, graphData: graphData, islandsData: islandsData });
   } catch (e) {
     document.getElementById('meta').textContent = 'Error: ' + e.message;
