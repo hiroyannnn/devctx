@@ -115,6 +115,38 @@ Known limitations:
 
 To get the new hooks, re-run `devctx hooks --install` (Claude Code) and `devctx hooks --install --provider codex`, then review and trust the changed entries with `/hooks` in Codex.
 
+### Islands
+
+An **island** is a theme node you make by hand (e.g. `人事強化`), shown in the **All Projects** Mind Map. It does not need a repo. Islands and repos form **one tree**: a repo can sit under an island, and an island can sit under a repo. Agent sessions attach to their repo automatically; repos you do not attach stay at the top level.
+
+```bash
+devctx island add 人事強化 --id hr            # --id is needed to refer to a non-ASCII name
+devctx island attach devctx --to hr            # repo "devctx" under island "hr"
+devctx island add 採用フロー --id hiring --parent island:hr
+devctx island attach island:m3 --to repo:.     # island "m3" under the repo of the current directory
+devctx island detach devctx                    # back to the top level
+devctx island rm hr --reparent                 # children move up to hr's parent
+devctx island list                             # tree, with active sessions per repo
+```
+
+Refs are `island:<id>` or `repo:<path>` (`repo:.` is the repo of the current directory). A bare name matches an island id, then a repo basename. If it matches both an island and a repo, or several repos share the basename, devctx lists the candidates as typed refs and changes nothing. `island rm` refuses while the island has children unless you pass `--reparent`. Cycles (including island → repo → island) are rejected.
+
+The tree is stored in `~/.config/devctx/islands.yaml` as typed refs (repo paths are symlink-resolved, the same key used to group sessions by repo):
+
+```yaml
+islands:
+  - id: hr
+    name: 人事強化
+  - id: m3
+    name: M3 UI
+    parent: repo:/Users/me/code/devctx
+repos:
+  - root: /Users/me/code/devctx
+    parent: island:hr
+```
+
+The Mind Map is read-only for islands in this version; edit them with the CLI. A parent that no longer exists is shown at the top level, and `island list` warns about it.
+
 ### Optional Setup
 
 ```bash
