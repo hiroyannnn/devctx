@@ -138,3 +138,55 @@ func TestRoadmapAPIs_SharePhaseCacheWithinTTL(t *testing.T) {
 		t.Errorf("scans of /w/a after TTL = %d, want 4", got)
 	}
 }
+
+// overlapGitRunner は git 呼び出しの同時実行数を、全体と worktree 別に記録する。
+// 1 回ごとに少し待ち、並列に走るなら重なりが観測できるようにする。
+type overlapGitRunner struct {
+	*dirGitRunner
+	mu        sync.Mutex
+	inflight  int
+	byDir     map[string]int
+	maxAll    int
+	maxPerDir int
+}
+
+func (o *overlapGitRunner) Run(dir string, args ...string) (string, error) {
+	o.mu.Lock()
+	o.inflight++
+	o.byDir[dir]++
+	o.maxAll = max(o.maxAll, o.inflight)
+	o.maxPerDir = max(o.maxPerDir, o.byDir[dir])
+	o.mu.Unlock()
+
+	time.Sleep(20 * time.Millisecond)
+	out, err := o.dirGitRunner.Run(dir, args...)
+
+	o.mu.Lock()
+	o.inflight--
+	o.byDir[dir]--
+	o.mu.Unlock()
+	return out, err
+}
+
+func TestRoadmapMap_ScansWorktreesConcurrently(t *testing.T) {
+	server, git := newPhaseTestServer()
+	store, _ := server.StoreLoader.LoadStore()
+	now := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	store.Contexts = append(store.Contexts, model.Context{Name: "c1", Worktree: "/w/c", Branch: "feat", Status: model.StatusInProgress, CreatedAt: now, LastSeen: now})
+	git.results["/w/c"] = git.results["/w/a"]
+	overlap := &overlapGitRunner{dirGitRunner: git, byDir: map[string]int{}}
+	server.Scanner.Git = overlap
+
+	phases := getRoadmapMapPhases(t, server)
+
+	if phases["c1"] != model.PhasePushed || phases["a4"] != model.PhaseCommitted {
+		t.Errorf("phases = %v, want c1=pushed a4=committed", phases)
+	}
+	if overlap.maxAll < 2 {
+		t.Errorf("max concurrent git calls = %d, want >= 2 (worktrees scanned in parallel)", overlap.maxAll)
+	}
+	// 同じ worktree の別 branch は直列（git status が同じ index を触るため）
+	if overlap.maxPerDir != 1 {
+		t.Errorf("max concurrent git calls in one worktree = %d, want 1", overlap.maxPerDir)
+	}
+}

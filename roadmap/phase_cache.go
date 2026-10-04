@@ -1,6 +1,7 @@
 package roadmap
 
 import (
+	"sync"
 	"time"
 
 	"github.com/hiroyannnn/devctx/model"
@@ -9,6 +10,10 @@ import (
 // phaseCacheTTL は fast scan 結果の保持期間。/api/roadmap の応答キャッシュと同じ長さにし、
 // 既に /api/roadmap が許していた以上に phase の表示を古くしない。
 const phaseCacheTTL = cacheTTL
+
+// phaseScanWorkers は cache miss の scan を同時に走らせる worktree 数の上限。
+// git subprocess を一度に起こしすぎないよう、CPU 数程度に抑える。
+const phaseScanWorkers = 8
 
 // phaseKey は fast scan の結果を決める入力。scanWithMode が読むのは Worktree と Branch だけなので、
 // 同じ組の context は同じ phase になる（実データでは scan 対象 213 件に対し組は 13 通り）。
@@ -54,21 +59,65 @@ func (s *Server) scanPhases(active []model.Context) map[phaseKey]model.Phase {
 	}
 
 	phases := make(map[phaseKey]model.Phase)
+	// misses は cache に無い組を worktree ごとにまとめたもの
+	var misses [][]model.Context
+	missIndex := make(map[string]int)
+	queued := make(map[phaseKey]bool)
 	for _, ctx := range active {
 		if !s.needsPhaseScan(ctx) {
 			continue
 		}
 		key := phaseKey{ctx.Worktree, ctx.Branch}
-		if _, done := phases[key]; done {
-			continue
-		}
 		if c, ok := s.phaseCache[key]; ok {
 			phases[key] = c.phase
 			continue
 		}
-		phase := s.Scanner.scanWithMode(&ctx, ScanModeFast)
+		if queued[key] {
+			continue
+		}
+		queued[key] = true
+		i, ok := missIndex[ctx.Worktree]
+		if !ok {
+			i = len(misses)
+			missIndex[ctx.Worktree] = i
+			misses = append(misses, nil)
+		}
+		misses[i] = append(misses[i], ctx)
+	}
+
+	for key, phase := range s.scanMisses(misses) {
 		phases[key] = phase
 		s.phaseCache[key] = cachedPhase{phase: phase, expires: now.Add(phaseCacheTTL)}
 	}
 	return phases
+}
+
+// scanMisses は worktree ごとの組を並列に scan する（同じ worktree の組はその中で順に scan する）。
+// Why not 組ごとに並列: 同じ worktree の別 branch を同時に scan すると git status が同じ index を
+// 取り合う。index.lock を取れなければ refresh を諦めるだけで結果は変わらないが、無駄に競合させない。
+func (s *Server) scanMisses(byWorktree [][]model.Context) map[phaseKey]model.Phase {
+	var mu sync.Mutex
+	result := make(map[phaseKey]model.Phase)
+	jobs := make(chan []model.Context)
+	var wg sync.WaitGroup
+	for range min(phaseScanWorkers, len(byWorktree)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctxs := range jobs {
+				for _, ctx := range ctxs {
+					phase := s.Scanner.scanWithMode(&ctx, ScanModeFast)
+					mu.Lock()
+					result[phaseKey{ctx.Worktree, ctx.Branch}] = phase
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	for _, ctxs := range byWorktree {
+		jobs <- ctxs
+	}
+	close(jobs)
+	wg.Wait()
+	return result
 }
