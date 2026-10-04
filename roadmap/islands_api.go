@@ -54,16 +54,6 @@ func (s *Server) handleAPIKnownRepos(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	store := &model.Store{}
-	if s.StoreLoader != nil {
-		loaded, err := s.StoreLoader.LoadStore()
-		if err != nil {
-			log.Printf("known-repos: failed to load store: %v", err)
-			http.Error(w, "failed to load session data", http.StatusInternalServerError)
-			return
-		}
-		store = loaded
-	}
 	islands := &model.IslandStore{}
 	if s.IslandLoader != nil {
 		loaded, err := s.IslandLoader.LoadIslands()
@@ -74,17 +64,20 @@ func (s *Server) handleAPIKnownRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		islands = loaded
 	}
+	roots, err := s.knownRepoList(islands)
+	if err != nil {
+		log.Printf("known-repos: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
 
 	type repoEntry struct {
 		Root  string `json:"root"`
 		Label string `json:"label"`
 	}
 	repos := []repoEntry{} // 空でも null ではなく []
-	for _, root := range model.KnownRepos(store, islands) {
+	for _, root := range roots {
 		repos = append(repos, repoEntry{Root: root, Label: filepath.Base(root)})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"repos": repos}); err != nil {
-		log.Printf("known-repos: failed to encode: %v", err)
-	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
 }
