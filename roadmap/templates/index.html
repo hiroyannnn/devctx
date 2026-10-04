@@ -1113,6 +1113,10 @@ function repoBaseName(root) {
 // 見た目の数値・色はここに集約する。値は MindMup（mapjs）の既定テーマの数値・配色を参考にしたもので、コードは写していない。
 // Why not 自前の vis 描画をやめて mapjs を使う: セッション状態の色・DAG・live 更新など既存の描画資産を vis-network 上に残すため。
 // 背景は全て不透明（半透明だとエッジが透ける）。dim も透明度ではなく不透明の暗い色で表す。
+// vis-network の fit() は既定で拡大率を 1 で頭打ちにするため、ノードの少ない Map が大きな画面の中央に小さく残る。
+// 上限を上げても、ノードの多い Map は縮小側に fit するので影響しない
+var FIT_MAX_ZOOM = 1.8;
+
 var MINDMAP_THEME = {
   fontFace: 'NotoSans, "Helvetica Neue", Roboto, Helvetica, Arial, sans-serif',
   fontSize: 12,
@@ -1702,7 +1706,7 @@ function renderGraphView(groups, graphData) {
       graphNodes.update(Object.keys(layout.positions).map(function(id) {
         return { id: id, x: layout.positions[id].x, y: layout.positions[id].y };
       }));
-      graphNetwork.fit();
+      graphNetwork.fit({ maxZoomLevel: FIT_MAX_ZOOM });
     }
   });
 
@@ -1901,12 +1905,12 @@ async function onProjectChange() {
 }
 
 function graphFit() {
-  if (graphNetwork) graphNetwork.fit({ animation: true });
+  if (graphNetwork) graphNetwork.fit({ animation: true, maxZoomLevel: FIT_MAX_ZOOM });
 }
 
 function graphReset() {
   if (graphNetwork) {
-    graphNetwork.fit({ animation: { duration: 500 } });
+    graphNetwork.fit({ animation: { duration: 500 }, maxZoomLevel: FIT_MAX_ZOOM });
   }
 }
 
