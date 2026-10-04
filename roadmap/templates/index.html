@@ -435,6 +435,87 @@ h1 {
 }
 #graph-toolbar button:hover { color: #f0f6fc; border-color: #484f58; }
 #graph-toolbar select { margin-right: 8px; }
+#graph-canvas:focus { outline: none; border-color: #388bfd; }
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 168px;
+  padding: 4px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.7);
+}
+.ctx-menu .ctx-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #c9d1d9;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.ctx-menu .ctx-item:hover, .ctx-menu .ctx-item:focus { background: #21262d; color: #f0f6fc; outline: none; }
+.ctx-menu .ctx-item.danger { color: #f85149; }
+.island-name-input {
+  position: absolute;
+  z-index: 900;
+  height: 28px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  background: #0d1117;
+  border: 2px solid #388bfd;
+  border-radius: 8px;
+  color: #f0f6fc;
+  font-size: 12px;
+}
+.island-name-input:focus { outline: none; }
+.island-confirm {
+  position: absolute;
+  z-index: 950;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 320px;
+  padding: 14px 16px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.7);
+  font-size: 0.82rem;
+  color: #c9d1d9;
+}
+.island-confirm .confirm-title { font-weight: 600; color: #f0f6fc; margin-bottom: 8px; }
+.island-confirm ul { margin: 6px 0 12px 18px; padding: 0; max-height: 160px; overflow-y: auto; }
+.island-confirm .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.island-confirm button {
+  padding: 4px 10px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #c9d1d9;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.island-confirm button.danger { border-color: #f85149; color: #f85149; }
+.island-confirm button:focus { outline: 2px solid #388bfd; }
+.devctx-toast {
+  position: fixed;
+  z-index: 1100;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 8px 14px;
+  background: #3d1214;
+  border: 1px solid #f85149;
+  border-radius: 6px;
+  color: #ffdcd7;
+  font-size: 0.82rem;
+}
 </style>
 </head>
 <body>
@@ -464,7 +545,7 @@ h1 {
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
   </div>
-  <div id="graph-canvas"></div>
+  <div id="graph-canvas" tabindex="0"></div>
   <div id="graph-inspector">
     <div class="inspector-header">
       <span class="inspector-name" id="inspector-name"></span>
@@ -1641,9 +1722,394 @@ function buildSemanticGraph(graphData) {
   return postProcess(nodes, edges, isAllProjects);
 }
 
+// ── Island editing ──
+// 編集は All Projects の Mind Map だけ（island は All Projects にしか描かれない）。変更は POST /api/islands/ops に送り、
+// 結果は refresh() で取り直して描画に反映する（クライアントで木を書き換えない）。
+// Why not 楽観更新: 木の検証（循環・存在）は server の model が正で、クライアントで再実装すると食い違うため。
+
+// 純関数（DOM / vis に依存しない）。
+
+// ノードを編集の種別に分類する。session / more / DAG ノード / ungrouped の repo は null（編集対象外）。
+function editableKind(node) {
+  if (!node) return null;
+  if (node._type === 'root') return 'root';
+  if (node._type === 'island') return 'island';
+  if (node._type === 'project' && node.id !== repoNodeId('')) return 'repo';
+  return null;
+}
+
+// ノード ID（= ref）の親 ref。トップレベルは ''。islandsData は /api/islands（dangling 解決済み）。
+function parentRefOf(id, islandsData) {
+  var i;
+  if (id.indexOf(ISLAND_PREFIX) === 0) {
+    for (i = 0; i < islandsData.islands.length; i++) {
+      if (islandNodeId(islandsData.islands[i].id) === id) return islandsData.islands[i].parent || '';
+    }
+  } else if (id.indexOf(REPO_PREFIX) === 0) {
+    for (i = 0; i < islandsData.repos.length; i++) {
+      if (repoNodeId(islandsData.repos[i].root) === id) return islandsData.repos[i].parent || '';
+    }
+  }
+  return '';
+}
+
+// Enter で兄弟を足すときの親 ref。root は兄弟を持たないので "root の下"（'' = トップレベル）に足す。
+function siblingParentRef(id, kind, islandsData) {
+  return kind === 'root' ? '' : parentRefOf(id, islandsData);
+}
+
+// 削除確認で見せる子の ref（island → repo の順）。server は同じ集合を children として照合する。
+function childrenRefsOf(ref, islandsData) {
+  var out = [];
+  islandsData.islands.forEach(function(is) { if (is.parent === ref) out.push(islandNodeId(is.id)); });
+  islandsData.repos.forEach(function(r) { if (r.parent === ref) out.push(repoNodeId(r.root)); });
+  return out;
+}
+
+// 右クリックメニューの項目。「親から外す」は親があるときだけ。
+function contextMenuItems(kind, hasParent) {
+  if (kind === 'root') return [{ action: 'addChild', label: '島を追加' }];
+  var items = [{ action: 'addChild', label: '子の島を追加' }];
+  if (kind === 'island') items.push({ action: 'rename', label: '名前を変更' });
+  if (hasParent) items.push({ action: 'detach', label: '親から外す' });
+  if (kind === 'island') items.push({ action: 'delete', label: '削除', danger: true });
+  return items;
+}
+
+// キー → 編集操作。対応しないキーは null（preventDefault しない）。rename / delete は island のみ。
+function keyAction(key, kind) {
+  if (!kind) return null;
+  if (key === 'Tab') return 'addChild';
+  if (key === 'Enter') return 'addSibling';
+  if (kind !== 'island') return null;
+  if (key === 'F2' || key === ' ') return 'rename';
+  if (key === 'Delete' || key === 'Backspace') return 'delete';
+  return null;
+}
+
+// 編集 UI（メニュー / 名前入力 / 削除確認）の状態。
+// 編集中に届いた refresh は pendingData に預け、閉じてから反映する。
+// Why: 5 秒ごとの再描画（graphNetwork の作り直し）で、開いている入力欄やメニューの足元からノードが消えるのを防ぐ。
+var editState = { menu: null, input: null, confirm: null };
+var pendingData = null;   // 編集中に届いた {mapData, graphData, islandsData}
+var pendingSelect = null; // 操作成功後の再描画で選択するノード（add の戻り値）
+var graphRootId = null;   // 直近の描画の root ID。null なら編集不可（単一プロジェクト表示）
+
+function editingActive() {
+  return !!(editState.menu || editState.input || editState.confirm);
+}
+
+function removeMenu() {
+  if (editState.menu) { editState.menu.remove(); editState.menu = null; }
+}
+function removeConfirm() {
+  if (editState.confirm) { editState.confirm.remove(); editState.confirm = null; }
+}
+function removeInput() {
+  if (editState.input) {
+    var el = editState.input;
+    editState.input = null; // remove() が blur を起こすので、先に外しておく
+    el.remove();
+  }
+}
+
+// 保留していた更新があり、編集 UI がすべて閉じていれば反映する（変化の有無は applyRefreshed が再判定する）。
+function flushPending() {
+  if (editingActive() || !pendingData) return;
+  var p = pendingData;
+  pendingData = null;
+  applyRefreshed(p);
+}
+
+// ユーザー操作で編集 UI を閉じる。保留分を反映する。
+// 閉じたあとはキー操作を続けられるようグラフにフォーカスを戻す。blur（別の要素をクリック）で閉じる場合は、
+// クリックされた側のフォーカスを奪わないよう noFocus を渡す。
+function endEditing(noFocus) {
+  removeMenu(); removeInput(); removeConfirm();
+  var canvasEl = document.getElementById('graph-canvas');
+  if (!noFocus && canvasEl && graphRootId) canvasEl.focus({ preventScroll: true });
+  flushPending();
+}
+
+// 描画の作り直し（フィルタ・プロジェクト切り替え）で消える UI を捨てる。保留分も捨てる（次の refresh が取り直す）。
+function cancelEditing() {
+  removeMenu(); removeInput(); removeConfirm();
+  pendingData = null;
+}
+
+var toastTimer = null;
+function showToast(message) {
+  var el = document.getElementById('devctx-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'devctx-toast';
+    el.className = 'devctx-toast';
+    el.setAttribute('role', 'alert');
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.style.display = 'none'; }, 4000);
+}
+
+// POST /api/islands/ops。ネットワーク失敗も {ok:false} で返し、呼び出し側は 1 経路で扱う。
+async function postIslandOp(body) {
+  try {
+    var res = await fetch('/api/islands/ops', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    return { ok: res.ok, status: res.status, data: data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: 'network error' } };
+  }
+}
+
+async function runIslandOp(body) {
+  var res = await postIslandOp(body);
+  if (!res.ok) {
+    var err = res.data && res.data.error;
+    if (res.status === 409 && err === 'children changed') {
+      showToast('子が変わりました。もう一度確認してください');
+    } else {
+      showToast(err || ('HTTP ' + res.status));
+    }
+  } else if (res.data && res.data.ref) {
+    pendingSelect = res.data.ref;
+  }
+  // 成功でも失敗（409 等）でも、server の現状に取り直す
+  await refresh();
+  pendingSelect = null;
+}
+
+// ノードの DOM 座標（graph-canvas 内）の矩形
+function nodeDomBox(nodeId) {
+  var b = graphNetwork.getBoundingBox(nodeId);
+  var tl = graphNetwork.canvasToDOM({ x: b.left, y: b.top });
+  var br = graphNetwork.canvasToDOM({ x: b.right, y: b.bottom });
+  return { left: tl.x, top: tl.y, right: br.x, bottom: br.y };
+}
+
+// ノード上（rename）または親ノードの横（add）に名前入力を出す。Enter で確定、Esc / blur でキャンセル。
+// mode 'add' は root より右にある親なら右側、左なら左側に出す（子が広がる側と合わせる）。
+function openNameInput(o) {
+  removeMenu(); removeInput(); removeConfirm();
+  var container = document.getElementById('graph-container');
+  var canvasEl = document.getElementById('graph-canvas');
+  var box = nodeDomBox(o.anchorId);
+  var width = 160;
+  var left, top = (box.top + box.bottom) / 2 - 14;
+  if (o.mode === 'rename') {
+    width = Math.max(140, box.right - box.left);
+    left = box.left;
+  } else {
+    var onRight = graphNetwork.getPosition(o.anchorId).x >= graphNetwork.getPosition(ROOT_ID).x;
+    left = onRight ? box.right + 24 : box.left - 24 - width;
+  }
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'island-name-input';
+  input.maxLength = 80;
+  input.value = o.initial || '';
+  input.placeholder = '島の名前';
+  input.setAttribute('aria-label', '島の名前');
+  input.style.left = (canvasEl.offsetLeft + left) + 'px';
+  input.style.top = (canvasEl.offsetTop + top) + 'px';
+  input.style.width = width + 'px';
+
+  var done = false;
+  function finish(commit, fromBlur) {
+    if (done) return;
+    done = true;
+    var name = input.value.trim();
+    endEditing(fromBlur);
+    if (commit && name) o.onCommit(name);
+  }
+  input.addEventListener('keydown', function(e) {
+    // 日本語入力の変換確定の Enter は確定扱いにしない
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', function() { finish(false, true); });
+  container.appendChild(input);
+  editState.input = input;
+  input.focus();
+  input.select();
+}
+
+function startAddIsland(parentRef, anchorId) {
+  openNameInput({
+    mode: 'add', anchorId: anchorId, initial: '',
+    onCommit: function(name) { runIslandOp({ op: 'add', name: name, parent: parentRef }); }
+  });
+}
+
+function startRenameIsland(ref) {
+  var node = graphNodes.get(ref);
+  var current = node && node._data ? node._data.name : '';
+  openNameInput({
+    mode: 'rename', anchorId: ref, initial: current,
+    onCommit: function(name) {
+      if (name !== current) runIslandOp({ op: 'rename', ref: ref, name: name });
+    }
+  });
+}
+
+function refLabel(ref) {
+  var node = graphNodes.get(ref);
+  if (node && node._data && node._data.name) return node._data.name;
+  return ref.indexOf(REPO_PREFIX) === 0 ? repoBaseName(ref.slice(REPO_PREFIX.length)) : ref;
+}
+
+// 子がいる island は、子を親へ付け替えて消すことを確認してから消す。子がいなければそのまま消す。
+function startDeleteIsland(ref) {
+  var children = childrenRefsOf(ref, cachedIslands);
+  if (children.length === 0) {
+    endEditing();
+    runIslandOp({ op: 'remove', ref: ref, children: [] });
+    return;
+  }
+  removeMenu(); removeInput(); removeConfirm();
+  var panel = document.createElement('div');
+  panel.className = 'island-confirm';
+  panel.setAttribute('role', 'dialog');
+  var title = document.createElement('div');
+  title.className = 'confirm-title';
+  title.textContent = '「' + refLabel(ref) + '」を削除';
+  var lead = document.createElement('div');
+  lead.textContent = '次の ' + children.length + ' 件は親へ付け替えられます。';
+  var list = document.createElement('ul');
+  children.forEach(function(c) {
+    var li = document.createElement('li');
+    li.textContent = refLabel(c);
+    list.appendChild(li);
+  });
+  var actions = document.createElement('div');
+  actions.className = 'confirm-actions';
+  var cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'キャンセル';
+  cancel.addEventListener('click', function() { endEditing(); });
+  var ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'danger';
+  ok.textContent = '子を親へ付け替えて削除';
+  ok.addEventListener('click', function() {
+    endEditing();
+    runIslandOp({ op: 'remove', ref: ref, children: children });
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(ok);
+  [title, lead, list, actions].forEach(function(el) { panel.appendChild(el); });
+  document.getElementById('graph-container').appendChild(panel);
+  editState.confirm = panel;
+  cancel.focus(); // 既定は安全側（キャンセル）
+}
+
+// 操作の実行。kind は editableKind の結果、id はノード ID（= ref。root は ROOT_ID）。
+function runEditAction(action, id, kind) {
+  if (action === 'addChild') {
+    startAddIsland(kind === 'root' ? '' : id, id);
+  } else if (action === 'addSibling') {
+    var parent = siblingParentRef(id, kind, cachedIslands);
+    startAddIsland(parent, parent || ROOT_ID);
+  } else if (action === 'rename') {
+    startRenameIsland(id);
+  } else if (action === 'detach') {
+    runIslandOp({ op: 'detach', child: id });
+  } else if (action === 'delete') {
+    startDeleteIsland(id);
+  }
+}
+
+// 右クリックメニュー。DOM は createElement / textContent だけで組む。
+function buildContextMenu(items, x, y, onPick) {
+  var menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.setAttribute('role', 'menu');
+  items.forEach(function(item) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctx-item' + (item.danger ? ' danger' : '');
+    b.setAttribute('role', 'menuitem');
+    b.textContent = item.label;
+    b.addEventListener('click', function() { onPick(item.action); });
+    menu.appendChild(b);
+  });
+  menu.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    var btns = Array.prototype.slice.call(menu.querySelectorAll('.ctx-item'));
+    var i = btns.indexOf(document.activeElement);
+    i = e.key === 'ArrowDown' ? (i + 1) % btns.length : (i - 1 + btns.length) % btns.length;
+    btns[i].focus();
+  });
+  document.body.appendChild(menu);
+  // 画面外にはみ出さないよう、実寸を測ってから置く
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - menu.offsetHeight - 4)) + 'px';
+  return menu;
+}
+
+function openContextMenu(nodeId, x, y) {
+  var node = graphNodes.get(nodeId);
+  var kind = editableKind(node);
+  if (!kind) return false;
+  removeMenu(); removeInput(); removeConfirm();
+  var items = contextMenuItems(kind, !!parentRefOf(nodeId, cachedIslands));
+  editState.menu = buildContextMenu(items, x, y, function(action) {
+    removeMenu(); // 次の操作（入力欄・確認）へ移るので、保留分はまだ反映しない
+    if (action === 'addChild' || action === 'rename' || action === 'delete') {
+      runEditAction(action, nodeId, kind);
+    } else {
+      endEditing();
+      runEditAction(action, nodeId, kind);
+    }
+  });
+  var first = editState.menu.querySelector('.ctx-item');
+  if (first) first.focus();
+  return true;
+}
+
+// 編集 UI を閉じる共通のきっかけ（メニュー外クリック / Esc / スクロール）。入力欄はスクロールに追従するので残す。
+document.addEventListener('mousedown', function(e) {
+  if (editState.menu && !editState.menu.contains(e.target)) endEditing(true);
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && (editState.menu || editState.confirm)) endEditing();
+});
+window.addEventListener('scroll', function() { if (editState.menu) endEditing(true); }, true);
+
+// グラフにフォーカスがあり、編集可能なノードが 1 つ選ばれ、編集 UI が開いていないときだけキー操作を受ける。
+function onGraphKeydown(e) {
+  if (!graphRootId || !graphNetwork || editingActive()) return;
+  if (e.target !== e.currentTarget) return;
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  var sel = graphNetwork.getSelectedNodes();
+  if (sel.length !== 1) return;
+  var kind = editableKind(graphNodes.get(sel[0]));
+  var action = keyAction(e.key, kind);
+  if (!action) return;
+  e.preventDefault();
+  runEditAction(action, sel[0], kind);
+}
+
 var cachedGraphData = null; // cached /api/roadmap-graph data
 
-function renderGraphView(groups, graphData) {
+// opts.preserveView: 再描画（refresh / 編集後）で拡大率・視点・選択を引き継ぐ。初回・プロジェクト切り替え・フィルタ変更は fit し直す。
+// opts.select: 描画後に選択するノード ID（add で作ったノード）。
+function renderGraphView(groups, graphData, opts) {
+  opts = opts || {};
+  cancelEditing(); // ノードごと作り直すので、開いている編集 UI は残せない
+  var keep = null;
+  if (opts.preserveView && graphNetwork && graphRootId) {
+    keep = { scale: graphNetwork.getScale(), position: graphNetwork.getViewPosition(), selected: graphNetwork.getSelectedNodes()[0] || null };
+  }
   graphGroups = groups;
   updateProjectSelect(groups);
 
@@ -1664,6 +2130,7 @@ function renderGraphView(groups, graphData) {
     graphNetwork = null;
   }
 
+  graphRootId = data.rootId;
   graphNodes = new vis.DataSet(data.nodes);
   graphEdges = new vis.DataSet(data.edges);
   var container = document.getElementById('graph-canvas');
@@ -1691,7 +2158,8 @@ function renderGraphView(groups, graphData) {
       zoomSpeed: 0.3,
       multiselect: false,
       navigationButtons: false,
-      keyboard: { enabled: true, speed: { x: 10, y: 10, zoom: 0.03 } }
+      // vis のキー操作は window に束縛され、名前入力中の矢印や '-' でも視点を動かす・入力を奪うので切る（拡大・移動はマウス）
+      keyboard: { enabled: false }
     },
     edges: {
       arrows: { to: false },
@@ -1719,17 +2187,42 @@ function renderGraphView(groups, graphData) {
       graphNodes.update(Object.keys(layout.positions).map(function(id) {
         return { id: id, x: layout.positions[id].x, y: layout.positions[id].y };
       }));
-      graphNetwork.fit({ maxZoomLevel: FIT_MAX_ZOOM });
+      if (keep) {
+        graphNetwork.moveTo({ scale: keep.scale, position: keep.position, animation: false });
+      } else {
+        graphNetwork.fit({ maxZoomLevel: FIT_MAX_ZOOM });
+      }
+      var reselect = opts.select && graphNodes.get(opts.select) ? opts.select
+        : keep && keep.selected && graphNodes.get(keep.selected) ? keep.selected : null;
+      if (reselect) graphNetwork.selectNodes([reselect]);
     }
   });
 
+  graphNetwork.on('oncontext', function(params) {
+    if (!graphRootId) return;
+    var id = graphNetwork.getNodeAt(params.pointer.DOM);
+    if (id === undefined || !editableKind(graphNodes.get(id))) return;
+    graphNetwork.selectNodes([id]);
+    var src = params.event && params.event.srcEvent;
+    // ブラウザ標準のメニューを出さない（編集可能なノード上のときだけ）
+    if (params.event && params.event.preventDefault) params.event.preventDefault();
+    if (src && src.preventDefault) src.preventDefault();
+    var rect = document.getElementById('graph-canvas').getBoundingClientRect();
+    openContextMenu(id, src ? src.clientX : rect.left + params.pointer.DOM.x, src ? src.clientY : rect.top + params.pointer.DOM.y);
+  });
+  // ズーム・パンで入力欄などが指すノードとずれるので閉じる
+  graphNetwork.on('zoom', function() { if (editingActive()) endEditing(true); });
+  graphNetwork.on('dragStart', function() { if (editingActive()) endEditing(true); });
+
   graphNetwork.on('click', function(params) {
+    // キー操作を受けるため、クリックでグラフにフォーカスを移す
+    document.getElementById('graph-canvas').focus({ preventScroll: true });
     if (params.nodes.length > 0) {
       var nodeData = graphNodes.get(params.nodes[0]);
       if (nodeData._type === 'session') {
         showInspector(nodeData._data);
       } else if (nodeData._type === 'island') {
-        // PR1 は閲覧のみ（編集は CLI）。inspector は開かない
+        // island に見せる詳細は無い。編集は右クリック / キー操作
         closeInspector();
       } else if (nodeData._type === 'more') {
         // Click "+N more" to select that project
@@ -1904,6 +2397,7 @@ function filterSessions(sessions) {
 
 var projectChanging = false;
 async function onProjectChange() {
+  cancelEditing();
   projectChanging = true;
   selectedProject = document.getElementById('project-select').value;
   // Fetch graph data for DAG view
@@ -1958,31 +2452,43 @@ async function refresh() {
       // 取得失敗時は直前の木を保つ（一時的な失敗で island が消えて見えないように）
       if (extras[1]) islandsData = normalizeIslands(extras[1]);
     }
-
-    // 比較用の文字列は前回分を持ち回り、新しいデータだけ stringify する
-    var newJson = dataFingerprint(newData, graphData, islandsData);
-    // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
-    if (currentView === 'graph' && cachedData && graphNetwork) {
-      if (newJson === lastJson) {
-        var sessionCount = 0;
-        newData.forEach(function(g) { sessionCount += g.sessions.length; });
-        var now = new Date();
-        document.getElementById('meta').textContent =
-          sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
-        return;
-      }
-    }
-    cachedData = newData;
-    cachedGraphData = graphData;
-    cachedIslands = islandsData;
-    lastJson = newJson;
-    if (currentView === 'graph') {
-      renderGraphView(cachedData, cachedGraphData);
-    } else {
-      render(cachedData);
-    }
+    applyRefreshed({ mapData: newData, graphData: graphData, islandsData: islandsData });
   } catch (e) {
     document.getElementById('meta').textContent = 'Error: ' + e.message;
+  }
+}
+
+// 取得した最新データを画面に反映する。編集 UI が開いている間は反映せず pendingData に預ける
+// （閉じたときに flushPending が再度ここへ通し、そのとき変化があれば描画する）。
+function applyRefreshed(r) {
+  if (editingActive()) {
+    pendingData = r;
+    return;
+  }
+  pendingData = null; // より新しい取得が反映されるので、古い保留は捨てる
+  var newData = r.mapData, graphData = r.graphData, islandsData = r.islandsData;
+  // 比較用の文字列は前回分を持ち回り、新しいデータだけ stringify する
+  var newJson = dataFingerprint(newData, graphData, islandsData);
+  // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
+  if (currentView === 'graph' && cachedData && graphNetwork) {
+    if (newJson === lastJson) {
+      var sessionCount = 0;
+      newData.forEach(function(g) { sessionCount += g.sessions.length; });
+      var now = new Date();
+      document.getElementById('meta').textContent =
+        sessionCount + ' session(s) | Mind Map | Updated: ' + now.toLocaleTimeString();
+      return;
+    }
+  }
+  cachedData = newData;
+  cachedGraphData = graphData;
+  cachedIslands = islandsData;
+  lastJson = newJson;
+  if (currentView === 'graph') {
+    renderGraphView(cachedData, cachedGraphData, { preserveView: true, select: pendingSelect });
+    pendingSelect = null;
+  } else {
+    render(cachedData);
   }
 }
 
