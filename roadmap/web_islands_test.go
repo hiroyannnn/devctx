@@ -158,6 +158,9 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 		"'session:' + session.name",                  // 連番ではなく安定した ID
 		"repoNodeId(",                                // repo ノードの安定 ID
 		"'more:' + ",                                 // more ノードも repo 単位の安定 ID
+		"var MINDMAP_THEME = {",                      // 見た目の数値・色は 1 か所
+		"function balancedLayout(",                   // 左右バランス配置の純関数
+		"applyMindmapTheme(nodes);",                  // 両 builder で共通のテーマ適用
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)

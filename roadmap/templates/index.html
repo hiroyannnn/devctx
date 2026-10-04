@@ -1005,10 +1005,95 @@ function summarizeGroup(group) {
   return parts.join('  ');
 }
 
-// ── Islands overlay ──
+// ── 左右バランス配置（All Projects） ──
+// root の子の部分木を左右に振り分け、左は root の x で鏡写しにし、各側で縦に詰め直す。
+// 入力は vis の初期（hierarchical LR）配置後の座標つきノード {id, label, x, y, h} と辺。DOM / vis に依存しない純関数。
+// Why not vis の hierarchical だけで左右に割る: LR は全ノードを root の右に並べるので、後処理で座標を作り直す。
+// 戻り値の positions は部分木に属する全ノードの新しい座標、side は各ノードの 'left' / 'right'。
+var LAYOUT_GAP = 24;
+
+function balancedLayout(nodes, edges, rootId) {
+  var byId = {};
+  nodes.forEach(function(n) { byId[n.id] = n; });
+  var rootNode = byId[rootId];
+  if (!rootNode) return null;
+
+  var kids = {};
+  edges.forEach(function(e) { (kids[e.from] = kids[e.from] || []).push(e.to); });
+  function byLabel(a, b) {
+    var la = String(byId[a].label), lb = String(byId[b].label);
+    return la < lb ? -1 : la > lb ? 1 : (a < b ? -1 : a > b ? 1 : 0);
+  }
+
+  // 部分木。複数の子から届くノードは先に辿った方に属させる（ツリー辺のみなので通常は起きない）
+  var owner = {};
+  owner[rootId] = rootId;
+  var seen = {};
+  var heads = (kids[rootId] || []).filter(function(id) {
+    if (!byId[id] || seen[id]) return false;
+    seen[id] = true;
+    return true;
+  }).sort(byLabel);
+  var subtrees = heads.map(function(head) {
+    var members = [];
+    var stack = [head];
+    owner[head] = head;
+    while (stack.length) {
+      var id = stack.pop();
+      members.push(id);
+      (kids[id] || []).forEach(function(c) {
+        if (byId[c] && !owner[c]) { owner[c] = head; stack.push(c); }
+      });
+    }
+    return { head: head, members: members };
+  });
+
+  // 大きい部分木から軽い側へ（同数なら右）。振り分けの順序と各側の積み順はラベル順で決め、再描画で並びが揺れないようにする
+  var left = [], right = [], leftCount = 0, rightCount = 0;
+  subtrees.slice().sort(function(a, b) {
+    return b.members.length - a.members.length || byLabel(a.head, b.head);
+  }).forEach(function(st) {
+    if (leftCount < rightCount) { left.push(st); leftCount += st.members.length; }
+    else { right.push(st); rightCount += st.members.length; }
+  });
+
+  var positions = {};
+  var side = {};
+  positions[rootId] = { x: rootNode.x, y: rootNode.y };
+  function place(list, mirror) {
+    list.sort(function(a, b) { return byLabel(a.head, b.head); });
+    var extents = list.map(function(st) {
+      var top = Infinity, bottom = -Infinity;
+      st.members.forEach(function(id) {
+        var n = byId[id], h = n.h || 30;
+        top = Math.min(top, n.y - h / 2);
+        bottom = Math.max(bottom, n.y + h / 2);
+      });
+      return { top: top, height: bottom - top };
+    });
+    var total = extents.reduce(function(sum, e) { return sum + e.height; }, 0) + LAYOUT_GAP * Math.max(0, list.length - 1);
+    var cursor = rootNode.y - total / 2;
+    list.forEach(function(st, i) {
+      var dy = cursor - extents[i].top;
+      st.members.forEach(function(id) {
+        var n = byId[id];
+        positions[id] = { x: mirror ? 2 * rootNode.x - n.x : n.x, y: n.y + dy };
+        side[id] = mirror ? 'left' : 'right';
+      });
+      cursor += extents[i].height + LAYOUT_GAP;
+    });
+  }
+  place(right, false);
+  place(left, true);
+  return { positions: positions, side: side };
+}
+
+// ── Islands ──
 // Why: island はユーザーが手で作るテーマノードで、repo と 1 本の木になる（親は island / repo のどちらでもよい）。
 // 2 つの builder（tree / semantic DAG）が同じ描画を共有するよう、構築後に 1 か所で重ねる。
 var cachedIslands = { islands: [], repos: [] };
+
+var ROOT_ID = 'root';
 
 function normalizeIslands(d) {
   return { islands: (d && d.islands) || [], repos: (d && d.repos) || [] };
@@ -1024,20 +1109,74 @@ function repoBaseName(root) {
   return parts.length ? parts[parts.length - 1] : String(root);
 }
 
+// ── Mind Map theme ──
+// 見た目の数値・色はここに集約する。値は MindMup（mapjs）の既定テーマの数値・配色を参考にしたもので、コードは写していない。
+// Why not 自前の vis 描画をやめて mapjs を使う: セッション状態の色・DAG・live 更新など既存の描画資産を vis-network 上に残すため。
+// 背景は全て不透明（半透明だとエッジが透ける）。dim も透明度ではなく不透明の暗い色で表す。
+var MINDMAP_THEME = {
+  fontFace: 'NotoSans, "Helvetica Neue", Roboto, Helvetica, Arial, sans-serif',
+  fontSize: 12,
+  radius: 10,
+  margin: { top: 5, right: 8, bottom: 5, left: 8 },
+  borderWidth: 1,
+  borderWidthSelected: 3,
+  shadow: { enabled: true, color: 'rgba(7,7,7,0.4)', size: 2, x: 2, y: 2 },
+  maxWidth: 146,
+  edge: '#707070',
+  root:    { bg: '#22AAE0', border: '#707070', font: '#EEEEEE' },
+  island:  { bg: '#E0E0E0', border: '#707070', font: '#4F4F4F' },
+  repo:    { bg: '#C9D3DC', border: '#707070', font: '#2F2F2F' },
+  // アクティブな context が無い repo。暗い背景のページに溶けない程度に落とした色
+  repoDim: { bg: '#4A525B', border: '#5A626B', font: '#B6BEC6' }
+};
+
+function themedKind(kind) {
+  var c = MINDMAP_THEME[kind];
+  return {
+    color: { background: c.bg, border: c.border },
+    font: { color: c.font, size: MINDMAP_THEME.fontSize, face: MINDMAP_THEME.fontFace, bold: true, multi: true }
+  };
+}
+
+// ツリー辺（root / island / repo / session を繋ぐ辺）。DAG の意味付きの辺には使わない
+function treeEdge(from, to) {
+  return {
+    from: from, to: to,
+    color: { color: MINDMAP_THEME.edge, inherit: false },
+    width: 1,
+    arrows: { to: { enabled: false } }
+  };
+}
+
+// 全ノードに共通の形（角丸・余白・影・折り返し幅）を足す。色とノード固有の font は壊さない。
+// 構造ノード（root / island / repo / session）だけ文字サイズも揃え、DAG のタスクノードは自前のサイズを保つ。
+function applyMindmapTheme(nodes) {
+  var T = MINDMAP_THEME;
+  var uniform = { root: 1, island: 1, project: 1, session: 1 };
+  nodes.forEach(function(n) {
+    n.shape = 'box';
+    n.shapeProperties = Object.assign({}, n.shapeProperties, { borderRadius: T.radius });
+    n.margin = Object.assign({}, T.margin);
+    n.borderWidth = n.borderWidth === undefined || uniform[n._type] ? T.borderWidth : n.borderWidth;
+    n.borderWidthSelected = T.borderWidthSelected;
+    if (!n.shadow) n.shadow = Object.assign({}, T.shadow); // フォーカス中ノードの青いグローは残す
+    n.widthConstraint = { maximum: T.maxWidth };
+    var f = Object.assign({}, n.font, { face: T.fontFace });
+    if (uniform[n._type]) f.size = T.fontSize;
+    if (n._type === 'project') {
+      // repo ノードの色はここで決める（builder は構造だけを持つ）。セッションが無い repo は dim
+      var k = themedKind(n._data && n._data.sessions && n._data.sessions.length === 0 ? 'repoDim' : 'repo');
+      n.color = k.color;
+      f.color = k.font.color;
+      f.bold = true;
+    }
+    n.font = f;
+  });
+}
+
+// ── Islands overlay ──
 // nodes / edges を破壊的に更新する。All Projects 専用。
 // repo ノードの ID は repoNodeId で builder と共通。builder が置いた repo ノードは nodes から拾う。
-// island ノードの見た目はここだけに集約する（MindMup 風の調整はこの定数と islandEdgeStyle の差し替えで済ませるため）。
-// 背景は不透明（半透明だとエッジが透ける）。
-var ISLAND_STYLE = {
-  shape: 'box',
-  color: { background: '#1c1530', border: '#a371f7' },
-  font: { color: '#e6d8ff', size: 16, face: '-apple-system, sans-serif', bold: true },
-  margin: { top: 12, bottom: 12, left: 18, right: 18 },
-  borderWidth: 2,
-  shapeProperties: { borderRadius: 14 }
-};
-var islandEdgeStyle = { color: { color: '#a371f7' }, width: 2 };
-
 function islandOverlay(nodes, edges, islandsData) {
   var data = normalizeIslands(islandsData);
   var nodeIds = {};
@@ -1057,11 +1196,6 @@ function islandOverlay(nodes, edges, islandsData) {
     nodes.push({
       id: ref,
       label: repoBaseName(root) + '\n(no active sessions)',
-      shape: 'box',
-      color: { background: '#161b22', border: '#30363d' },
-      font: { color: '#8b949e', size: 14, face: '-apple-system, sans-serif', bold: true, multi: true },
-      margin: { top: 10, bottom: 10, left: 14, right: 14 },
-      borderWidth: 1,
       level: 0,
       _type: 'project',
       _data: { name: repoBaseName(root), repo_root: root, sessions: [] }
@@ -1082,13 +1216,13 @@ function islandOverlay(nodes, edges, islandsData) {
       level: 0,
       _type: 'island',
       _data: is
-    }, ISLAND_STYLE));
+    }, themedKind('island')));
   });
 
   Object.keys(parentOf).forEach(function(child) {
     var parent = parentOf[child];
     if (!nodeIds[child] || !nodeIds[parent]) { delete parentOf[child]; return; }
-    edges.push(Object.assign({ from: parent, to: child }, islandEdgeStyle));
+    edges.push(treeEdge(parent, child));
   });
 
   // level は根からの深さ。island→repo→island→repo の鎖でも LR に並ぶ。循環（手編集）は visiting で打ち切る
@@ -1103,13 +1237,26 @@ function islandOverlay(nodes, edges, islandsData) {
     memo[id] = d;
     return d;
   }
+  // 中央の root を level 0 に置くので、全体を 1 段右にずらす
   nodes.forEach(function(n) {
     if (n._type === 'island' || n._type === 'project') {
-      n.level = depth(n.id, {});
+      n.level = depth(n.id, {}) + 1;
     } else if (n._repoId) {
-      n.level += depth(n._repoId, {});
+      n.level += depth(n._repoId, {}) + 1;
     }
   });
+
+  // 親の無い island / repo（未登録 repo や Other を含む）を全て root にぶら下げる。
+  // Why: 左右バランス配置が root 起点の部分木分割で成り立つため、孤立したトップレベルを作らない
+  if (nodes.length === 0) return;
+  var tops = nodes.filter(function(n) {
+    return (n._type === 'island' || n._type === 'project') && !parentOf[n.id];
+  });
+  var rootStyle = themedKind('root');
+  nodes.push(Object.assign({
+    id: ROOT_ID, label: 'devctx', level: 0, _type: 'root'
+  }, rootStyle));
+  tops.forEach(function(n) { edges.push(treeEdge(ROOT_ID, n.id)); });
 }
 
 function buildMindMapData(groups) {
@@ -1202,7 +1349,7 @@ function buildMindMapData(groups) {
         _repoId: projectId
       });
       if (sessionParent) {
-        edges.push({ from: sessionParent, to: sessionId, color: { color: '#484f58' }, width: 1.5 });
+        edges.push(treeEdge(sessionParent, sessionId));
       }
 
       // No roadmap warning (skip in All Projects to reduce noise)
@@ -1241,6 +1388,7 @@ function buildMindMapData(groups) {
   });
 
   if (isAllProjects) islandOverlay(nodes, edges, cachedIslands);
+  applyMindmapTheme(nodes);
   return { nodes: nodes, edges: edges };
 }
 
@@ -1346,7 +1494,7 @@ function buildSemanticGraph(graphData) {
         _repoId: projectNodeId
       });
       if (projectNodeId) {
-        edges.push({ from: projectNodeId, to: sessionNodeId, color: { color: '#484f58' }, width: 1.5 });
+        edges.push(treeEdge(projectNodeId, sessionNodeId));
       }
 
       if (!session.nodes || session.nodes.length === 0) {
@@ -1472,6 +1620,7 @@ function buildSemanticGraph(graphData) {
   });
 
   if (isAllProjects) islandOverlay(nodes, edges, cachedIslands);
+  applyMindmapTheme(nodes);
   return { nodes: nodes, edges: edges };
 }
 
@@ -1529,15 +1678,32 @@ function renderGraphView(groups, graphData) {
     },
     edges: {
       arrows: { to: false },
-      color: { color: '#484f58', hover: '#8b949e' },
-      width: 1.5,
-      smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 }
+      color: { color: MINDMAP_THEME.edge, hover: '#8b949e', inherit: false },
+      width: 1,
+      smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.8 }
     }
   });
 
   // After initial hierarchical layout, disable it so nodes can be dragged freely
+  var hasRoot = data.nodes.some(function(n) { return n.id === ROOT_ID; });
   graphNetwork.once('afterDrawing', function() {
+    var layout = null;
+    if (hasRoot) {
+      // hierarchical を切る前に、初期配置の座標と実寸の高さを読む
+      var pos = graphNetwork.getPositions();
+      var measured = graphNodes.getIds().map(function(id) {
+        var box = graphNetwork.getBoundingBox(id);
+        return { id: id, label: graphNodes.get(id).label, x: pos[id].x, y: pos[id].y, h: box.bottom - box.top };
+      });
+      layout = balancedLayout(measured, graphEdges.get(), ROOT_ID);
+    }
     graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
+    if (layout) {
+      graphNodes.update(Object.keys(layout.positions).map(function(id) {
+        return { id: id, x: layout.positions[id].x, y: layout.positions[id].y };
+      }));
+      graphNetwork.fit();
+    }
   });
 
   graphNetwork.on('click', function(params) {
