@@ -2162,7 +2162,11 @@ function copyTaskPrompt(ref) {
   }
   endEditing(); // メニューを閉じ、保留分を反映する
   if (!pending) { showCopyFallback(text); return; }
-  pending.then(function() { showToast('コピーしました'); }, function() { showCopyFallback(text); });
+  pending.then(function() { showToast('コピーしました'); }, function() {
+    // 待っている間に別の編集 UI が開いていたら、フォールバックのパネルでそれを閉じてしまわない
+    if (editingActive()) showToast('コピーできませんでした');
+    else showCopyFallback(text);
+  });
 }
 
 function showCopyFallback(text) {
@@ -2243,6 +2247,14 @@ function buildConfirmPanel(titleText, bodyEls, buttons) {
 function startDeleteIsland(ref) {
   var children = childrenRefsOf(ref, cachedIslands);
   var isTask = editableKind(graphNodes.get(ref)) === 'task';
+  // 親のない島は、消すと子が最上位へ上がる。タスクの子がいれば server が拒否するので、確認を出さず理由だけ見せる
+  var hasTaskChild = children.some(function(c) { return editableKind(graphNodes.get(c)) === 'task'; });
+  if (!isTask && hasTaskChild && !parentRefOf(ref, cachedIslands)) {
+    var reason = document.createElement('div');
+    reason.textContent = 'タスクは親が必要です。先にタスクを別の島か repo へ移してください';
+    buildConfirmPanel('「' + refLabel(ref) + '」は削除できません', [reason], [{ label: '閉じる' }])[0].focus();
+    return;
+  }
   var model = deleteConfirmModel(refLabel(ref), children.map(refLabel), isTask ? 'タスク' : '島');
   var lead = document.createElement('div');
   lead.textContent = model.lead;

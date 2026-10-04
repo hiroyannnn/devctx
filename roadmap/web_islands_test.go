@@ -165,6 +165,8 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"kind: 'task'",                                                       // タスク追加は add の kind で送る
 		"op: 'done'",                                                         // 完了の切り替え
 		"var draggedIsTask = editableKind(dragged) === 'task';",              // タスクのドラッグでは root を候補から外す
+		"コピーできませんでした",                                                        // 別の編集 UI が開いている間の clipboard 拒否は toast だけにする
+		"タスクは親が必要です",                                                         // 親のない島のタスク付き削除は、確認ではなく理由を見せる
 		"function buildConfirmPanel(",                                        // 削除確認とコピーのフォールバックが共有する確認パネル
 		"_type: 'task'",                                                      // タスクは島と別の種別（メニュー・キー・ドラッグの分岐点）
 		"完了にする",                                                              // タスクのメニュー
