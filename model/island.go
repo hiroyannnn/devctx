@@ -7,11 +7,17 @@ import (
 	"strings"
 )
 
-// Island は手で作るテーマノード（例: 人事強化）。repo を持たなくてよい。
+// KindTask は Island.Kind のタスク。"" はテーマ island。
+const KindTask = "task"
+
+// Island は手で作るノード。Kind が "" ならテーマ（例: 人事強化）で repo を持たなくてよく、"task" なら 1 件の作業。
+// Why: タスクを別の型にせず Island の 1 種にするのは、ref（island:<id>）・改名・削除・付け替えの経路をそのまま使うため。
 type Island struct {
 	ID     string `yaml:"id" json:"id"`
 	Name   string `yaml:"name" json:"name"`
 	Parent string `yaml:"parent,omitempty" json:"parent"` // 型付き ref。"" はトップレベル
+	Kind   string `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Done   bool   `yaml:"done,omitempty" json:"done,omitempty"` // タスクだけが使う
 }
 
 // RepoNode は repo の親を記録する。親を持つ repo だけがここに載る。
@@ -25,6 +31,9 @@ type RepoNode struct {
 type IslandStore struct {
 	Islands []Island   `yaml:"islands" json:"islands"`
 	Repos   []RepoNode `yaml:"repos" json:"repos"`
+	// TaskSeq は採番済みのタスク連番。削除しても戻さない。
+	// Why: 消したタスクの id を再利用すると、プロンプトに埋めた marker が別のタスクを指してしまう。
+	TaskSeq int `yaml:"task_seq,omitempty" json:"-"`
 }
 
 // RefKind は ref の種別。
@@ -114,6 +123,26 @@ func (s *IslandStore) checkRefExists(ref string) error {
 	return nil
 }
 
+// isTask は ref が実在するタスクを指すかを返す。
+func (s *IslandStore) isTask(ref string) bool {
+	kind, v, err := ParseRef(ref)
+	if err != nil || kind != RefIsland {
+		return false
+	}
+	is := s.findIsland(v)
+	return is != nil && is.Kind == KindTask
+}
+
+// checkParentAllowed は parent の下に子を置けるかを検査する。タスクの下には何も置けない。
+// Why: 次の PR でエージェントセッションがタスクの下に付く。island / repo をタスクの下に許すと、
+// 「タスク = 葉」の前提（描画・完了判定）が崩れる。追加・タスク追加・付け替えの全経路でここを通す。
+func (s *IslandStore) checkParentAllowed(parent string) error {
+	if s.isTask(parent) {
+		return fmt.Errorf("tasks cannot have children (parent %s is a task)", parent)
+	}
+	return nil
+}
+
 // IDExistsError は明示した island id の衝突（--id）。名前から作る id は衝突時に連番を付けるのでこれにならない。
 type IDExistsError struct{ ID string }
 
@@ -129,6 +158,9 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 	}
 	if parent != "" {
 		if err := s.checkRefExists(parent); err != nil {
+			return Island{}, err
+		}
+		if err := s.checkParentAllowed(parent); err != nil {
 			return Island{}, err
 		}
 	}
@@ -160,6 +192,46 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 	is := Island{ID: id, Name: name, Parent: parent}
 	s.Islands = append(s.Islands, is)
 	return is, nil
+}
+
+// AddTask はタスクを追加する。親（island:<id> または repo:<path>）は必須で、タスクは親なしでは存在しない。
+// id は "t" + 連番。TaskSeq を進め、手書きなどで使用済みの id は飛ばす。
+// Why not 名前から slug: タスク名は日本語が多く、改名もされる。名前に依存しない id でないと marker が壊れる。
+func (s *IslandStore) AddTask(name, parent string) (Island, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Island{}, fmt.Errorf("task name is empty")
+	}
+	if parent == "" {
+		return Island{}, fmt.Errorf("task needs a parent (island:<id> or repo:<path>)")
+	}
+	if err := s.checkRefExists(parent); err != nil {
+		return Island{}, err
+	}
+	if err := s.checkParentAllowed(parent); err != nil {
+		return Island{}, err
+	}
+	n := s.TaskSeq + 1
+	for s.findIsland("t"+strconv.Itoa(n)) != nil {
+		n++
+	}
+	s.TaskSeq = n
+	is := Island{ID: "t" + strconv.Itoa(n), Name: name, Parent: parent, Kind: KindTask}
+	s.Islands = append(s.Islands, is)
+	return is, nil
+}
+
+// SetTaskDone はタスクの完了状態を設定する。テーマ island には使えない。
+func (s *IslandStore) SetTaskDone(id string, done bool) error {
+	is := s.findIsland(id)
+	if is == nil {
+		return fmt.Errorf("island %q not found", id)
+	}
+	if is.Kind != KindTask {
+		return fmt.Errorf("island %q is not a task", id)
+	}
+	is.Done = done
+	return nil
 }
 
 // RenameIsland は表示名だけを変える。id は参照されているので変えない。
@@ -289,6 +361,9 @@ func (s *IslandStore) SetParent(child, parent string) error {
 	if err := s.checkRefExists(parent); err != nil {
 		return err
 	}
+	if err := s.checkParentAllowed(parent); err != nil {
+		return err
+	}
 	if child == parent {
 		return fmt.Errorf("%s cannot be attached to itself", child)
 	}
@@ -308,6 +383,10 @@ func (s *IslandStore) SetParent(child, parent string) error {
 func (s *IslandStore) Detach(child string) error {
 	if err := s.checkRefExists(child); err != nil {
 		return err
+	}
+	// Why: タスクは親の下でだけ意味を持つ（UI のルートへのドロップも無操作）。付け替えは SetParent を使う
+	if s.isTask(child) {
+		return fmt.Errorf("%s is a task and needs a parent; move it with attach", child)
 	}
 	s.setParentUnchecked(child, "")
 	return nil
@@ -337,6 +416,10 @@ func (s *IslandStore) ParentOf(ref string) string {
 	if s.checkRefExists(parent) != nil {
 		return ""
 	}
+	// 手編集でタスクの下に置かれたものは、dangling と同じくトップレベルとして扱う
+	if s.isTask(parent) {
+		return ""
+	}
 	return parent
 }
 
@@ -364,6 +447,7 @@ func (s *IslandStore) Resolved() IslandStore {
 	out := IslandStore{
 		Islands: make([]Island, len(s.Islands)),
 		Repos:   make([]RepoNode, len(s.Repos)),
+		TaskSeq: s.TaskSeq,
 	}
 	accepted := map[string]string{} // 採用済みの子 → 親。ここは常に非循環
 	closesLoop := func(ref, parent string) bool {
@@ -397,19 +481,34 @@ func (s *IslandStore) Resolved() IslandStore {
 // 判定は Resolved と同じ（元の Parent があるのに解決後は ""）なので、API と CLI で食い違わない。
 func (s *IslandStore) Validate() error {
 	r := s.Resolved()
-	var bad []string
+	var bad, underTask []string
+	report := func(ref, parent string) {
+		entry := fmt.Sprintf("%s -> %s", ref, parent)
+		if s.isTask(parent) {
+			underTask = append(underTask, entry)
+		} else {
+			bad = append(bad, entry)
+		}
+	}
 	for i, is := range s.Islands {
 		if is.Parent != "" && r.Islands[i].Parent == "" {
-			bad = append(bad, fmt.Sprintf("%s -> %s", IslandRef(is.ID), is.Parent))
+			report(IslandRef(is.ID), is.Parent)
 		}
 	}
 	for i, rn := range s.Repos {
 		if rn.Parent != "" && r.Repos[i].Parent == "" {
-			bad = append(bad, fmt.Sprintf("%s -> %s", RepoRef(rn.Root), rn.Parent))
+			report(RepoRef(rn.Root), rn.Parent)
 		}
 	}
+	var msgs []string
 	if len(bad) > 0 {
-		return fmt.Errorf("invalid parent (dangling or cyclic): %s", strings.Join(bad, "; "))
+		msgs = append(msgs, fmt.Sprintf("invalid parent (dangling or cyclic): %s", strings.Join(bad, "; ")))
+	}
+	if len(underTask) > 0 {
+		msgs = append(msgs, fmt.Sprintf("invalid parent (task): %s", strings.Join(underTask, "; ")))
+	}
+	if len(msgs) > 0 {
+		return fmt.Errorf("%s", strings.Join(msgs, "; "))
 	}
 	return nil
 }

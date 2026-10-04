@@ -1,0 +1,227 @@
+package model
+
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestAddTask(t *testing.T) {
+	t.Run("id is t<seq+1> and TaskSeq advances", func(t *testing.T) {
+		s := newTree()
+		got, err := s.AddTask("求人票を直す", "island:hiring")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != "t1" || got.Kind != "task" || got.Parent != "island:hiring" || got.Name != "求人票を直す" || got.Done {
+			t.Errorf("got %+v", got)
+		}
+		if s.TaskSeq != 1 || s.findIsland("t1") == nil {
+			t.Errorf("seq=%d stored=%v", s.TaskSeq, s.findIsland("t1"))
+		}
+	})
+	t.Run("repo parent is allowed", func(t *testing.T) {
+		s := newTree()
+		if _, err := s.AddTask("x", "repo:/r/a"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("skips ids already used by any island", func(t *testing.T) {
+		s := newTree()
+		s.Islands = append(s.Islands, Island{ID: "t1", Name: "手書き"}, Island{ID: "t2", Name: "手書き2"})
+		got, err := s.AddTask("x", "island:hr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != "t3" || s.TaskSeq != 3 {
+			t.Errorf("id=%s seq=%d", got.ID, s.TaskSeq)
+		}
+	})
+	t.Run("ids are not reused after deletion", func(t *testing.T) {
+		s := newTree()
+		a, _ := s.AddTask("a", "island:hr")
+		if err := s.RemoveIsland(a.ID, false); err != nil {
+			t.Fatal(err)
+		}
+		b, err := s.AddTask("b", "island:hr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.ID != "t2" {
+			t.Errorf("id = %s, want t2", b.ID)
+		}
+	})
+	tests := []struct {
+		name, taskName, parent, wantErr string
+	}{
+		{"empty name", " ", "island:hr", "empty"},
+		{"parent required", "x", "", "parent"},
+		{"missing parent island", "x", "island:nope", "not found"},
+		{"malformed parent", "x", "hr", "ref"},
+		{"task parent", "x", "island:tk", "tasks cannot have children"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTree()
+			s.Islands = append(s.Islands, Island{ID: "tk", Name: "T", Kind: "task", Parent: "island:hr"})
+			before := *s
+			before.Islands = append([]Island(nil), s.Islands...)
+			_, err := s.AddTask(tt.taskName, tt.parent)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(*s, before) {
+				t.Error("store changed on error")
+			}
+		})
+	}
+}
+
+func treeWithTask() *IslandStore {
+	s := newTree()
+	s.Islands = append(s.Islands, Island{ID: "t1", Name: "T", Kind: "task", Parent: "island:hr"})
+	s.TaskSeq = 1
+	return s
+}
+
+func TestNothingCanBePlacedUnderATask(t *testing.T) {
+	t.Run("AddIsland", func(t *testing.T) {
+		s := treeWithTask()
+		if _, err := s.AddIsland("x", "", "island:t1"); err == nil || !strings.Contains(err.Error(), "tasks cannot have children") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	for _, child := range []string{"island:hiring", "repo:/r/new", "repo:/r/a"} {
+		t.Run("SetParent "+child, func(t *testing.T) {
+			s := treeWithTask()
+			if err := s.SetParent(child, "island:t1"); err == nil || !strings.Contains(err.Error(), "tasks cannot have children") {
+				t.Errorf("err = %v", err)
+			}
+		})
+	}
+	t.Run("a task can be moved under islands and repos", func(t *testing.T) {
+		s := treeWithTask()
+		if err := s.SetParent("island:t1", "island:hiring"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetParent("island:t1", "repo:/r/a"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a task cannot be moved under another task", func(t *testing.T) {
+		s := treeWithTask()
+		s.Islands = append(s.Islands, Island{ID: "t2", Name: "T2", Kind: "task", Parent: "island:hr"})
+		if err := s.SetParent("island:t2", "island:t1"); err == nil {
+			t.Error("want error")
+		}
+	})
+	t.Run("a task cannot be detached to top level", func(t *testing.T) {
+		s := treeWithTask()
+		if err := s.Detach("island:t1"); err == nil || !strings.Contains(err.Error(), "parent") {
+			t.Errorf("err = %v", err)
+		}
+		if s.ParentOf("island:t1") != "island:hr" {
+			t.Error("parent changed")
+		}
+	})
+}
+
+func TestSetTaskDone(t *testing.T) {
+	s := treeWithTask()
+	if err := s.SetTaskDone("t1", true); err != nil {
+		t.Fatal(err)
+	}
+	if !s.findIsland("t1").Done {
+		t.Error("not done")
+	}
+	if err := s.SetTaskDone("t1", false); err != nil || s.findIsland("t1").Done {
+		t.Errorf("undo: err=%v", err)
+	}
+	if err := s.SetTaskDone("hr", true); err == nil || !strings.Contains(err.Error(), "not a task") {
+		t.Errorf("theme island: %v", err)
+	}
+	if err := s.SetTaskDone("nope", true); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("missing: %v", err)
+	}
+}
+
+func TestResolvedCutsParentThatIsATask(t *testing.T) {
+	s := treeWithTask()
+	s.Islands = append(s.Islands, Island{ID: "x", Name: "X", Parent: "island:t1"}) // 手編集
+	s.Repos = append(s.Repos, RepoNode{Root: "/r/z", Parent: "island:t1"})
+	r := s.Resolved()
+	for _, is := range r.Islands {
+		if is.ID == "x" && is.Parent != "" {
+			t.Errorf("x parent = %q", is.Parent)
+		}
+	}
+	if r.Repos[len(r.Repos)-1].Parent != "" {
+		t.Error("repo parent not cut")
+	}
+	if s.ParentOf("island:x") != "" {
+		t.Error("ParentOf should also cut")
+	}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "invalid parent (task)") {
+		t.Errorf("Validate = %v", err)
+	}
+	if err := treeWithTask().Validate(); err != nil {
+		t.Errorf("valid tree: %v", err)
+	}
+}
+
+func TestTaskYAMLCompatibility(t *testing.T) {
+	old := "islands:\n- id: hr\n  name: HR\nrepos: []\n"
+	var s IslandStore
+	if err := yaml.Unmarshal([]byte(old), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Islands[0].Kind != "" || s.Islands[0].Done || s.TaskSeq != 0 {
+		t.Errorf("%+v", s)
+	}
+	out, err := yaml.Marshal(&s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"kind", "done", "task_seq"} {
+		if strings.Contains(string(out), key) {
+			t.Errorf("theme-only yaml leaked %q:\n%s", key, out)
+		}
+	}
+	ts := treeWithTask()
+	ts.Islands[len(ts.Islands)-1].Done = true
+	out, _ = yaml.Marshal(ts)
+	var back IslandStore
+	if err := yaml.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&back, ts) || !strings.Contains(string(out), "task_seq: 1") {
+		t.Errorf("round trip:\n%s", out)
+	}
+}
+
+func TestTaskJSONShape(t *testing.T) {
+	r := treeWithTask().Resolved()
+	b, _ := json.Marshal(r)
+	if strings.Contains(string(b), "task_seq") || strings.Contains(string(b), "TaskSeq") {
+		t.Errorf("TaskSeq leaked into JSON: %s", b)
+	}
+	if !strings.Contains(string(b), `"kind":"task"`) {
+		t.Errorf("kind missing: %s", b)
+	}
+	b, _ = json.Marshal(Island{ID: "hr", Name: "HR"})
+	if strings.Contains(string(b), "kind") || strings.Contains(string(b), "done") {
+		t.Errorf("theme island leaked: %s", b)
+	}
+}
+
+func TestTaskMarker(t *testing.T) {
+	if TaskMarkerPrefix != "[devctx:task:" {
+		t.Errorf("prefix = %q", TaskMarkerPrefix)
+	}
+	if got := TaskMarker("t3"); got != "[devctx:task:t3]" {
+		t.Errorf("marker = %q", got)
+	}
+}
