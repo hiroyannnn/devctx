@@ -120,6 +120,9 @@ type Server struct {
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
 	Live LiveSource
+	// OpenBrowser は配信開始後に URL を開く関数。nil なら開かない。
+	// Why: Serve を直接呼ぶテストのたびに利用者のブラウザでタブが開いていたため、開くのは CLI（roadmap serve）だけにする
+	OpenBrowser func(url string)
 
 	cacheMu      sync.RWMutex
 	cachedResult []byte
@@ -184,13 +187,15 @@ func (s *Server) Serve(ln net.Listener) error {
 	fmt.Println("Press Ctrl+C to stop")
 
 	// Auto-open browser after listener is established
-	go openBrowser(url)
+	if s.OpenBrowser != nil {
+		go s.OpenBrowser(url)
+	}
 
 	return http.Serve(ln, s.Handler())
 }
 
-// openBrowser opens the given URL in the default browser.
-func openBrowser(url string) {
+// OpenBrowser opens the given URL in the default browser.
+func OpenBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
