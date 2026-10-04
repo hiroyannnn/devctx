@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -44,7 +45,9 @@ func TestScanRepos(t *testing.T) {
 	if active[model.NormalizePath(real)] != 2 || active["/r/archived"] != 0 || active["/w/solo"] != 1 {
 		t.Errorf("active = %v", active) // done は数えない
 	}
+	// 一時ディレクトリの位置は OS で違う（macOS: /var/folders、Linux: /tmp）ので、期待値も同じ規則でソートする
 	want := []string{model.NormalizePath(real), "/r/archived", "/r/only-in-yaml", "/w/solo"}
+	sort.Strings(want)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got %v, want %v", got, want)
 	}
