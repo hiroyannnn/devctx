@@ -180,6 +180,8 @@ func (s *Storage) LoadIslands() (*model.IslandStore, error) {
 	if err := yaml.Unmarshal(data, store); err != nil {
 		return nil, err
 	}
+	// 読み込み口で 1 回だけそろえる。CLI も Web もこの木を見るので、呼び出し側で再正規化しない
+	store.Normalize()
 	return store, nil
 }
 

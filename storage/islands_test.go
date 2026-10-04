@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -116,5 +117,30 @@ func TestLoadIslandsReturnsErrorOnInvalidYAML(t *testing.T) {
 	}
 	if _, err := s.LoadIslands(); err == nil {
 		t.Error("want error")
+	}
+}
+
+func TestLoadIslandsNormalizesRepoPaths(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "app")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "app-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	s := &Storage{basePath: t.TempDir()}
+	yml := "islands:\n  - id: m3\n    name: M3\n    parent: repo:" + link + "\nrepos:\n  - root: " + link + "\n    parent: island:m3\n"
+	if err := os.WriteFile(s.islandsPath(), []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadIslands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := model.NormalizePath(real)
+	if got.Islands[0].Parent != "repo:"+key || got.Repos[0].Root != key {
+		t.Errorf("not normalized: %+v", got)
 	}
 }

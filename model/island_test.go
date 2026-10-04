@@ -1,6 +1,9 @@
 package model
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -338,5 +341,55 @@ func TestParentWalkSurvivesHandEditedCycle(t *testing.T) {
 	// 手編集で壊れた yaml でも無限ループせず、無関係な付け替えは通る
 	if err := s.SetParent("island:c", "island:a"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "app")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "app-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	key := NormalizePath(real)
+
+	s := &IslandStore{
+		Islands: []Island{
+			{ID: "m3", Name: "M3", Parent: "repo:" + link},
+			{ID: "hr", Name: "HR", Parent: "island:x"}, // island ref はそのまま
+		},
+		Repos: []RepoNode{
+			{Root: link, Parent: "island:hr"},
+			{Root: real, Parent: "island:other"}, // 正規化後に同じ root: 先勝ちで落とす
+			{Root: "/r/b", Parent: "repo:" + link + "/"},
+		},
+	}
+	s.Normalize()
+
+	if s.Islands[0].Parent != "repo:"+key || s.Islands[1].Parent != "island:x" {
+		t.Errorf("islands = %+v", s.Islands)
+	}
+	want := []RepoNode{{Root: key, Parent: "island:hr"}, {Root: "/r/b", Parent: "repo:" + key}}
+	if !reflect.DeepEqual(s.Repos, want) {
+		t.Errorf("repos = %+v, want %+v", s.Repos, want)
+	}
+}
+
+func TestResolvedEncodesAsJSONWithEmptyArrays(t *testing.T) {
+	r := (&IslandStore{}).Resolved()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"islands":[],"repos":[]}` {
+		t.Errorf("json = %s", b)
+	}
+	r = (&IslandStore{Islands: []Island{{ID: "a", Name: "A"}}, Repos: []RepoNode{{Root: "/r", Parent: "island:a"}}}).Resolved()
+	b, _ = json.Marshal(r)
+	if string(b) != `{"islands":[{"id":"a","name":"A","parent":""}],"repos":[{"root":"/r","parent":"island:a"}]}` {
+		t.Errorf("json = %s", b)
 	}
 }

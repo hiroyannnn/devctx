@@ -9,22 +9,22 @@ import (
 
 // Island は手で作るテーマノード（例: 人事強化）。repo を持たなくてよい。
 type Island struct {
-	ID     string `yaml:"id"`
-	Name   string `yaml:"name"`
-	Parent string `yaml:"parent,omitempty"` // 型付き ref。"" はトップレベル
+	ID     string `yaml:"id" json:"id"`
+	Name   string `yaml:"name" json:"name"`
+	Parent string `yaml:"parent,omitempty" json:"parent"` // 型付き ref。"" はトップレベル
 }
 
 // RepoNode は repo の親を記録する。親を持つ repo だけがここに載る。
 type RepoNode struct {
-	Root   string `yaml:"root"` // NormalizePath 済みの絶対パス
-	Parent string `yaml:"parent,omitempty"`
+	Root   string `yaml:"root" json:"root"` // NormalizePath 済みの絶対パス
+	Parent string `yaml:"parent,omitempty" json:"parent"`
 }
 
 // IslandStore は island と repo を 1 本の木にするための親子関係。
 // island の親は island / repo のどちらでもよく、repo の親も island / repo のどちらでもよい。
 type IslandStore struct {
-	Islands []Island   `yaml:"islands"`
-	Repos   []RepoNode `yaml:"repos"`
+	Islands []Island   `yaml:"islands" json:"islands"`
+	Repos   []RepoNode `yaml:"repos" json:"repos"`
 }
 
 // RefKind は ref の種別。
@@ -76,6 +76,9 @@ func (s *IslandStore) findIsland(id string) *Island {
 	return nil
 }
 
+// HasIsland は id の island が存在するかを返す。
+func (s *IslandStore) HasIsland(id string) bool { return s.findIsland(id) != nil }
+
 func (s *IslandStore) findRepo(root string) *RepoNode {
 	for i := range s.Repos {
 		if s.Repos[i].Root == root {
@@ -85,14 +88,14 @@ func (s *IslandStore) findRepo(root string) *RepoNode {
 	return nil
 }
 
-// checkParentExists は parent が island なら実在することを確認する。repo は未登録でもよい。
+// checkRefExists は ref が island なら実在することを確認する。repo は未登録でもよい。
 // Why: repo は contexts が無くても木に載せたい（登録 repo か否かの判定は呼び出し側）。
-func (s *IslandStore) checkParentExists(parent string) error {
-	kind, v, err := ParseRef(parent)
+func (s *IslandStore) checkRefExists(ref string) error {
+	kind, v, err := ParseRef(ref)
 	if err != nil {
 		return err
 	}
-	if kind == RefIsland && s.findIsland(v) == nil {
+	if kind == RefIsland && !s.HasIsland(v) {
 		return fmt.Errorf("island %q not found", v)
 	}
 	return nil
@@ -105,7 +108,7 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 		return Island{}, fmt.Errorf("island name is empty")
 	}
 	if parent != "" {
-		if err := s.checkParentExists(parent); err != nil {
+		if err := s.checkRefExists(parent); err != nil {
 			return Island{}, err
 		}
 	}
@@ -203,17 +206,13 @@ func (s *IslandStore) setRepoParent(root, parent string) {
 // SetParent は child を parent の下に付ける。child の repo は未登録でもよく、無ければ RepoNode を作る。
 // 自分自身と循環（island→repo→island も含む）は拒否する。
 func (s *IslandStore) SetParent(child, parent string) error {
-	kind, v, err := ParseRef(child)
-	if err != nil {
-		return err
-	}
 	if parent == "" {
 		return fmt.Errorf("parent is empty; use detach to move %s to top level", child)
 	}
-	if kind == RefIsland && s.findIsland(v) == nil {
-		return fmt.Errorf("island %q not found", v)
+	if err := s.checkRefExists(child); err != nil {
+		return err
 	}
-	if err := s.checkParentExists(parent); err != nil {
+	if err := s.checkRefExists(parent); err != nil {
 		return err
 	}
 	if child == parent {
@@ -233,12 +232,8 @@ func (s *IslandStore) SetParent(child, parent string) error {
 
 // Detach は child をトップレベルに戻す。repo は RepoNode を消して yaml を小さく保つ。
 func (s *IslandStore) Detach(child string) error {
-	kind, v, err := ParseRef(child)
-	if err != nil {
+	if err := s.checkRefExists(child); err != nil {
 		return err
-	}
-	if kind == RefIsland && s.findIsland(v) == nil {
-		return fmt.Errorf("island %q not found", v)
 	}
 	s.setParentUnchecked(child, "")
 	return nil
@@ -265,7 +260,7 @@ func (s *IslandStore) ParentOf(ref string) string {
 		}
 		parent = rn.Parent
 	}
-	if s.checkParentExists(parent) != nil {
+	if s.checkRefExists(parent) != nil {
 		return ""
 	}
 	return parent
@@ -305,15 +300,17 @@ func (s *IslandStore) Resolved() IslandStore {
 }
 
 // Validate は dangling な親があれば全件を列挙したエラーを返す。CLI の list が警告に使う。
+// 判定は Resolved と同じ（元の Parent があるのに解決後は ""）なので、API と CLI で食い違わない。
 func (s *IslandStore) Validate() error {
+	r := s.Resolved()
 	var bad []string
-	for _, is := range s.Islands {
-		if is.Parent != "" && s.ParentOf(IslandRef(is.ID)) == "" {
+	for i, is := range s.Islands {
+		if is.Parent != "" && r.Islands[i].Parent == "" {
 			bad = append(bad, fmt.Sprintf("%s -> %s", IslandRef(is.ID), is.Parent))
 		}
 	}
-	for _, rn := range s.Repos {
-		if rn.Parent != "" && s.ParentOf(RepoRef(rn.Root)) == "" {
+	for i, rn := range s.Repos {
+		if rn.Parent != "" && r.Repos[i].Parent == "" {
 			bad = append(bad, fmt.Sprintf("%s -> %s", RepoRef(rn.Root), rn.Parent))
 		}
 	}
@@ -321,4 +318,34 @@ func (s *IslandStore) Validate() error {
 		return fmt.Errorf("dangling parent: %s", strings.Join(bad, "; "))
 	}
 	return nil
+}
+
+// Normalize は repo のパスを NormalizePath にそろえる（repo ノードの root と、island / repo の repo 型の親 ref）。
+// 正規化後に同じ root になった repo ノードは先勝ちで 1 つにする。
+// Why: contexts のグルーピング（RepoKey）と同じキーに読み込み時点でそろえ、CLI と Web が同じ木を見るようにする。
+// 手編集で symlink 経由のパスが書かれていても突き合うようにするため。
+func (s *IslandStore) Normalize() {
+	for i := range s.Islands {
+		s.Islands[i].Parent = normalizeRepoRef(s.Islands[i].Parent)
+	}
+	seen := map[string]bool{}
+	repos := s.Repos[:0]
+	for _, rn := range s.Repos {
+		rn.Root = NormalizePath(rn.Root)
+		rn.Parent = normalizeRepoRef(rn.Parent)
+		if seen[rn.Root] {
+			continue
+		}
+		seen[rn.Root] = true
+		repos = append(repos, rn)
+	}
+	s.Repos = repos
+}
+
+// normalizeRepoRef は repo ref のパスだけを正規化する。island ref と "" はそのまま。
+func normalizeRepoRef(ref string) string {
+	if kind, v, err := ParseRef(ref); err == nil && kind == RefRepo {
+		return RepoRef(NormalizePath(v))
+	}
+	return ref
 }

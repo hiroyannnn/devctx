@@ -6,44 +6,61 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/hiroyannnn/devctx/model"
+	"github.com/hiroyannnn/devctx/storage"
 )
 
 // refResolver は CLI の入力（型付き ref / "repo:." / 素の名前）を、保存形の型付き ref に解決する。
 type refResolver struct {
 	islands *model.IslandStore
-	repos   []string // 既知 repo（NormalizePath 済み）
+	// repos は既知 repo（NormalizePath 済み）。型付き island ref だけの操作で contexts.yaml を読まないよう、遅延評価にしている
+	repos func() ([]string, error)
 	// repoFromCwd は "repo:." のための現在ディレクトリの repo。git を呼ぶので差し替え可能にしている
 	repoFromCwd func() (string, error)
 }
 
-// bind は store と islands を束ねた resolver を返す。islands は UpdateIslands のロック内のものを渡す。
-func (r refResolver) bind(store *model.Store, is *model.IslandStore) refResolver {
+// bind は islands（UpdateIslands のロック内のもの）を束ねた resolver を返す。
+// 既知 repo は最初に必要になった時点で 1 度だけ contexts を読んで作る。
+func (r refResolver) bind(s *storage.Storage, is *model.IslandStore) refResolver {
 	r.islands = is
-	r.repos = knownRepos(store, is)
+	r.repos = sync.OnceValues(func() ([]string, error) {
+		store, err := s.LoadStore()
+		if err != nil {
+			return nil, err
+		}
+		repos, _ := scanRepos(store, is)
+		return repos, nil
+	})
 	return r
 }
 
-// knownRepos は contexts と islands.yaml に現れる repo を重複なし・昇順で返す。
-// done の context も含める: 完了済みでも island に束ねたい repo は残るため。
-func knownRepos(store *model.Store, is *model.IslandStore) []string {
+// scanRepos は contexts と islands に現れる repo（重複なし・昇順）と、repo ごとのアクティブな context 数を 1 回の走査で返す。
+// done の context も repo としては含める（完了済みでも island に束ねたい repo は残るため）が、件数には数えない。
+// is は LoadIslands で正規化済みであること。ここでは再正規化しない（RepoKey も正規化済み）。
+func scanRepos(store *model.Store, is *model.IslandStore) ([]string, map[string]int) {
 	seen := map[string]bool{}
 	var out []string
+	active := map[string]int{}
 	add := func(root string) {
-		if root = model.NormalizePath(root); root != "" && !seen[root] {
+		if root != "" && !seen[root] {
 			seen[root] = true
 			out = append(out, root)
 		}
 	}
 	for _, c := range store.Contexts {
-		add(model.RepoKey(c))
+		key := model.RepoKey(c)
+		add(key)
+		if key != "" && c.Status != model.StatusDone {
+			active[key]++
+		}
 	}
 	for _, rn := range is.Repos {
 		add(rn.Root)
 	}
 	sort.Strings(out)
-	return out
+	return out, active
 }
 
 // currentRepo は現在ディレクトリの repo root を返す。
@@ -70,7 +87,7 @@ func (r refResolver) resolve(input string) (string, error) {
 	}
 	if kind, v, err := model.ParseRef(input); err == nil {
 		if kind == model.RefIsland {
-			if !r.hasIsland(v) {
+			if !r.islands.HasIsland(v) {
 				return "", fmt.Errorf("island %q not found", v)
 			}
 			return input, nil
@@ -79,10 +96,14 @@ func (r refResolver) resolve(input string) (string, error) {
 	}
 
 	var candidates []string
-	if r.hasIsland(input) {
+	if r.islands.HasIsland(input) {
 		candidates = append(candidates, model.IslandRef(input))
 	}
-	for _, root := range r.repos {
+	repos, err := r.repos()
+	if err != nil {
+		return "", err
+	}
+	for _, root := range repos {
 		if filepath.Base(root) == input {
 			candidates = append(candidates, model.RepoRef(root))
 		}
@@ -95,15 +116,6 @@ func (r refResolver) resolve(input string) (string, error) {
 	default:
 		return "", fmt.Errorf("%q is ambiguous; specify one of: %s", input, strings.Join(candidates, ", "))
 	}
-}
-
-func (r refResolver) hasIsland(id string) bool {
-	for _, is := range r.islands.Islands {
-		if is.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (r refResolver) resolveRepoPath(path string) (string, error) {
@@ -119,14 +131,19 @@ func (r refResolver) resolveRepoPath(path string) (string, error) {
 		return "", err
 	}
 	root := model.NormalizePath(abs)
-	for _, k := range r.repos {
+	// ディスク上にあれば、未登録の repo でも木に載せられる（contexts が無い repo の下にテーマを置くため）。
+	// 先にこちらを見るので、既存ディレクトリの指定では contexts を読まない
+	if fi, err := os.Stat(root); err == nil && fi.IsDir() {
+		return model.RepoRef(root), nil
+	}
+	repos, err := r.repos()
+	if err != nil {
+		return "", err
+	}
+	for _, k := range repos {
 		if k == root {
 			return model.RepoRef(root), nil
 		}
 	}
-	// 未登録の repo でもディスク上にあれば木に載せられる（contexts が無い repo の下にテーマを置くため）
-	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
-		return "", fmt.Errorf("repo %q is not a known repo and not an existing directory", root)
-	}
-	return model.RepoRef(root), nil
+	return "", fmt.Errorf("repo %q is not a known repo and not an existing directory", root)
 }

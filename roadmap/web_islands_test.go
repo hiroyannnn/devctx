@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -91,37 +89,6 @@ func TestHandleAPIIslands_ReturnsTreeWithDanglingParentsResolved(t *testing.T) {
 	}
 	if resp.Islands[0].Name != "人事強化" {
 		t.Errorf("name = %q", resp.Islands[0].Name)
-	}
-}
-
-func TestHandleAPIIslands_NormalizesRepoRoots(t *testing.T) {
-	dir := t.TempDir()
-	real := filepath.Join(dir, "app")
-	if err := os.Mkdir(real, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "app-link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	key := model.NormalizePath(real)
-
-	loader := &mockIslandLoader{store: &model.IslandStore{
-		Islands: []model.Island{
-			{ID: "hr", Name: "HR"},
-			{ID: "m3", Name: "M3", Parent: "repo:" + link},
-		},
-		Repos: []model.RepoNode{{Root: link, Parent: "island:hr"}},
-	}}
-	_, resp := getIslands(t, &Server{IslandLoader: loader})
-
-	if len(resp.Repos) != 1 || resp.Repos[0].Root != key || resp.Repos[0].Parent != "island:hr" {
-		t.Errorf("repos = %+v, want root %q", resp.Repos, key)
-	}
-	for _, i := range resp.Islands {
-		if i.ID == "m3" && i.Parent != "repo:"+key {
-			t.Errorf("m3 parent = %q, want repo:%s", i.Parent, key)
-		}
 	}
 }
 

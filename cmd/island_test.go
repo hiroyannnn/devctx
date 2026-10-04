@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -168,5 +170,46 @@ func TestIslandListWarnsOnDanglingParent(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Orphan [island:orphan]") || !strings.Contains(out.String(), "warning: dangling parent") {
 		t.Errorf("output:\n%s", out.String())
+	}
+}
+
+func TestIslandRenameAndRmRejectNonIslandRef(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	_ = islandAdd(s, &out, base, "HR", "hr", "")
+
+	if err := islandRename(s, &out, "repo:/r/devctx", "x"); err == nil || !strings.Contains(err.Error(), "island") {
+		t.Errorf("rename err = %v", err)
+	}
+	if err := islandRm(s, &out, "repo:/r/devctx", false); err == nil || !strings.Contains(err.Error(), "island") {
+		t.Errorf("rm err = %v", err)
+	}
+	if err := islandRename(s, &out, "island:hr", "人事"); err != nil {
+		t.Errorf("typed island ref: %v", err)
+	}
+	if err := islandRename(s, &out, "hr", "人事2"); err != nil {
+		t.Errorf("bare id: %v", err)
+	}
+	if err := islandRm(s, &out, "hr", false); err != nil {
+		t.Errorf("rm: %v", err)
+	}
+}
+
+// contexts.yaml が壊れていても、repo の一覧を必要としない操作（親なしの add）は動く。必要な操作だけが失敗する。
+func TestIslandOpsLoadContextsOnlyWhenNeeded(t *testing.T) {
+	s, base := islandFixture(t)
+	home, _ := os.UserHomeDir()
+	if err := os.WriteFile(filepath.Join(home, ".config", "devctx", "contexts.yaml"), []byte("contexts: [unclosed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "HR", "hr", ""); err != nil {
+		t.Fatalf("add without parent should not read contexts: %v", err)
+	}
+	if err := islandAdd(s, &out, base, "Sub", "sub", "island:hr"); err != nil {
+		t.Fatalf("typed island parent should not read contexts: %v", err)
+	}
+	if err := islandAttach(s, &out, base, "web", "hr"); err == nil {
+		t.Error("bare repo name needs contexts; want error")
 	}
 }

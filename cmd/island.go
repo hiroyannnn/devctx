@@ -5,7 +5,6 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -81,9 +80,6 @@ var islandAttachCmd = &cobra.Command{
 	Short: "Put an island or repo under another island or repo",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if islandAttachTo == "" {
-			return fmt.Errorf("--to is required")
-		}
 		s, err := storage.New()
 		if err != nil {
 			return err
@@ -125,20 +121,37 @@ func init() {
 	islandAddCmd.Flags().StringVar(&islandAddID, "id", "", "Island id (default: slug of the name; required for non-ASCII names you want to refer to)")
 	islandAddCmd.Flags().StringVar(&islandAddParent, "parent", "", "Parent ref (island:<id> or repo:<path>)")
 	islandAttachCmd.Flags().StringVar(&islandAttachTo, "to", "", "Parent ref (island:<id>, repo:<path>, or a bare name)")
+	_ = islandAttachCmd.MarkFlagRequired("to")
 	islandRmCmd.Flags().BoolVar(&islandRmReparent, "reparent", false, "Move children to the removed island's parent instead of refusing")
 }
 
 // 以下は cobra から切り離した本体。テストは隔離 HOME の Storage を渡して実行する。
 
-func islandAdd(s *storage.Storage, out io.Writer, base refResolver, name, id, parent string) error {
-	store, err := s.LoadStore()
-	if err != nil {
-		return err
-	}
+// withIslands は islands.yaml を更新ロック内で編集する。resolver は contexts を最初に必要とした時点まで読まない。
+func withIslands(s *storage.Storage, base refResolver, fn func(is *model.IslandStore, r refResolver) error) error {
 	return s.UpdateIslands(func(is *model.IslandStore) error {
+		return fn(is, base.bind(s, is))
+	})
+}
+
+// islandID は rename / rm の引数から island の id を取り出す。型付き ref は island 種別だけを受ける。
+// Why not 素の文字列から "island:" を剥がすだけにする: "repo:/x" を渡されたときに無関係なエラーになるため。
+func islandID(arg string) (string, error) {
+	kind, v, err := model.ParseRef(arg)
+	if err != nil {
+		return arg, nil // 素の id
+	}
+	if kind != model.RefIsland {
+		return "", fmt.Errorf("%s is not an island ref (want island:<id> or a bare id)", arg)
+	}
+	return v, nil
+}
+
+func islandAdd(s *storage.Storage, out io.Writer, base refResolver, name, id, parent string) error {
+	return withIslands(s, base, func(is *model.IslandStore, r refResolver) error {
 		if parent != "" {
 			var err error
-			if parent, err = base.bind(store, is).resolve(parent); err != nil {
+			if parent, err = r.resolve(parent); err != nil {
 				return err
 			}
 		}
@@ -152,7 +165,10 @@ func islandAdd(s *storage.Storage, out io.Writer, base refResolver, name, id, pa
 }
 
 func islandRename(s *storage.Storage, out io.Writer, idArg, name string) error {
-	id := strings.TrimPrefix(idArg, "island:")
+	id, err := islandID(idArg)
+	if err != nil {
+		return err
+	}
 	return s.UpdateIslands(func(is *model.IslandStore) error {
 		if err := is.RenameIsland(id, name); err != nil {
 			return err
@@ -163,7 +179,10 @@ func islandRename(s *storage.Storage, out io.Writer, idArg, name string) error {
 }
 
 func islandRm(s *storage.Storage, out io.Writer, idArg string, reparent bool) error {
-	id := strings.TrimPrefix(idArg, "island:")
+	id, err := islandID(idArg)
+	if err != nil {
+		return err
+	}
 	return s.UpdateIslands(func(is *model.IslandStore) error {
 		if err := is.RemoveIsland(id, reparent); err != nil {
 			return err
@@ -174,12 +193,7 @@ func islandRm(s *storage.Storage, out io.Writer, idArg string, reparent bool) er
 }
 
 func islandAttach(s *storage.Storage, out io.Writer, base refResolver, childArg, parentArg string) error {
-	store, err := s.LoadStore()
-	if err != nil {
-		return err
-	}
-	return s.UpdateIslands(func(is *model.IslandStore) error {
-		r := base.bind(store, is)
+	return withIslands(s, base, func(is *model.IslandStore, r refResolver) error {
 		child, err := r.resolve(childArg)
 		if err != nil {
 			return err
@@ -197,12 +211,8 @@ func islandAttach(s *storage.Storage, out io.Writer, base refResolver, childArg,
 }
 
 func islandDetach(s *storage.Storage, out io.Writer, base refResolver, childArg string) error {
-	store, err := s.LoadStore()
-	if err != nil {
-		return err
-	}
-	return s.UpdateIslands(func(is *model.IslandStore) error {
-		child, err := base.bind(store, is).resolve(childArg)
+	return withIslands(s, base, func(is *model.IslandStore, r refResolver) error {
+		child, err := r.resolve(childArg)
 		if err != nil {
 			return err
 		}
@@ -223,13 +233,8 @@ func islandList(s *storage.Storage, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	active := map[string]int{}
-	for _, c := range store.Active() {
-		if k := model.RepoKey(c); k != "" {
-			active[k]++
-		}
-	}
-	renderIslandTree(out, is, knownRepos(store, is), active)
+	repos, active := scanRepos(store, is)
+	renderIslandTree(out, is, repos, active)
 	if err := is.Validate(); err != nil {
 		fmt.Fprintf(out, "warning: %v\n", err)
 	}
