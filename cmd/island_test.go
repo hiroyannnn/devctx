@@ -1,0 +1,172 @@
+package cmd
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/hiroyannnn/devctx/model"
+	"github.com/hiroyannnn/devctx/storage"
+)
+
+// islandFixture は隔離した HOME に contexts を置き、実データに触れずに island コマンドを試す。
+func islandFixture(t *testing.T, contexts ...model.Context) (*storage.Storage, refResolver) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	s, err := storage.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveStore(&model.Store{Contexts: contexts}); err != nil {
+		t.Fatal(err)
+	}
+	return s, refResolver{repoFromCwd: func() (string, error) { return "/r/devctx", nil }}
+}
+
+func fixtureContexts() []model.Context {
+	return []model.Context{
+		{Name: "a1", RepoRoot: "/r/devctx", Status: model.StatusInProgress},
+		{Name: "a2", RepoRoot: "/r/devctx", Status: model.StatusReview},
+		{Name: "a3", RepoRoot: "/r/devctx", Status: model.StatusDone},
+		{Name: "b1", RepoRoot: "/r/web", Status: model.StatusInProgress},
+	}
+}
+
+func TestIslandAddAttachList(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+
+	mustRun := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustRun(islandAdd(s, &out, base, "人事強化", "hr", ""))
+	mustRun(islandAttach(s, &out, base, "devctx", "hr"))               // bare basename → repo:/r/devctx
+	mustRun(islandAdd(s, &out, base, "M3 UI", "m3", "repo:/r/devctx")) // island under repo
+	mustRun(islandAdd(s, &out, base, "採用フロー", "hiring", "island:hr"))
+
+	is, err := s.LoadIslands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := is.ParentOf("repo:/r/devctx"); got != "island:hr" {
+		t.Errorf("repo parent = %q", got)
+	}
+	if got := is.ParentOf("island:m3"); got != "repo:/r/devctx" {
+		t.Errorf("m3 parent = %q", got)
+	}
+
+	out.Reset()
+	mustRun(islandList(s, &out))
+	want := `人事強化 [island:hr]
+├── 採用フロー [island:hiring]
+└── devctx (/r/devctx, 2 active)
+    └── M3 UI [island:m3]
+web (/r/web, 1 active)
+`
+	if out.String() != want {
+		t.Errorf("list output:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+func TestIslandAddRejectsDuplicateAndStoresNothing(t *testing.T) {
+	s, base := islandFixture(t)
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "HR", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	err := islandAdd(s, &out, base, "hr", "", "")
+	if err == nil || !strings.Contains(err.Error(), "--id") {
+		t.Fatalf("err = %v", err)
+	}
+	is, _ := s.LoadIslands()
+	if len(is.Islands) != 1 {
+		t.Errorf("islands = %+v", is.Islands)
+	}
+}
+
+func TestIslandAttachAmbiguousBareTokenFailsWithoutWriting(t *testing.T) {
+	s, base := islandFixture(t,
+		model.Context{Name: "x", RepoRoot: "/r1/app"},
+		model.Context{Name: "y", RepoRoot: "/r2/app"},
+	)
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "Platform", "plat", ""); err != nil {
+		t.Fatal(err)
+	}
+	err := islandAttach(s, &out, base, "app", "plat")
+	if err == nil || !strings.Contains(err.Error(), "repo:/r1/app") || !strings.Contains(err.Error(), "repo:/r2/app") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := islandAttach(s, &out, base, "repo:/r2/app", "island:plat"); err != nil {
+		t.Fatal(err)
+	}
+	is, _ := s.LoadIslands()
+	if len(is.Repos) != 1 || is.Repos[0].Root != "/r2/app" {
+		t.Errorf("repos = %+v", is.Repos)
+	}
+}
+
+func TestIslandAttachRejectsCycle(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	_ = islandAdd(s, &out, base, "HR", "hr", "repo:/r/devctx")
+	err := islandAttach(s, &out, base, "repo:/r/devctx", "island:hr")
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestIslandRmAndReparent(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	_ = islandAdd(s, &out, base, "HR", "hr", "")
+	_ = islandAdd(s, &out, base, "Hiring", "hiring", "island:hr")
+
+	if err := islandRm(s, &out, "hr", false); err == nil || !strings.Contains(err.Error(), "--reparent") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := islandRm(s, &out, "island:hr", true); err != nil {
+		t.Fatal(err)
+	}
+	is, _ := s.LoadIslands()
+	if len(is.Islands) != 1 || is.Islands[0].ID != "hiring" || is.Islands[0].Parent != "" {
+		t.Errorf("islands = %+v", is.Islands)
+	}
+}
+
+func TestIslandRenameAndDetach(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	_ = islandAdd(s, &out, base, "HR", "hr", "")
+	_ = islandAttach(s, &out, base, "web", "hr")
+	if err := islandRename(s, &out, "hr", "人事"); err != nil {
+		t.Fatal(err)
+	}
+	if err := islandDetach(s, &out, base, "web"); err != nil {
+		t.Fatal(err)
+	}
+	is, _ := s.LoadIslands()
+	if is.Islands[0].Name != "人事" || is.Islands[0].ID != "hr" || len(is.Repos) != 0 {
+		t.Errorf("store = %+v", is)
+	}
+}
+
+func TestIslandListWarnsOnDanglingParent(t *testing.T) {
+	s, _ := islandFixture(t)
+	if err := s.UpdateIslands(func(is *model.IslandStore) error {
+		is.Islands = append(is.Islands, model.Island{ID: "orphan", Name: "Orphan", Parent: "island:gone"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := islandList(s, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Orphan [island:orphan]") || !strings.Contains(out.String(), "warning: dangling parent") {
+		t.Errorf("output:\n%s", out.String())
+	}
+}
