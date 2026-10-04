@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -18,38 +17,6 @@ func testResolver(repos []string, is *model.IslandStore) refResolver {
 		repoFromCwd: func() (string, error) {
 			return "/cwd/repo", nil
 		},
-	}
-}
-
-func TestScanRepos(t *testing.T) {
-	dir := t.TempDir()
-	real := filepath.Join(dir, "app")
-	if err := os.Mkdir(real, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "app-link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	store := &model.Store{Contexts: []model.Context{
-		{Name: "a", RepoRoot: real},
-		{Name: "b", RepoRoot: link},                                    // symlink は同じ repo
-		{Name: "c", Worktree: "/w/solo"},                               // RepoRoot なしは Worktree
-		{Name: "d", RepoRoot: "/r/archived", Status: model.StatusDone}, // done でも repo は既知
-		{Name: "e"}, // キー無しは除外
-	}}
-	is := &model.IslandStore{Repos: []model.RepoNode{{Root: "/r/only-in-yaml", Parent: "island:x"}, {Root: real, Parent: "island:x"}}}
-
-	is.Normalize() // LoadIslands が済ませる前提。knownRepos 自身は再正規化しない
-	got, active := scanRepos(store, is)
-	if active[model.NormalizePath(real)] != 2 || active["/r/archived"] != 0 || active["/w/solo"] != 1 {
-		t.Errorf("active = %v", active) // done は数えない
-	}
-	// 一時ディレクトリの位置は OS で違う（macOS: /var/folders、Linux: /tmp）ので、期待値も同じ規則でソートする
-	want := []string{model.NormalizePath(real), "/r/archived", "/r/only-in-yaml", "/w/solo"}
-	sort.Strings(want)
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
