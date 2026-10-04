@@ -142,8 +142,8 @@ func NewServer(loader StoreLoader, insightLoader InsightLoader, eventLoader Even
 	return &Server{StoreLoader: loader, InsightLoader: insightLoader, EventLoader: eventLoader, Scanner: scanner, Port: port}
 }
 
-// ListenAndServe starts the HTTP server on localhost only.
-func (s *Server) ListenAndServe() error {
+// Handler は全 endpoint をまとめ、リクエストガード（Host / Origin 検査）で包んだ http.Handler を返す。
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
 	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
@@ -151,7 +151,11 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/islands", s.handleAPIIslands)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
+	return s.guard(mux)
+}
 
+// ListenAndServe starts the HTTP server on localhost only.
+func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf("127.0.0.1:%d", s.Port)
 	url := fmt.Sprintf("http://%s", addr)
 	fmt.Printf("Session Roadmap: %s\n", url)
@@ -164,7 +168,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	go openBrowser(url)
 
-	return http.Serve(ln, mux)
+	return http.Serve(ln, s.Handler())
 }
 
 // openBrowser opens the given URL in the default browser.
