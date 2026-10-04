@@ -211,23 +211,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
-	// Return cached result if still valid
-	s.cacheMu.RLock()
-	if s.cachedResult != nil && time.Now().Before(s.cacheExpiry) {
-		data := s.cachedResult
-		s.cacheMu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
-		return
-	}
-	s.cacheMu.RUnlock()
-
+// loadRoadmapEntries は /api/roadmap と /api/roadmap-map が共有する entry 組み立て。
+// 返す entries は active と同じ順・同じ長さ（呼び出し側が index で ctx と突き合わせる）。
+// Why not /api/roadmap-graph も寄せる: graph は Phase を scan せず ctx.Phase をそのまま使い、載せる項目も違う。
+func (s *Server) loadRoadmapEntries() ([]model.Context, []RoadmapEntry, error) {
 	store, err := s.StoreLoader.LoadStore()
 	if err != nil {
-		log.Printf("roadmap: failed to load store: %v", err)
-		http.Error(w, "failed to load session data", http.StatusInternalServerError)
-		return
+		return nil, nil, err
 	}
 
 	active := store.Active()
@@ -295,6 +285,27 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 
 		entries = append(entries, entry)
 	}
+	return active, entries, nil
+}
+
+func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
+	// Return cached result if still valid
+	s.cacheMu.RLock()
+	if s.cachedResult != nil && time.Now().Before(s.cacheExpiry) {
+		data := s.cachedResult
+		s.cacheMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+	s.cacheMu.RUnlock()
+
+	_, entries, err := s.loadRoadmapEntries()
+	if err != nil {
+		log.Printf("roadmap: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
 
 	data, err := json.Marshal(entries)
 	if err != nil {
@@ -314,73 +325,19 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
-	store, err := s.StoreLoader.LoadStore()
+	active, entries, err := s.loadRoadmapEntries()
 	if err != nil {
 		log.Printf("roadmap-map: failed to load store: %v", err)
 		http.Error(w, "failed to load session data", http.StatusInternalServerError)
 		return
 	}
 
-	active := store.Active()
-	views := s.agentViews(store.Contexts)
-
-	var insights *model.InsightStore
-	if s.InsightLoader != nil {
-		insights, _ = s.InsightLoader.LoadInsights()
-	}
-
-	var events *model.EventStore
-	if s.EventLoader != nil {
-		events, _ = s.EventLoader.LoadEvents()
-	}
-
 	// Group by project (repo root)
 	projectMap := make(map[string]*ProjectGroup)
 	var projectOrder []string
 
-	for _, ctx := range active {
-		phase := ctx.Phase
-		if phase == "" && ctx.Worktree != "" && s.Scanner != nil {
-			phase = s.Scanner.scanWithMode(&ctx, ScanModeFast)
-		}
-
-		entry := RoadmapEntry{
-			Name:          ctx.Name,
-			Branch:        ctx.Branch,
-			Status:        ctx.Status,
-			Phase:         phase,
-			InitialPrompt: ctx.InitialPrompt,
-			Worktree:      ctx.Worktree,
-			PRURL:         ctx.PRURL,
-			IssueURL:      ctx.IssueURL,
-			Note:          ctx.Note,
-			SessionName:   ctx.SessionName,
-			CreatedAt:     ctx.CreatedAt.Format(time.RFC3339),
-			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
-			RepoRoot:      ctx.RepoRoot,
-		}
-		applyAgentFields(&entry, ctx, views[ctx.Name])
-
-		if events != nil {
-			summary := events.Summarize(ctx.Name)
-			if summary.CommitCount > 0 || summary.SessionCount > 0 {
-				entry.Milestones = &summary
-			}
-		}
-
-		if insights != nil {
-			if insight := insights.Get(ctx.Name); insight != nil {
-				entry.Goal = insight.Goal
-				entry.CurrentFocus = insight.CurrentFocus
-				entry.NextStep = insight.NextStep
-				entry.AttentionState = insight.AttentionState
-				entry.Topics = insight.Topics
-				entry.Tasks = insight.Tasks
-				if !insight.InferredAt.IsZero() {
-					entry.InferredAt = insight.InferredAt.Format("2006-01-02 15:04")
-				}
-			}
-		}
+	for i, ctx := range active {
+		entry := entries[i]
 
 		// Why: symlink 経由と実パスで同じ repo が別グループに割れないよう、islands と共通の RepoKey で束ねる
 		projectKey := model.RepoKey(ctx)
