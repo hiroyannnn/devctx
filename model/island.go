@@ -101,6 +101,13 @@ func (s *IslandStore) checkRefExists(ref string) error {
 	return nil
 }
 
+// IDExistsError は island id の衝突。呼び出し側（Web API）が文字列比較せずに衝突を判別できるよう型にしている。
+type IDExistsError struct{ ID string }
+
+func (e *IDExistsError) Error() string {
+	return fmt.Sprintf("island id %q already exists; pass --id to choose another", e.ID)
+}
+
 // AddIsland は island を追加する。id が空なら name の slug、ASCII が残らなければ island-N。
 func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 	name = strings.TrimSpace(name)
@@ -128,7 +135,7 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 		}
 	}
 	if s.findIsland(id) != nil {
-		return Island{}, fmt.Errorf("island id %q already exists; pass --id to choose another", id)
+		return Island{}, &IDExistsError{ID: id}
 	}
 	is := Island{ID: id, Name: name, Parent: parent}
 	s.Islands = append(s.Islands, is)

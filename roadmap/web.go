@@ -114,6 +114,8 @@ type Server struct {
 	EventLoader   EventLoader
 	// IslandLoader は /api/islands の供給元。nil なら空の木を返す（NewServer の引数を増やさず既存の呼び出しを保つ）
 	IslandLoader IslandLoader
+	// IslandUpdater は POST /api/islands/ops の書き込み先。nil なら 503（編集は有効化した呼び出しだけに限る）
+	IslandUpdater IslandUpdater
 	Scanner       *Scanner
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
@@ -149,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
 	mux.HandleFunc("/api/roadmap-graph", s.handleAPIRoadmapGraph)
 	mux.HandleFunc("/api/islands", s.handleAPIIslands)
+	mux.HandleFunc("/api/islands/ops", s.handleAPIIslandOps)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
 	return s.guard(mux)

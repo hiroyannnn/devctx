@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -510,5 +511,21 @@ func TestRemoveIslandReparentDoesNotPropagateDanglingParent(t *testing.T) {
 	}
 	if len(s.Repos) != 0 {
 		t.Errorf("repos = %+v", s.Repos)
+	}
+}
+
+func TestAddIsland_DuplicateIDReturnsTypedError(t *testing.T) {
+	s := &IslandStore{}
+	if _, err := s.AddIsland("HR", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.AddIsland("hr", "", "")
+	var dup *IDExistsError
+	if !errors.As(err, &dup) || dup.ID != "hr" {
+		t.Fatalf("err = %v, want *IDExistsError{hr}", err)
+	}
+	// CLI の案内文は従来のまま
+	if !strings.Contains(err.Error(), "pass --id to choose another") {
+		t.Errorf("message = %q", err.Error())
 	}
 }
