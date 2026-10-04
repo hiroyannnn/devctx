@@ -58,6 +58,19 @@ func ParseRef(ref string) (RefKind, string, error) {
 	return "", "", fmt.Errorf("invalid ref %q: want island:<id> or repo:<path>", ref)
 }
 
+// ParseIslandRef は "island:<id>" だけを受け、id を返す。repo ref など別種別はエラー。
+// Why: rename / remove のように island しか取れない操作の入口（CLI と Web）で、種別検査を 1 か所にそろえる。
+func ParseIslandRef(ref string) (string, error) {
+	kind, v, err := ParseRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if kind != RefIsland {
+		return "", fmt.Errorf("%s is not an island ref (want island:<id>)", ref)
+	}
+	return v, nil
+}
+
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
@@ -181,6 +194,37 @@ func (s *IslandStore) RemoveIsland(id string, reparent bool) error {
 		}
 	}
 	return nil
+}
+
+// ChildrenChangedError は、呼び出し側が見た子の集合と、ロック内の現在の子が食い違ったことを表す。
+type ChildrenChangedError struct{ Current []string }
+
+func (e *ChildrenChangedError) Error() string {
+	return fmt.Sprintf("children changed (now: %s)", strings.Join(e.Current, ", "))
+}
+
+// RemoveIslandExpecting は、呼び出し側が見た子の集合 expect が現在の子と（集合として）一致するときだけ、
+// 子を親へ付け替えて island を消す。子がいなければ expect に関わらず消す。食い違えば *ChildrenChangedError で何も変えない。
+// Why: UI が見せていない子（別タブ・CLI の同時編集で増えた子）を、黙って付け替えないため。
+func (s *IslandStore) RemoveIslandExpecting(id string, expect []string) error {
+	current := s.Children(IslandRef(id))
+	if len(current) == 0 {
+		return s.RemoveIsland(id, false)
+	}
+	want := map[string]bool{}
+	for _, r := range expect {
+		want[r] = true
+	}
+	same := len(want) == len(current)
+	for _, r := range current {
+		if !want[r] {
+			same = false
+		}
+	}
+	if !same {
+		return &ChildrenChangedError{Current: current}
+	}
+	return s.RemoveIsland(id, true)
 }
 
 func (s *IslandStore) setParentUnchecked(child, parent string) {

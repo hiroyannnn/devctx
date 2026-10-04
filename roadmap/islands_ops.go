@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
-	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,8 +38,8 @@ type islandOp struct {
 	Children []string `json:"children"`
 }
 
-// opError は UpdateIslands の fn から返す、HTTP 応答に対応づけた失敗。
-// Why: storage の I/O 失敗（500）と入力・木の不整合（4xx）を、fn から返る error だけで区別するため。
+// opError は HTTP 応答に対応づけた失敗。ロック内（fn）でも本文の検証でも、失敗はこれ 1 本で返す。
+// Why: storage の I/O 失敗（500）と入力・木の不整合（4xx）を、返ってきた error の型だけで区別するため。
 type opError struct {
 	status int
 	body   map[string]any
@@ -47,9 +47,15 @@ type opError struct {
 
 func (e *opError) Error() string { return fmt.Sprint(e.body["error"]) }
 
-func badRequest(format string, args ...any) *opError {
-	return &opError{status: http.StatusBadRequest, body: map[string]any{"error": fmt.Sprintf(format, args...)}}
+func newOpError(status int, body map[string]any) *opError {
+	return &opError{status: status, body: body}
 }
+
+func badRequest(format string, args ...any) *opError {
+	return newOpError(http.StatusBadRequest, map[string]any{"error": fmt.Sprintf(format, args...)})
+}
+
+func conflict(body map[string]any) *opError { return newOpError(http.StatusConflict, body) }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -59,23 +65,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-func writeOpError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
+func writeOpError(w http.ResponseWriter, oe *opError) { writeJSON(w, oe.status, oe.body) }
+
+func plainError(status int, msg string) *opError {
+	return newOpError(status, map[string]any{"error": msg})
 }
 
-// handleAPIIslandOps は Mind Map の island 編集（add / rename / remove / attach / detach）を受ける。
-// 入力は境界でここだけが検証し、木の整合（存在・循環）は model に任せる。
-func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeOpError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if s.IslandUpdater == nil {
-		writeOpError(w, http.StatusServiceUnavailable, "island editing is not available on this server")
-		return
-	}
-
+// decodeIslandOp は本文を islandOp にして、op の種別まで検査する。
+func decodeIslandOp(w http.ResponseWriter, r *http.Request) (islandOp, *opError) {
 	var req islandOp
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxOpsBodyBytes))
 	// 未知フィールドを黙って捨てると、UI と server のずれ（綴り違い等）に気づけない
@@ -83,54 +80,86 @@ func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&req); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeOpError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
+			return req, plainError(http.StatusRequestEntityTooLarge, "request body too large")
 		}
-		writeOpError(w, http.StatusBadRequest, "malformed JSON body")
-		return
+		return req, plainError(http.StatusBadRequest, "malformed JSON body")
 	}
 	switch req.Op {
 	case "add", "rename", "remove", "attach", "detach":
-	default:
-		writeOpError(w, http.StatusBadRequest, fmt.Sprintf("unknown op %q", req.Op))
+		return req, nil
+	}
+	return req, plainError(http.StatusBadRequest, fmt.Sprintf("unknown op %q", req.Op))
+}
+
+// handleAPIIslandOps は Mind Map の island 編集（add / rename / remove / attach / detach）を受ける。
+// 入力は境界でここだけが検証し、木の整合（存在・循環・子の変化）は model に任せる。
+// 成功時は更新後の木（GET /api/islands と同じ形）も返す。
+// Why: UI が操作直後に /api/islands を取り直さず、この応答の木をそのまま描画に使えるようにするため。
+func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeOpError(w, plainError(http.StatusMethodNotAllowed, "method not allowed"))
+		return
+	}
+	if s.IslandUpdater == nil {
+		writeOpError(w, plainError(http.StatusServiceUnavailable, "island editing is not available on this server"))
+		return
+	}
+	req, oe := decodeIslandOp(w, r)
+	if oe != nil {
+		writeOpError(w, oe)
 		return
 	}
 
-	// 既知 repo の判定に contexts が要る。ロックの外で読む（contexts.yaml は別ファイル・別ロック）
-	store := &model.Store{}
-	if s.StoreLoader != nil {
-		loaded, err := s.StoreLoader.LoadStore()
-		if err != nil {
-			log.Printf("islands: failed to load store: %v", err)
-			writeOpError(w, http.StatusInternalServerError, "failed to load session data")
-			return
-		}
-		store = loaded
-	}
-
-	result := map[string]any{"ok": true}
+	var ref string
+	var tree model.IslandStore
 	err := s.IslandUpdater.UpdateIslands(func(is *model.IslandStore) error {
-		return applyIslandOp(is, store, req, result)
+		var err error
+		if ref, err = applyIslandOp(is, s.knownRepos(is), req); err != nil {
+			return err
+		}
+		tree = is.Resolved()
+		return nil
 	})
 	if err != nil {
 		var oe *opError
 		if errors.As(err, &oe) {
-			writeJSON(w, oe.status, oe.body)
+			writeOpError(w, oe)
 			return
 		}
 		log.Printf("islands: failed to update: %v", err)
-		writeOpError(w, http.StatusInternalServerError, "failed to update islands")
+		writeOpError(w, plainError(http.StatusInternalServerError, "failed to update islands"))
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	resp := map[string]any{"ok": true, "islands": tree}
+	if ref != "" {
+		resp["ref"] = ref
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// applyIslandOp は 1 つの op を is に適用する。失敗（opError）なら呼び出し側が保存しない。
-func applyIslandOp(is *model.IslandStore, store *model.Store, req islandOp, result map[string]any) error {
-	known := map[string]bool{}
-	for _, root := range model.KnownRepos(store, is) {
-		known[root] = true
-	}
+// knownRepos は既知 repo の集合を返す関数を作る。contexts の読み込みは repo ref を検査するときに 1 回だけ行う。
+// Why: island だけの操作（rename / remove 等）が contexts.yaml の不調や読み込みコストに巻き込まれないため。
+func (s *Server) knownRepos(is *model.IslandStore) func() (map[string]bool, error) {
+	return sync.OnceValues(func() (map[string]bool, error) {
+		store := &model.Store{}
+		if s.StoreLoader != nil {
+			loaded, err := s.StoreLoader.LoadStore()
+			if err != nil {
+				return nil, err
+			}
+			store = loaded
+		}
+		known := map[string]bool{}
+		for _, root := range model.KnownRepos(store, is) {
+			known[root] = true
+		}
+		return known, nil
+	})
+}
+
+// applyIslandOp は 1 つの op を is に適用し、作った island の ref（add のみ）を返す。失敗なら呼び出し側が保存しない。
+func applyIslandOp(is *model.IslandStore, known func() (map[string]bool, error), req islandOp) (string, error) {
 	// canon は ref を保存形にする。repo は既知のものだけ受け付ける（CLI の resolver が未登録 repo を
 	// ディスク上の存在で通すのと違い、Web は任意パスを木に書き込める口にしない）。
 	canon := func(ref string) (string, error) {
@@ -141,138 +170,102 @@ func applyIslandOp(is *model.IslandStore, store *model.Store, req islandOp, resu
 		if kind == model.RefIsland {
 			return ref, nil
 		}
+		repos, err := known()
+		if err != nil {
+			return "", err // 入力の誤りではないので opError にしない（500）
+		}
 		root := model.NormalizePath(v)
-		if !known[root] {
+		if !repos[root] {
 			return "", badRequest("unknown repo %q", root)
 		}
 		return model.RepoRef(root), nil
 	}
-	islandID := func(ref string) (string, error) {
-		kind, v, err := model.ParseRef(ref)
-		if err != nil {
-			return "", badRequest("%v", err)
-		}
-		if kind != model.RefIsland {
-			return "", badRequest("%s is not an island", ref)
-		}
-		return v, nil
-	}
 
 	switch req.Op {
 	case "add":
-		name, err := validateIslandName(req.Name)
-		if err != nil {
-			return err
+		if err := validateIslandName(req.Name); err != nil {
+			return "", err
 		}
 		parent := ""
 		if req.Parent != "" {
+			var err error
 			if parent, err = canon(req.Parent); err != nil {
-				return err
+				return "", err
 			}
 		}
-		added, err := is.AddIsland(name, "", parent)
+		added, err := is.AddIsland(req.Name, "", parent)
 		var dup *model.IDExistsError
 		switch {
 		case errors.As(err, &dup):
-			return &opError{status: http.StatusConflict, body: map[string]any{
-				"error": fmt.Sprintf("island id %q already exists; use a different name", dup.ID),
-			}}
+			return "", conflict(map[string]any{"error": fmt.Sprintf("island id %q already exists; use a different name", dup.ID)})
 		case err != nil:
-			return badRequest("%v", err)
+			return "", badRequest("%v", err)
 		}
-		result["ref"] = model.IslandRef(added.ID)
+		return model.IslandRef(added.ID), nil
 
 	case "rename":
-		id, err := islandID(req.Ref)
+		id, err := model.ParseIslandRef(req.Ref)
 		if err != nil {
-			return err
+			return "", badRequest("%v", err)
 		}
-		name, err := validateIslandName(req.Name)
-		if err != nil {
-			return err
+		if err := validateIslandName(req.Name); err != nil {
+			return "", err
 		}
-		if err := is.RenameIsland(id, name); err != nil {
-			return badRequest("%v", err)
-		}
+		return "", badRequestIf(is.RenameIsland(id, req.Name))
 
 	case "remove":
-		id, err := islandID(req.Ref)
+		id, err := model.ParseIslandRef(req.Ref)
 		if err != nil {
-			return err
+			return "", badRequest("%v", err)
 		}
-		current := is.Children(model.IslandRef(id))
-		if len(current) == 0 {
-			if err := is.RemoveIsland(id, false); err != nil {
-				return badRequest("%v", err)
-			}
-			return nil
-		}
-		// UI が見せた子と今の子が違えば、見ていない子を黙って付け替えない（別タブ・CLI の同時編集対策）
-		if !sameRefSet(current, req.Children) {
+		err = is.RemoveIslandExpecting(id, req.Children)
+		var changed *model.ChildrenChangedError
+		if errors.As(err, &changed) {
+			current := append([]string(nil), changed.Current...)
 			sort.Strings(current)
-			return &opError{status: http.StatusConflict, body: map[string]any{"error": "children changed", "children": current}}
+			return "", conflict(map[string]any{"error": "children changed", "children": current})
 		}
-		if err := is.RemoveIsland(id, true); err != nil {
-			return badRequest("%v", err)
-		}
+		return "", badRequestIf(err)
 
 	case "attach":
 		child, err := canon(req.Child)
 		if err != nil {
-			return err
+			return "", err
 		}
 		parent, err := canon(req.Parent)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if err := is.SetParent(child, parent); err != nil {
-			return badRequest("%v", err)
-		}
+		return "", badRequestIf(is.SetParent(child, parent))
 
 	case "detach":
 		child, err := canon(req.Child)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if err := is.Detach(child); err != nil {
-			return badRequest("%v", err)
-		}
+		return "", badRequestIf(is.Detach(child))
 	}
-	return nil
+	return "", nil
 }
 
-func sameRefSet(a, b []string) bool {
-	set := map[string]bool{}
-	for _, r := range a {
-		set[r] = true
+// badRequestIf は model の検証エラー（存在・循環など）を 400 にする。nil はそのまま nil。
+func badRequestIf(err error) error {
+	if err == nil {
+		return nil
 	}
-	other := map[string]bool{}
-	for _, r := range b {
-		other[r] = true
-	}
-	if len(set) != len(other) {
-		return false
-	}
-	for r := range set {
-		if !other[r] {
-			return false
-		}
-	}
-	return true
+	return badRequest("%v", err)
 }
 
-func validateIslandName(name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", badRequest("island name is empty")
-	}
+// validateIslandName は境界で見るべきもの（長さ・制御文字）だけを検査する。
+// trim と空チェックは model（AddIsland / RenameIsland）が持つので、ここでは重ねない。
+func validateIslandName(name string) error {
 	if utf8.RuneCountInString(name) > maxIslandNameRune {
-		return "", badRequest("island name is too long (max %d characters)", maxIslandNameRune)
+		return badRequest("island name is too long (max %d characters)", maxIslandNameRune)
 	}
 	for _, r := range name {
 		if unicode.IsControl(r) {
-			return "", badRequest("island name must not contain control characters")
+			return badRequest("island name must not contain control characters")
 		}
 	}
-	return name, nil
+	return nil
 }

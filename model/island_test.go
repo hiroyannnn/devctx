@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -528,4 +529,81 @@ func TestAddIsland_DuplicateIDReturnsTypedError(t *testing.T) {
 	if !strings.Contains(err.Error(), "pass --id to choose another") {
 		t.Errorf("message = %q", err.Error())
 	}
+}
+
+func TestParseIslandRef(t *testing.T) {
+	if id, err := ParseIslandRef("island:hr"); err != nil || id != "hr" {
+		t.Errorf("island:hr -> %q, %v", id, err)
+	}
+	for _, bad := range []string{"repo:/r/app", "hr", "", "island:"} {
+		if id, err := ParseIslandRef(bad); err == nil || id != "" {
+			t.Errorf("%q must be rejected, got %q, %v", bad, id, err)
+		}
+	}
+	// 種別違いは、何が違うかが分かるメッセージにする
+	if _, err := ParseIslandRef("repo:/r/app"); err == nil || !strings.Contains(err.Error(), "not an island") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRemoveIslandExpecting(t *testing.T) {
+	newStore := func() *IslandStore {
+		return &IslandStore{
+			Islands: []Island{
+				{ID: "top", Name: "Top"},
+				{ID: "mid", Name: "Mid", Parent: "island:top"},
+				{ID: "leaf", Name: "Leaf", Parent: "island:mid"},
+				{ID: "lone", Name: "Lone"},
+			},
+			Repos: []RepoNode{{Root: "/r/app", Parent: "island:mid"}},
+		}
+	}
+
+	t.Run("no children removes regardless of expect", func(t *testing.T) {
+		s := newStore()
+		if err := s.RemoveIslandExpecting("lone", nil); err != nil {
+			t.Fatal(err)
+		}
+		if s.HasIsland("lone") {
+			t.Error("lone must be removed")
+		}
+	})
+	t.Run("matching set (order and duplicates ignored) reparents", func(t *testing.T) {
+		s := newStore()
+		if err := s.RemoveIslandExpecting("mid", []string{"repo:/r/app", "island:leaf", "repo:/r/app"}); err != nil {
+			t.Fatal(err)
+		}
+		if s.HasIsland("mid") || s.ParentOf("island:leaf") != "island:top" || s.ParentOf("repo:/r/app") != "island:top" {
+			t.Errorf("store = %+v", s)
+		}
+	})
+	for name, expect := range map[string][]string{
+		"subset":  {"island:leaf"},
+		"missing": nil,
+		"extra":   {"island:leaf", "repo:/r/app", "island:ghost"},
+	} {
+		t.Run("stale "+name, func(t *testing.T) {
+			s := newStore()
+			err := s.RemoveIslandExpecting("mid", expect)
+			var cc *ChildrenChangedError
+			if !errors.As(err, &cc) {
+				t.Fatalf("err = %v, want *ChildrenChangedError", err)
+			}
+			got := append([]string(nil), cc.Current...)
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, []string{"island:leaf", "repo:/r/app"}) {
+				t.Errorf("Current = %v", got)
+			}
+			if !s.HasIsland("mid") {
+				t.Error("mid must not be removed")
+			}
+		})
+	}
+	t.Run("missing island is a plain error", func(t *testing.T) {
+		err := newStore().RemoveIslandExpecting("ghost", nil)
+		var cc *ChildrenChangedError
+		if err == nil || errors.As(err, &cc) {
+			t.Errorf("err = %v", err)
+		}
+	})
 }

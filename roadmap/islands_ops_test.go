@@ -2,6 +2,7 @@ package roadmap
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -377,5 +378,116 @@ func TestIslandOps_WithRealStorageLock(t *testing.T) {
 	}
 	if len(got.Islands) != 1 || got.Islands[0].ID != "child" || got.Islands[0].Parent != "" {
 		t.Errorf("islands = %+v", got.Islands)
+	}
+}
+
+type countingStoreLoader struct {
+	calls int
+	err   error
+	store *model.Store
+}
+
+func (c *countingStoreLoader) LoadStore() (*model.Store, error) {
+	c.calls++
+	return c.store, c.err
+}
+
+func TestIslandOps_ContextsAreReadOnlyWhenARepoRefNeedsChecking(t *testing.T) {
+	// contexts.yaml が壊れていても、island だけの操作は通る（repo ref の検査にだけ contexts が要る）
+	bad := &countingStoreLoader{err: errors.New("corrupt contexts.yaml")}
+	s, up := newOpsServer(&model.IslandStore{Islands: []model.Island{
+		{ID: "a", Name: "A"}, {ID: "b", Name: "B"}, {ID: "c", Name: "C", Parent: "island:a"},
+	}})
+	s.StoreLoader = bad
+
+	// 順序依存（attach の後に b を消す）なので、map ではなく順序つきで回す
+	steps := []struct{ name, body string }{
+		{"rename", `{"op":"rename","ref":"island:a","name":"AA"}`},
+		{"add", `{"op":"add","name":"New","parent":"island:a"}`},
+		{"add top", `{"op":"add","name":"Top2"}`},
+		{"empty parent", `{"op":"add","name":"Top3","parent":""}`},
+		{"attach", `{"op":"attach","child":"island:b","parent":"island:a"}`},
+		{"detach", `{"op":"detach","child":"island:c"}`},
+		{"remove", `{"op":"remove","ref":"island:b","children":[]}`},
+	}
+	for _, st := range steps {
+		if w, resp := postOps(t, s, st.body); w.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, body = %v", st.name, w.Code, resp)
+		}
+	}
+	// 400 になる入力でも contexts は読まない
+	if w, _ := postOps(t, s, `{"op":"add","name":"Bad","parent":"island:nope"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("stale parent: status = %d", w.Code)
+	}
+	if bad.calls != 0 {
+		t.Errorf("contexts were read %d times for island-only ops", bad.calls)
+	}
+	if up.store.Islands[0].Name != "AA" {
+		t.Errorf("rename not applied: %+v", up.store.Islands)
+	}
+
+	// repo ref を正規化するときだけ読む。読めなければ 500（入力の誤りではない）
+	w, _ := postOps(t, s, `{"op":"attach","child":"repo:/r/app","parent":"island:a"}`)
+	if w.Code != http.StatusInternalServerError || bad.calls != 1 {
+		t.Errorf("repo ref: status = %d, calls = %d", w.Code, bad.calls)
+	}
+}
+
+func TestIslandOps_ContextsAreReadOnceForSeveralRepoRefs(t *testing.T) {
+	counting := &countingStoreLoader{store: &model.Store{Contexts: []model.Context{{Name: "a", RepoRoot: "/r/app"}, {Name: "b", RepoRoot: "/r/web"}}}}
+	s, _ := newOpsServer(&model.IslandStore{Islands: []model.Island{{ID: "a", Name: "A"}}})
+	s.StoreLoader = counting
+	if w, resp := postOps(t, s, `{"op":"attach","child":"repo:/r/app","parent":"repo:/r/web"}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %v", w.Code, resp)
+	}
+	if counting.calls != 1 {
+		t.Errorf("contexts read %d times, want 1", counting.calls)
+	}
+}
+
+func TestIslandOps_SuccessReturnsResolvedTree(t *testing.T) {
+	s, _ := newOpsServer(&model.IslandStore{
+		Islands: []model.Island{{ID: "hr", Name: "HR"}, {ID: "orphan", Name: "O", Parent: "island:gone"}},
+	})
+	w, resp := postOps(t, s, `{"op":"add","name":"Child","parent":"island:hr"}`)
+	if w.Code != http.StatusOK || resp["ref"] != "island:child" {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	tree, ok := resp["islands"].(map[string]any)
+	if !ok {
+		t.Fatalf("islands missing: %s", w.Body.String())
+	}
+	islands, _ := tree["islands"].([]any)
+	parents := map[string]string{}
+	for _, i := range islands {
+		m := i.(map[string]any)
+		parents[m["id"].(string)] = m["parent"].(string)
+	}
+	// GET /api/islands と同じ形・同じ解決（dangling な親は ""）
+	want := map[string]string{"hr": "", "orphan": "", "child": "island:hr"}
+	if !reflect.DeepEqual(parents, want) {
+		t.Errorf("parents = %v, want %v", parents, want)
+	}
+	if repos, ok := tree["repos"].([]any); !ok || len(repos) != 0 {
+		t.Errorf("repos must be an empty array: %v", tree["repos"])
+	}
+	// rename / detach 等の ref を返さない op でも木は返る
+	_, resp = postOps(t, s, `{"op":"rename","ref":"island:hr","name":"HR2"}`)
+	if _, has := resp["ref"]; has {
+		t.Errorf("rename must not return ref: %v", resp)
+	}
+	if resp["islands"] == nil || resp["ok"] != true {
+		t.Errorf("rename response = %v", resp)
+	}
+}
+
+func TestIslandOps_ErrorsStayJSON(t *testing.T) {
+	// pre-validation（本文・op）の失敗も、ロック内の失敗と同じ JSON 形式で返す
+	s, _ := newOpsServer(&model.IslandStore{})
+	for _, body := range []string{`{"op":"zzz"}`, `{`, `{"op":"add","name":"x","nope":1}`} {
+		w, resp := postOps(t, s, body)
+		if w.Code < 400 || errorOf(resp) == "" || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
+			t.Errorf("%s: status = %d, ct = %q", body, w.Code, w.Header().Get("Content-Type"))
+		}
 	}
 }

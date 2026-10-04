@@ -137,14 +137,10 @@ func withIslands(s *storage.Storage, base refResolver, fn func(is *model.IslandS
 // islandID は rename / rm の引数から island の id を取り出す。型付き ref は island 種別だけを受ける。
 // Why not 素の文字列から "island:" を剥がすだけにする: "repo:/x" を渡されたときに無関係なエラーになるため。
 func islandID(arg string) (string, error) {
-	kind, v, err := model.ParseRef(arg)
-	if err != nil {
+	if _, _, err := model.ParseRef(arg); err != nil {
 		return arg, nil // 素の id
 	}
-	if kind != model.RefIsland {
-		return "", fmt.Errorf("%s is not an island ref (want island:<id> or a bare id)", arg)
-	}
-	return v, nil
+	return model.ParseIslandRef(arg)
 }
 
 func islandAdd(s *storage.Storage, out io.Writer, base refResolver, name, id, parent string) error {
