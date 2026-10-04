@@ -126,6 +126,7 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"graphNetwork.on('oncontext'",                     // vis の右クリック
 		"function contextMenuItems(",                      // 種別ごとのメニュー項目（純関数）
 		"function keyAction(",                             // キーボード操作の対応表（純関数）
+		"addEventListener('keydown', onGraphKeydown)",     // ハンドラを定義するだけで配線し忘れない
 		"function siblingParentRef(",                      // Enter で兄弟を足すときの親
 		"function childrenRefsOf(",                        // 削除確認で見せる子（server に children として送る）
 		"keyboard: { enabled: false }",                    // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る

@@ -2098,6 +2098,7 @@ function onGraphKeydown(e) {
   e.preventDefault();
   runEditAction(action, sel[0], kind);
 }
+document.getElementById('graph-canvas').addEventListener('keydown', onGraphKeydown);
 
 var cachedGraphData = null; // cached /api/roadmap-graph data
 
