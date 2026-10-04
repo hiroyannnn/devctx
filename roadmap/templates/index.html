@@ -1788,10 +1788,79 @@ function childrenRefsOf(ref, islandsData) {
 function contextMenuItems(kind, hasParent) {
   if (kind === 'root') return [{ action: 'addChild', label: '島を追加' }];
   var items = [{ action: 'addChild', label: '子の島を追加' }];
+  if (kind === 'island') items.push({ action: 'attachRepo', label: 'repo を付ける…' });
   if (kind === 'island') items.push({ action: 'rename', label: '名前を変更' });
   if (hasParent) items.push({ action: 'detach', label: '親から外す' });
   if (kind === 'island') items.push({ action: 'delete', label: '削除', danger: true });
   return items;
+}
+
+// ref の子孫（island / repo を混ぜて辿る）の集合 {ref: true}。ref 自身は含まない。手編集の輪でも止まるよう visited で守る。
+// Why: ドラッグで親を付け替えるとき、自分の子孫の下へは付けられない（循環）ので候補から外す。server も検証するが、
+// 候補に出さないことで、落とせない場所へ落とす操作自体を無くす。
+function descendantsOf(ref, islandsData) {
+  var out = {};
+  var stack = [ref];
+  while (stack.length) {
+    var cur = stack.pop();
+    childrenRefsOf(cur, islandsData).forEach(function(c) {
+      if (c !== ref && !out[c]) { out[c] = true; stack.push(c); }
+    });
+  }
+  return out;
+}
+
+// ドラッグの落とし先の候補（ノード ID の配列）。island / repo / root のうち、ドラッグ中のノードとその子孫を除く。
+function dropCandidateIds(nodes, draggedId, islandsData) {
+  var banned = descendantsOf(draggedId, islandsData);
+  banned[draggedId] = true;
+  return nodes.filter(function(n) { return editableKind(n) && !banned[n.id]; }).map(function(n) { return n.id; });
+}
+
+// 落とした結果の操作。root へは親から外す（既にトップレベルなら何もしない）、
+// island / repo へは付ける（既にそこが親なら何もしない）。無操作は null。
+function dropOpFor(draggedId, targetId, islandsData) {
+  var parent = parentRefOf(draggedId, islandsData);
+  if (targetId === ROOT_ID) return parent === '' ? null : { op: 'detach', child: draggedId };
+  if (parent === targetId) return null;
+  return { op: 'attach', child: draggedId, parent: targetId };
+}
+
+// ポインタ（canvas 座標）を含む矩形の id。重なっていれば面積の小さい方（内側のノード）。boxes: [{id,left,right,top,bottom}]
+function hitTarget(boxes, p) {
+  var best = null, bestArea = Infinity;
+  boxes.forEach(function(b) {
+    if (p.x < b.left || p.x > b.right || p.y < b.top || p.y > b.bottom) return;
+    var area = (b.right - b.left) * (b.bottom - b.top);
+    if (area < bestArea) { best = b.id; bestArea = area; }
+  });
+  return best;
+}
+
+// 「repo を付ける」に出す repo。既にこの island の子のものと、付けると循環になるもの（この island の祖先）を除く。
+function attachableRepos(repos, islandRef, islandsData) {
+  var children = {};
+  childrenRefsOf(islandRef, islandsData).forEach(function(c) { children[c] = true; });
+  var ancestors = {};
+  var seen = {};
+  for (var cur = parentRefOf(islandRef, islandsData); cur && !seen[cur]; cur = parentRefOf(cur, islandsData)) {
+    seen[cur] = true;
+    ancestors[cur] = true;
+  }
+  return repos.filter(function(r) {
+    var ref = repoNodeId(r.root);
+    return !children[ref] && !ancestors[ref];
+  });
+}
+
+// 「repo を付ける」のメニュー項目。同じ basename の repo が複数あるときだけパスを添えて見分ける。
+function repoMenuItems(repos) {
+  if (repos.length === 0) return [{ action: 'none', label: '付けられる repo がありません', disabled: true }];
+  var counts = {};
+  repos.forEach(function(r) { counts[r.label] = (counts[r.label] || 0) + 1; });
+  return repos.map(function(r) {
+    return { action: 'pickRepo', root: r.root, label: counts[r.label] > 1 ? r.label + '  (' + r.root + ')' : r.label, title: r.root };
+  });
 }
 
 // キー → 編集操作。対応しないキーは null（preventDefault しない）。rename / delete は island のみ。
@@ -1815,9 +1884,10 @@ var pendingSelect = null; // 操作成功後の再描画で選択するノード
 var graphLaidOut = false; // 直近の描画の左右バランス配置が済んだか（視点の保存はこのとき以外は信用しない）
 var carriedKeep = null;   // レイアウト前の描画が引き継ぐ予定の {scale, position, selected}
 var graphRootId = null;   // 直近の描画の root ID。null なら編集不可（単一プロジェクト表示）
+var dragState = null;     // ドラッグ中（親付け替えの候補・強調中の落とし先など）。編集中として扱い、ポーリングの描画を保留する
 
 function editingActive() {
-  return !!(editState.menu || editState.input || editState.confirm);
+  return !!(editState.menu || editState.input || editState.confirm || dragState);
 }
 
 function removeMenu() {
@@ -1884,6 +1954,7 @@ function closeEditUIOnOutsideMouseDown() {
 
 // 描画の作り直し（フィルタ・プロジェクト切り替え）で消える UI を捨てる。保留分も捨てる（次の refresh が取り直す）。
 function cancelEditing() {
+  cancelDrag();
   closeEditUI();
   pendingData = null;
   pendingSelect = null; // 古い操作の選択が、次の無関係な描画で効かないように
@@ -2116,7 +2187,9 @@ function buildContextMenu(items, x, y, onPick) {
     b.className = 'ctx-item' + (item.danger ? ' danger' : '');
     b.setAttribute('role', 'menuitem');
     b.textContent = item.label;
-    b.addEventListener('click', function() { onPick(item.action); });
+    if (item.title) b.title = item.title;
+    if (item.disabled) b.disabled = true;
+    else b.addEventListener('click', function() { onPick(item.action, item); });
     menu.appendChild(b);
   });
   menu.addEventListener('keydown', function(e) {
@@ -2134,18 +2207,148 @@ function buildContextMenu(items, x, y, onPick) {
   return menu;
 }
 
+// 既知 repo の一覧（GET /api/islands/known-repos）。メニューを開いたときだけ取りに行く（ポーリングには含めない）。失敗は null。
+async function fetchKnownRepos() {
+  var data = await fetchOptionalJSON('/api/islands/known-repos');
+  return data && Array.isArray(data.repos) ? data.repos : null;
+}
+
+// 「repo を付ける…」。メニューを repo の一覧に差し替える（同じ位置）。一覧の取得が済む前に閉じられていたら何もしない。
+async function showRepoSubmenu(islandRef, x, y, reposPromise, menuEl) {
+  var repos = await reposPromise;
+  if (editState.menu !== menuEl) return;
+  if (repos === null) {
+    endEditing();
+    showToast('repo の一覧を取得できませんでした');
+    return;
+  }
+  var items = repoMenuItems(attachableRepos(repos, islandRef, cachedIslands));
+  removeMenu();
+  editState.menu = buildContextMenu(items, x, y, function(action, item) {
+    if (action !== 'pickRepo') return;
+    endEditing();
+    runIslandOp({ op: 'attach', child: repoNodeId(item.root), parent: islandRef });
+  });
+  var first = editState.menu.querySelector('.ctx-item:not([disabled])');
+  if (first) first.focus();
+}
+
 function openContextMenu(nodeId, x, y) {
   var node = graphNodes.get(nodeId);
   var kind = editableKind(node);
   if (!kind) return false;
   closeEditUI();
   var items = contextMenuItems(kind, !!parentRefOf(nodeId, cachedIslands));
+  var reposPromise = kind === 'island' ? fetchKnownRepos() : null;
   editState.menu = buildContextMenu(items, x, y, function(action) {
+    if (action === 'attachRepo') {
+      showRepoSubmenu(nodeId, x, y, reposPromise, editState.menu);
+      return;
+    }
     runEditAction(action, nodeId, kind);
   });
   var first = editState.menu.querySelector('.ctx-item');
   if (first) first.focus();
   return true;
+}
+
+// ── ドラッグで親を付け替える ──
+// island / repo ノードを別の island / repo / root にドラッグして落とすと、その下に付く（root は親から外す）。
+// ドラッグ中は編集中として扱い（editingActive）、ポーリングの描画を保留する。作り直されるとドラッグが途切れるため。
+var DROP_BORDER = '#EF6F6F'; // 落とし先の強調色（MindMup の落とし先と同じ赤の破線）
+
+// 落とし先の強調を戻す。ノードが作り直し等で無ければ何もしない。
+function restoreDropHighlight() {
+  var st = dragState;
+  if (!st || !st.saved) return;
+  var saved = st.saved;
+  st.saved = null;
+  if (graphNodes && graphNodes.get(saved.id)) {
+    graphNodes.update({ id: saved.id, color: saved.color, borderWidth: saved.borderWidth, shapeProperties: saved.shapeProperties });
+  }
+}
+
+function setDropHighlight(id) {
+  var st = dragState;
+  if (!st || st.target === id) return;
+  restoreDropHighlight();
+  st.target = id;
+  var n = id ? graphNodes.get(id) : null;
+  if (!n) return;
+  // 元の見た目を控え、枠だけ赤い破線にする（背景は元のまま。透過させない）
+  st.saved = { id: id, color: n.color, borderWidth: n.borderWidth, shapeProperties: n.shapeProperties };
+  var bg = n.color && n.color.background;
+  var c = { background: bg, border: DROP_BORDER };
+  graphNodes.update({
+    id: id,
+    color: { background: bg, border: DROP_BORDER, highlight: c, hover: c },
+    borderWidth: 3,
+    shapeProperties: Object.assign({}, n.shapeProperties, { borderDashes: [6, 4] })
+  });
+}
+
+// ドラッグ開始。親付け替えの対象（All Projects の island / repo ノード 1 つ）なら候補とその矩形を先に求める。
+// それ以外（視点のパン・session などのノード）も、描画の作り直しで途切れないよう編集中として扱う。
+function beginDrag(nodeId) {
+  dragState = { id: null, boxes: [], target: null, saved: null, raf: 0, pointer: null, outside: false, cancelled: false, settling: false };
+  var kind = nodeId ? editableKind(graphNodes.get(nodeId)) : null;
+  if (!graphRootId || (kind !== 'island' && kind !== 'repo')) return;
+  dragState.id = nodeId;
+  // 矩形は canvas 座標。候補はドラッグ中に動かない（動かすのは掴んだノードだけ）ので、1 回測れば足りる
+  dragState.boxes = dropCandidateIds(graphNodes.get(), nodeId, cachedIslands).map(function(id) {
+    var b = graphNetwork.getBoundingBox(id);
+    return { id: id, left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+  });
+}
+
+function updateDragTarget(canvasPoint) {
+  var st = dragState;
+  if (!st || !st.id || st.cancelled) return;
+  st.outside = false;
+  setDropHighlight(hitTarget(st.boxes, canvasPoint));
+}
+
+// ドラッグ終了。落とし先があり、結果が無操作でなければ runIslandOp で送る。
+// 送る間は dragState を残す（= 編集中）ので、応答の木は保留に入り、完了後に flushPending で反映される。
+// Why: ポーリングの古い保留が、操作の結果を上書きして描画しないようにする（応答反映時に refreshSeq も進む）。
+function finishDrag(canvasPoint) {
+  var st = dragState;
+  if (!st || st.settling) return;
+  if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; }
+  var target = null;
+  if (st.id && !st.cancelled && !st.outside) {
+    target = canvasPoint ? hitTarget(st.boxes, canvasPoint) : st.target;
+  }
+  restoreDropHighlight();
+  var op = target ? dropOpFor(st.id, target, cachedIslands) : null;
+  if (!op) {
+    dragState = null;
+    flushPending();
+    return;
+  }
+  st.settling = true;
+  runIslandOp(op).then(function() {
+    dragState = null;
+    flushPending();
+  });
+}
+
+// Esc: 掴んだまま取り消す。ボタンを離すまでは dragState を残し（描画を保留）、離したら何もせず終わる。
+function softCancelDrag() {
+  var st = dragState;
+  if (!st || !st.id || st.cancelled || st.settling) return;
+  st.cancelled = true;
+  restoreDropHighlight();
+  st.target = null;
+}
+
+// 表示切り替え・プロジェクト切り替え・再描画で、ドラッグ状態を捨てる。
+function cancelDrag() {
+  var st = dragState;
+  if (!st) return;
+  if (st.raf) cancelAnimationFrame(st.raf);
+  restoreDropHighlight();
+  dragState = null;
 }
 
 // 編集 UI を閉じる共通のきっかけ（メニュー外クリック / Esc / スクロール）。入力欄はスクロールに追従するので残す。
@@ -2155,7 +2358,19 @@ document.addEventListener('mousedown', function(e) {
   if (outside) closeEditUIOnOutsideMouseDown();
 });
 document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && dragState) softCancelDrag();
   if (e.key === 'Escape' && (editState.menu || editState.confirm)) endEditing();
+});
+// vis の dragEnd が来ないまま離された場合の保険（通常は dragEnd が先に処理され、ここでは何もしない）
+document.addEventListener('mouseup', function() {
+  setTimeout(function() { if (dragState && !dragState.settling) finishDrag(null); }, 0);
+});
+// ポインタがグラフの外へ出たら、落とし先の強調を外す（離しても何も起きない）
+document.getElementById('graph-canvas').addEventListener('mouseleave', function() {
+  if (dragState && dragState.id) {
+    dragState.outside = true;
+    setDropHighlight(null);
+  }
 });
 window.addEventListener('scroll', function() { if (editState.menu) endEditing(true); }, true);
 
@@ -2313,7 +2528,25 @@ function renderGraphView(groups, graphData, opts) {
   });
   // ズーム・パンで入力欄などが指すノードとずれるので閉じる
   graphNetwork.on('zoom', function() { if (editingActive()) endEditing(true); });
-  graphNetwork.on('dragStart', function() { if (editingActive()) endEditing(true); });
+  // ドラッグ開始では編集 UI を閉じるだけで、保留した更新は反映しない（反映は作り直しなのでドラッグが途切れる）
+  graphNetwork.on('dragStart', function(params) {
+    closeEditUI();
+    beginDrag(params.nodes.length === 1 ? params.nodes[0] : null);
+  });
+  graphNetwork.on('dragging', function(params) {
+    if (!dragState || !dragState.id) return;
+    dragState.pointer = params.pointer.canvas;
+    if (dragState.raf) return;
+    dragState.raf = requestAnimationFrame(function() {
+      var st = dragState;
+      if (!st) return;
+      st.raf = 0;
+      if (st.pointer) updateDragTarget(st.pointer);
+    });
+  });
+  graphNetwork.on('dragEnd', function(params) {
+    if (dragState) finishDrag(params && params.pointer ? params.pointer.canvas : null);
+  });
 
   graphNetwork.on('click', function(params) {
     // キー操作を受けるため、クリックでグラフにフォーカスを移す

@@ -130,10 +130,19 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"function selectAfterOp(",                         // 全 op が同じ再描画経路で選択を引き継ぐ
 		"var islandSides = {};",                           // 部分木の左右は再描画をまたいで保つ
 		"var refreshSeq = 0;",
-		"function closeEditUIOnOutsideMouseDown()",       // 外側クリックで閉じても、更新の反映はクリックが済んでから
-		"function deleteConfirmModel(",                   // 削除は子がいなくても必ず確認する
-		"function graphFocusEl()",                        // キー操作の受け手は vis の frame
-		"function closeEditUI()",                         // 編集 UI を閉じる処理は 1 か所
+		"function closeEditUIOnOutsideMouseDown()", // 外側クリックで閉じても、更新の反映はクリックが済んでから
+		"function deleteConfirmModel(",             // 削除は子がいなくても必ず確認する
+		"function graphFocusEl()",                  // キー操作の受け手は vis の frame
+		"function closeEditUI()",
+		"function descendantsOf(",                        // ドラッグの落とし先から自分の子孫を除く（循環を作らせない）
+		"function dropCandidateIds(",                     // 落とし先の候補（island / repo / root）
+		"function dropOpFor(",                            // 落とした結果の操作（同じ親・既にトップレベルは無操作）
+		"graphNetwork.on('dragging'",                     // ドラッグ中に落とし先を強調する
+		"graphNetwork.on('dragEnd'",                      // 離したら attach / detach を送る
+		"var DROP_BORDER = '#EF6F6F';",                   // 落とし先の強調色
+		"/api/islands/known-repos",                       // 「repo を付ける」の一覧（メニューを開いたときだけ取る）
+		"function attachableRepos(",                      // 子・祖先（循環）を除いた repo の候補
+		"repo を付ける…",                                     // メニュー項目                         // 編集 UI を閉じる処理は 1 か所
 		"var refreshInFlight = false;",                   // ポーリングが重ならない
 		"normalizeIslands(res.data.islands)",             // 成功後は応答の木で描画する（全体取得しない）                             // 古い取得が新しい取得を巻き戻さない
 		"function siblingParentRef(",                     // Enter で兄弟を足すときの親
