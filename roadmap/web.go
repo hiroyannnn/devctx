@@ -364,10 +364,8 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		projectKey := ctx.RepoRoot
-		if projectKey == "" {
-			projectKey = ctx.Worktree
-		}
+		// Why: symlink 経由と実パスで同じ repo が別グループに割れないよう、islands と共通の RepoKey で束ねる
+		projectKey := model.RepoKey(ctx)
 		projectName := filepath.Base(projectKey)
 
 		if _, exists := projectMap[projectKey]; !exists {
@@ -418,10 +416,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 	var projectOrder []string
 
 	for _, ctx := range active {
-		repoRoot := ctx.RepoRoot
-		if repoRoot == "" {
-			repoRoot = ctx.Worktree
-		}
+		repoRoot := model.RepoKey(ctx)
 		if repoRoot == "" {
 			repoRoot = "__ungrouped__"
 		}

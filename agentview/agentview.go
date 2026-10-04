@@ -147,7 +147,7 @@ func fetchAt(ctx context.Context, run runner, now func() time.Time, toplevel fun
 		}
 		top, ok := tops[cwd]
 		if !ok {
-			top = normalizePath(toplevel(cwd))
+			top = model.NormalizePath(toplevel(cwd))
 			tops[cwd] = top
 		}
 		sessions[i].Toplevel = top
