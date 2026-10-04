@@ -115,6 +115,38 @@ needs input のとき、hook の payload から「何を」待っているかも
 
 新しい hook を入れるには `devctx hooks --install`（Claude Code）と `devctx hooks --install --provider codex` を再実行し、Codex では `/hooks` で変更されたエントリを確認・trust してください。
 
+### Islands（島）
+
+**island** は手で作るテーマのノード（例: `人事強化`）で、**All Projects** の Mind Map に表示されます。repo を持たなくてもかまいません。island と repo は**1 本の木**になり、repo を island の下に、island を repo の下に置けます。エージェントのセッションは自動で所属 repo の下に付き、何も接続していない repo は今まで通りトップレベルに並びます。
+
+```bash
+devctx island add 人事強化 --id hr            # 日本語名を参照するには --id が必要
+devctx island attach devctx --to hr            # repo "devctx" を island "hr" の下へ
+devctx island add 採用フロー --id hiring --parent island:hr
+devctx island attach island:m3 --to repo:.     # island "m3" をカレントディレクトリの repo の下へ
+devctx island detach devctx                    # トップレベルへ戻す
+devctx island rm hr --reparent                 # 子を hr の親へ付け替えて削除
+devctx island list                             # 木と、repo ごとのアクティブなセッション数
+```
+
+ref は `island:<id>` または `repo:<path>` です（`repo:.` はカレントディレクトリの repo）。名前だけを渡すと island の id、次に repo の basename を探します。island と repo の両方に当たる、または同じ basename の repo が複数ある場合は、推測せず候補を型付き ref で表示して何も変更しません。`island rm` は子がいると `--reparent` を付けない限り拒否します。循環（island → repo → island を含む）も拒否します。
+
+木は `~/.config/devctx/islands.yaml` に型付き ref で保存されます（repo のパスは symlink 解決済みで、セッションを repo 単位にまとめるキーと同じです）。
+
+```yaml
+islands:
+  - id: hr
+    name: 人事強化
+  - id: m3
+    name: M3 UI
+    parent: repo:/Users/me/code/devctx
+repos:
+  - root: /Users/me/code/devctx
+    parent: island:hr
+```
+
+このバージョンの Mind Map は island について閲覧専用です。編集は CLI で行います。親が存在しなくなった場合はトップレベルに表示され、`island list` が警告します。
+
 ### オプション設定
 
 ```bash

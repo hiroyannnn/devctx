@@ -2,7 +2,6 @@ package agentview
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,18 +55,6 @@ func GitToplevel(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// normalizePath は比較用にパスを正規化する。symlink 解決に失敗（不在等）したら Clean のみ。
-func normalizePath(p string) string {
-	if p == "" {
-		return ""
-	}
-	p = filepath.Clean(p)
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
-	}
-	return p
 }
 
 // Overlay は全 context の表示状態を返す。キーは context Name。
@@ -126,7 +113,7 @@ func newSessionIndex(contexts []model.Context, sessions []Session) sessionIndex 
 		if c.EffectiveProvider() == model.ProviderClaude {
 			owned[c.SessionID] = true
 		}
-		idx.worktrees[c.Name] = normalizePath(c.Worktree)
+		idx.worktrees[c.Name] = model.NormalizePath(c.Worktree)
 	}
 	for _, s := range sessions {
 		if !owned[s.SessionID] && s.Toplevel != "" {

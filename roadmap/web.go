@@ -112,6 +112,8 @@ type Server struct {
 	StoreLoader   StoreLoader
 	InsightLoader InsightLoader
 	EventLoader   EventLoader
+	// IslandLoader は /api/islands の供給元。nil なら空の木を返す（NewServer の引数を増やさず既存の呼び出しを保つ）
+	IslandLoader IslandLoader
 	Scanner       *Scanner
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
@@ -146,6 +148,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/roadmap", s.handleAPIRoadmap)
 	mux.HandleFunc("/api/roadmap-map", s.handleAPIRoadmapMap)
 	mux.HandleFunc("/api/roadmap-graph", s.handleAPIRoadmapGraph)
+	mux.HandleFunc("/api/islands", s.handleAPIIslands)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.HandleFunc("/", s.handleIndex)
 
@@ -364,10 +367,8 @@ func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		projectKey := ctx.RepoRoot
-		if projectKey == "" {
-			projectKey = ctx.Worktree
-		}
+		// Why: symlink 経由と実パスで同じ repo が別グループに割れないよう、islands と共通の RepoKey で束ねる
+		projectKey := model.RepoKey(ctx)
 		projectName := filepath.Base(projectKey)
 
 		if _, exists := projectMap[projectKey]; !exists {
@@ -418,10 +419,7 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 	var projectOrder []string
 
 	for _, ctx := range active {
-		repoRoot := ctx.RepoRoot
-		if repoRoot == "" {
-			repoRoot = ctx.Worktree
-		}
+		repoRoot := model.RepoKey(ctx)
 		if repoRoot == "" {
 			repoRoot = "__ungrouped__"
 		}
