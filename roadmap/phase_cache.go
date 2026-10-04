@@ -42,7 +42,10 @@ func (s *Server) clock() time.Time {
 // scanPhases は active のうち scan が必要な context の phase を (Worktree, Branch) 単位で求める。
 // 結果は phaseCacheTTL の間 Server に保持し、/api/roadmap と /api/roadmap-map で共有する。
 // Why not Scanner 側にキャッシュ: RefreshPhase / ScanAll は CLI が使い、常に最新の phase を要る。
-func (s *Server) scanPhases(active []model.Context) map[phaseKey]model.Phase {
+//
+// validUntil は返した phase のうち最も早い期限（scan 不要で phase を 1 つも使わなければ zero）。
+// 結果を更にキャッシュする呼び出し側は、これを超えて使わない（二重のキャッシュで古さが TTL を超えないように）。
+func (s *Server) scanPhases(active []model.Context) (phases map[phaseKey]model.Phase, validUntil time.Time) {
 	// 期限切れの scan 中に同時に来たリクエストが同じ組を重ねて scan しないよう、scan ごと直列化する
 	s.phaseMu.Lock()
 	defer s.phaseMu.Unlock()
@@ -58,7 +61,12 @@ func (s *Server) scanPhases(active []model.Context) map[phaseKey]model.Phase {
 		}
 	}
 
-	phases := make(map[phaseKey]model.Phase)
+	phases = make(map[phaseKey]model.Phase)
+	use := func(expires time.Time) {
+		if validUntil.IsZero() || expires.Before(validUntil) {
+			validUntil = expires
+		}
+	}
 	// misses は cache に無い組を worktree ごとにまとめたもの
 	var misses [][]model.Context
 	missIndex := make(map[string]int)
@@ -70,6 +78,7 @@ func (s *Server) scanPhases(active []model.Context) map[phaseKey]model.Phase {
 		key := phaseKey{ctx.Worktree, ctx.Branch}
 		if c, ok := s.phaseCache[key]; ok {
 			phases[key] = c.phase
+			use(c.expires)
 			continue
 		}
 		if queued[key] {
@@ -85,11 +94,15 @@ func (s *Server) scanPhases(active []model.Context) map[phaseKey]model.Phase {
 		misses[i] = append(misses[i], ctx)
 	}
 
-	for key, phase := range s.scanMisses(misses) {
+	scanned := s.scanMisses(misses)
+	// TTL は scan を終えた時刻から数える。開始時刻からだと、TTL より長い scan の結果が保存した時点で切れている
+	expires := s.clock().Add(phaseCacheTTL)
+	for key, phase := range scanned {
 		phases[key] = phase
-		s.phaseCache[key] = cachedPhase{phase: phase, expires: now.Add(phaseCacheTTL)}
+		s.phaseCache[key] = cachedPhase{phase: phase, expires: expires}
+		use(expires)
 	}
-	return phases
+	return phases, validUntil
 }
 
 // scanMisses は worktree ごとの組を並列に scan する（同じ worktree の組はその中で順に scan する）。

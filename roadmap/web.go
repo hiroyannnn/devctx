@@ -128,7 +128,7 @@ type Server struct {
 	// phaseMu は phaseCache と、その miss 時の scan を守る（scanPhases）
 	phaseMu    sync.Mutex
 	phaseCache map[phaseKey]cachedPhase
-	// now は phase キャッシュの時計。nil なら time.Now（テストで TTL を待たずに進めるため）
+	// now は phase キャッシュと /api/roadmap の応答キャッシュの時計。nil なら time.Now（テストで TTL を待たずに進めるため）
 	now func() time.Time
 }
 
@@ -220,13 +220,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // loadRoadmapEntries は /api/roadmap と /api/roadmap-map が共有する entry 組み立て。
 // 返す entries は active と同じ順・同じ長さ（呼び出し側が index で ctx と突き合わせる）。
 // Why not /api/roadmap-graph も寄せる: graph は Phase を scan せず ctx.Phase をそのまま使い、載せる項目も違う。
-func (s *Server) loadRoadmapEntries() ([]model.Context, []RoadmapEntry, error) {
+// phaseValidUntil は entries に載せた scan 結果の期限（scanPhases の validUntil）。
+func (s *Server) loadRoadmapEntries() (active []model.Context, entries []RoadmapEntry, phaseValidUntil time.Time, err error) {
 	store, err := s.StoreLoader.LoadStore()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, time.Time{}, err
 	}
 
-	active := store.Active()
+	active = store.Active()
 	views := s.agentViews(store.Contexts)
 
 	// Load insights (non-fatal if fails)
@@ -241,8 +242,8 @@ func (s *Server) loadRoadmapEntries() ([]model.Context, []RoadmapEntry, error) {
 		events, _ = s.EventLoader.LoadEvents()
 	}
 
-	scanned := s.scanPhases(active)
-	entries := make([]RoadmapEntry, 0, len(active))
+	scanned, phaseValidUntil := s.scanPhases(active)
+	entries = make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
 		phase := ctx.Phase
 		// If no cached phase, use the fast scan result for this context
@@ -292,13 +293,13 @@ func (s *Server) loadRoadmapEntries() ([]model.Context, []RoadmapEntry, error) {
 
 		entries = append(entries, entry)
 	}
-	return active, entries, nil
+	return active, entries, phaseValidUntil, nil
 }
 
 func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	// Return cached result if still valid
 	s.cacheMu.RLock()
-	if s.cachedResult != nil && time.Now().Before(s.cacheExpiry) {
+	if s.cachedResult != nil && s.clock().Before(s.cacheExpiry) {
 		data := s.cachedResult
 		s.cacheMu.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -307,7 +308,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	}
 	s.cacheMu.RUnlock()
 
-	_, entries, err := s.loadRoadmapEntries()
+	_, entries, phaseValidUntil, err := s.loadRoadmapEntries()
 	if err != nil {
 		log.Printf("roadmap: failed to load store: %v", err)
 		http.Error(w, "failed to load session data", http.StatusInternalServerError)
@@ -324,7 +325,11 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	// Cache the result
 	s.cacheMu.Lock()
 	s.cachedResult = data
-	s.cacheExpiry = time.Now().Add(cacheTTL)
+	s.cacheExpiry = s.clock().Add(cacheTTL)
+	// 使った phase の期限より長く応答を使い回さない（phase の古さを TTL 以内に保つ）
+	if !phaseValidUntil.IsZero() && phaseValidUntil.Before(s.cacheExpiry) {
+		s.cacheExpiry = phaseValidUntil
+	}
 	s.cacheMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -332,7 +337,7 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
-	active, entries, err := s.loadRoadmapEntries()
+	active, entries, _, err := s.loadRoadmapEntries()
 	if err != nil {
 		log.Printf("roadmap-map: failed to load store: %v", err)
 		http.Error(w, "failed to load session data", http.StatusInternalServerError)
