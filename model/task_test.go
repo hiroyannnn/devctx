@@ -291,3 +291,36 @@ func TestValidateReportsTaskWithoutParent(t *testing.T) {
 		t.Errorf("valid: %v", err)
 	}
 }
+
+// 手編集でタスクの下に置かれた子は UI に見えない（Resolved が切る）。そのタスクを消すとき、
+// 見えない子の中にタスクがいれば、親なしにしてしまうので拒否する。
+func TestRemoveIslandExpectingRefusesHiddenTaskChild(t *testing.T) {
+	newS := func() *IslandStore {
+		return &IslandStore{
+			Islands: []Island{
+				{ID: "hr", Name: "HR"},
+				{ID: "t1", Name: "T1", Kind: KindTask, Parent: "island:hr"},
+				{ID: "t2", Name: "T2", Kind: KindTask, Parent: "island:t1"}, // 手編集
+				{ID: "x", Name: "X", Parent: "island:t1"},                   // 手編集（テーマ島）
+			},
+			TaskSeq: 2,
+		}
+	}
+	s := newS()
+	err := s.RemoveIslandExpecting("t1", nil)
+	if err == nil || !strings.Contains(err.Error(), "tasks need a parent") {
+		t.Fatalf("err = %v", err)
+	}
+	if !reflect.DeepEqual(*s, *newS()) {
+		t.Error("store changed on error")
+	}
+	// タスクでない見えない子だけなら、従来どおり最上位へ落として消せる
+	s = newS()
+	s.Islands = append(s.Islands[:2:2], s.Islands[3])
+	if err := s.RemoveIslandExpecting("t1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasIsland("t1") || s.findIsland("x").Parent != "" {
+		t.Errorf("got %+v", s.Islands)
+	}
+}

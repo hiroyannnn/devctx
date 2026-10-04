@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -133,12 +134,50 @@ func (s *IslandStore) isTask(ref string) bool {
 	return is != nil && is.Kind == KindTask
 }
 
-// checkParentAllowed は parent の下に子を置けるかを検査する。タスクの下には何も置けない。
+// errTaskParent は、タスクの下に子を置こうとしたことを表す。
+var errTaskParent = errors.New("tasks cannot have children")
+
+// checkParentAllowed は parent の下に子を置けるかを検査する（形式・island の実在・タスクでないこと）。repo は未登録でもよい。
 // Why: 次の PR でエージェントセッションがタスクの下に付く。island / repo をタスクの下に許すと、
-// 「タスク = 葉」の前提（描画・完了判定）が崩れる。追加・タスク追加・付け替えの全経路でここを通す。
+// 「タスク = 葉」の前提（描画・完了判定）が崩れる。追加・タスク追加・付け替えの全経路でここを通し、
+// 読み出し側（ParentOf / Validate）も同じ判定で手編集の親を切る。
 func (s *IslandStore) checkParentAllowed(parent string) error {
-	if s.isTask(parent) {
-		return fmt.Errorf("tasks cannot have children (parent %s is a task)", parent)
+	kind, v, err := ParseRef(parent)
+	if err != nil {
+		return err
+	}
+	if kind != RefIsland {
+		return nil
+	}
+	is := s.findIsland(v)
+	if is == nil {
+		return fmt.Errorf("island %q not found", v)
+	}
+	if is.Kind == KindTask {
+		return fmt.Errorf("%w (parent %s is a task)", errTaskParent, parent)
+	}
+	return nil
+}
+
+// checkClearable は、refs をトップレベルへ上げてよいか（タスクを含まないか）を検査する。何も変えない。
+func (s *IslandStore) checkClearable(refs ...string) error {
+	for _, r := range refs {
+		if s.isTask(r) {
+			return fmt.Errorf("%s is a task; tasks need a parent; move them first", r)
+		}
+	}
+	return nil
+}
+
+// clearParents は refs の親を外してトップレベルへ上げる。全体を先に検査し、タスクが 1 つでもあれば何も変えない。
+// Why: 親を "" にする経路（Detach / 親なしの島の reparent 削除 / UI に見えない子の切り離し）をここ 1 か所に集め、
+// 「タスクは親が要る」を経路ごとに書き直さない。
+func (s *IslandStore) clearParents(refs ...string) error {
+	if err := s.checkClearable(refs...); err != nil {
+		return err
+	}
+	for _, r := range refs {
+		s.setParentUnchecked(r, "")
 	}
 	return nil
 }
@@ -157,9 +196,6 @@ func (s *IslandStore) AddIsland(name, id, parent string) (Island, error) {
 		return Island{}, fmt.Errorf("island name is empty")
 	}
 	if parent != "" {
-		if err := s.checkRefExists(parent); err != nil {
-			return Island{}, err
-		}
 		if err := s.checkParentAllowed(parent); err != nil {
 			return Island{}, err
 		}
@@ -204,9 +240,6 @@ func (s *IslandStore) AddTask(name, parent string) (Island, error) {
 	}
 	if parent == "" {
 		return Island{}, fmt.Errorf("task needs a parent (island:<id> or repo:<path>)")
-	}
-	if err := s.checkRefExists(parent); err != nil {
-		return Island{}, err
 	}
 	if err := s.checkParentAllowed(parent); err != nil {
 		return Island{}, err
@@ -266,18 +299,17 @@ func (s *IslandStore) removeIsland(id string, reparent bool, newParent string) e
 	if len(children) > 0 && !reparent {
 		return fmt.Errorf("island %q has %d child(ren) (%s); use --reparent to move them up", id, len(children), strings.Join(children, ", "))
 	}
-	// Why: 親のない島を reparent で消すと子が最上位へ上がる。タスクは親が要る（Detach と同じ不変条件）ので、
-	// 先に別の親へ移してもらう。テーマ島の子は最上位でもよい。
+	// 親のない島を reparent で消すと子が最上位へ上がる。タスクの子がいれば clearParents が拒否する（先に別の親へ移してもらう）。
+	// テーマ島の子は最上位でもよい。
 	if newParent == "" {
-		for _, c := range children {
-			if s.isTask(c) {
-				return fmt.Errorf("island %q has task child %s; tasks need a parent; move them first", id, c)
-			}
+		if err := s.clearParents(children...); err != nil {
+			return fmt.Errorf("island %q: %w", id, err)
 		}
-	}
-	for _, c := range children {
-		// 付け替え先は削除対象の親なので存在・循環の検査は不要（木の中で 1 段持ち上げるだけ）
-		s.setParentUnchecked(c, newParent)
+	} else {
+		for _, c := range children {
+			// 付け替え先は削除対象の親なので存在・循環の検査は不要（木の中で 1 段持ち上げるだけ）
+			s.setParentUnchecked(c, newParent)
+		}
 	}
 	for i := range s.Islands {
 		if s.Islands[i].ID == id {
@@ -322,12 +354,26 @@ func (s *IslandStore) RemoveIslandExpecting(id string, expect []string) error {
 	if len(current) > 0 && !same {
 		return &ChildrenChangedError{Current: current}
 	}
+	var hidden []string
 	for _, c := range s.Children(ref) {
 		if !visible[c] {
-			s.setParentUnchecked(c, "")
+			hidden = append(hidden, c)
 		}
 	}
-	return s.removeIsland(id, len(current) > 0, resolved.ParentOf(ref))
+	newParent := resolved.ParentOf(ref)
+	// 何かを書き換える前に、失敗しうる検査を済ませる（エラーのときストアを変えない）
+	if err := s.checkClearable(hidden...); err != nil {
+		return fmt.Errorf("island %q: %w", id, err)
+	}
+	if newParent == "" {
+		if err := s.checkClearable(current...); err != nil {
+			return fmt.Errorf("island %q: %w", id, err)
+		}
+	}
+	if err := s.clearParents(hidden...); err != nil {
+		return err
+	}
+	return s.removeIsland(id, len(current) > 0, newParent)
 }
 
 func (s *IslandStore) setParentUnchecked(child, parent string) {
@@ -367,9 +413,6 @@ func (s *IslandStore) SetParent(child, parent string) error {
 	if err := s.checkRefExists(child); err != nil {
 		return err
 	}
-	if err := s.checkRefExists(parent); err != nil {
-		return err
-	}
 	if err := s.checkParentAllowed(parent); err != nil {
 		return err
 	}
@@ -393,12 +436,8 @@ func (s *IslandStore) Detach(child string) error {
 	if err := s.checkRefExists(child); err != nil {
 		return err
 	}
-	// Why: タスクは親の下でだけ意味を持つ（UI のルートへのドロップも無操作）。付け替えは SetParent を使う
-	if s.isTask(child) {
-		return fmt.Errorf("%s is a task and needs a parent; move it with attach", child)
-	}
-	s.setParentUnchecked(child, "")
-	return nil
+	// タスクは親の下でだけ意味を持つ（UI のルートへのドロップも無操作）。付け替えは SetParent を使う
+	return s.clearParents(child)
 }
 
 // ParentOf は ref の親 ref を返す。トップレベル・未登録・親が実在しない（dangling）場合は ""。
@@ -422,11 +461,8 @@ func (s *IslandStore) ParentOf(ref string) string {
 		}
 		parent = rn.Parent
 	}
-	if s.checkRefExists(parent) != nil {
-		return ""
-	}
-	// 手編集でタスクの下に置かれたものは、dangling と同じくトップレベルとして扱う
-	if s.isTask(parent) {
+	// dangling も、手編集でタスクの下に置かれたものも、トップレベルとして扱う
+	if s.checkParentAllowed(parent) != nil {
 		return ""
 	}
 	return parent
@@ -490,10 +526,10 @@ func (s *IslandStore) Resolved() IslandStore {
 // 判定は Resolved と同じ（元の Parent があるのに解決後は ""）なので、API と CLI で食い違わない。
 func (s *IslandStore) Validate() error {
 	r := s.Resolved()
-	var bad, underTask []string
+	var bad, underTask, orphanTasks []string
 	report := func(ref, parent string) {
 		entry := fmt.Sprintf("%s -> %s", ref, parent)
-		if s.isTask(parent) {
+		if errors.Is(s.checkParentAllowed(parent), errTaskParent) {
 			underTask = append(underTask, entry)
 		} else {
 			bad = append(bad, entry)
@@ -503,17 +539,14 @@ func (s *IslandStore) Validate() error {
 		if is.Parent != "" && r.Islands[i].Parent == "" {
 			report(IslandRef(is.ID), is.Parent)
 		}
+		// 親が "" のタスクは Resolved の前後で変わらないので、上の判定には載らない
+		if is.Kind == KindTask && is.Parent == "" {
+			orphanTasks = append(orphanTasks, IslandRef(is.ID))
+		}
 	}
 	for i, rn := range s.Repos {
 		if rn.Parent != "" && r.Repos[i].Parent == "" {
 			report(RepoRef(rn.Root), rn.Parent)
-		}
-	}
-	// 親が "" のタスクは Resolved 前後で変わらないので、上の判定には載らない
-	var orphanTasks []string
-	for _, is := range s.Islands {
-		if is.Kind == KindTask && is.Parent == "" {
-			orphanTasks = append(orphanTasks, IslandRef(is.ID))
 		}
 	}
 	var msgs []string
