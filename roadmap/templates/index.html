@@ -2017,7 +2017,7 @@ async function runIslandOp(body) {
       showToast(err || ('HTTP ' + res.status));
     }
     refresh();
-    return;
+    return false;
   }
   pendingSelect = body.op === 'add' ? (res.data.ref || null) : select;
   // 進行中の取得（ポーリング）は、この操作より前の木を持っているので捨てさせる
@@ -2025,6 +2025,7 @@ async function runIslandOp(body) {
   applyRefreshed({ mapData: cachedData, graphData: cachedGraphData, islandsData: normalizeIslands(res.data.islands) });
   // 編集 UI が開いていて保留になった場合だけ、選択を保留の反映まで残す
   if (!pendingData) pendingSelect = null;
+  return true;
 }
 
 // ノードの DOM 座標（graph-canvas 内）の矩形
@@ -2263,13 +2264,30 @@ function openContextMenu(nodeId, x, y) {
 var DROP_BORDER = '#EF6F6F'; // 落とし先の強調色（MindMup の落とし先と同じ赤の破線）
 
 // 落とし先の強調を戻す。ノードが作り直し等で無ければ何もしない。
+// vis の color は、highlight / hover が無い入力に対しては base の色で埋める。強調で上書きした highlight / hover を
+// 元へ戻すには、省略せず全部を明示して送る必要があるので、元の color を省略なしの形にしておく。
+function fullColor(color) {
+  var bg = color && color.background, border = color && color.border;
+  function variant(v) {
+    return { background: (v && v.background) || bg, border: (v && v.border) || border };
+  }
+  return { background: bg, border: border, highlight: variant(color && color.highlight), hover: variant(color && color.hover) };
+}
+
+// 落とし先の強調を戻す。ノードが作り直し等で無ければ何もしない。
+// shapeProperties は vis が深くマージするので、borderDashes は省略ではなく false を明示して消す。
 function restoreDropHighlight() {
   var st = dragState;
   if (!st || !st.saved) return;
   var saved = st.saved;
   st.saved = null;
   if (graphNodes && graphNodes.get(saved.id)) {
-    graphNodes.update({ id: saved.id, color: saved.color, borderWidth: saved.borderWidth, shapeProperties: saved.shapeProperties });
+    graphNodes.update({
+      id: saved.id,
+      color: saved.color,
+      borderWidth: saved.borderWidth,
+      shapeProperties: Object.assign({}, saved.shapeProperties, { borderDashes: false })
+    });
   }
 }
 
@@ -2281,57 +2299,107 @@ function setDropHighlight(id) {
   var n = id ? graphNodes.get(id) : null;
   if (!n) return;
   // 元の見た目を控え、枠だけ赤い破線にする（背景は元のまま。透過させない）
-  st.saved = { id: id, color: n.color, borderWidth: n.borderWidth, shapeProperties: n.shapeProperties };
-  var bg = n.color && n.color.background;
-  var c = { background: bg, border: DROP_BORDER };
+  var orig = fullColor(n.color);
+  st.saved = { id: id, color: orig, borderWidth: n.borderWidth, shapeProperties: n.shapeProperties };
+  var c = { background: orig.background, border: DROP_BORDER };
   graphNodes.update({
     id: id,
-    color: { background: bg, border: DROP_BORDER, highlight: c, hover: c },
+    color: { background: orig.background, border: DROP_BORDER, highlight: c, hover: c },
     borderWidth: 3,
     shapeProperties: Object.assign({}, n.shapeProperties, { borderDashes: [6, 4] })
   });
+}
+
+// DOM 座標の点が、幅 w・高さ h のグラフ領域の内側か。Hammer は window の pointermove でも dragging を出すので、
+// グラフの外でも pointer.canvas は（画面外の）グラフ座標に写ってしまう。落とし先はグラフ内にあるときだけ選ぶ。
+function pointInside(dom, w, h) {
+  return !!dom && dom.x >= 0 && dom.y >= 0 && dom.x <= w && dom.y <= h;
+}
+
+function pointerInsideGraph(dom) {
+  var el = document.getElementById('graph-canvas');
+  return !!el && pointInside(dom, el.clientWidth, el.clientHeight);
 }
 
 // ドラッグ開始。親付け替えの対象（All Projects の island / repo ノード 1 つ）なら、候補とその矩形を先に求める。
 // それ以外（視点のパン・session などのノード）も、描画の作り直しで途切れないよう dragState だけは立てる（holdRender 用）。
 function beginDrag(nodeId) {
   var kind = nodeId ? editableKind(graphNodes.get(nodeId)) : null;
+  var st;
   if (!graphRootId || (kind !== 'island' && kind !== 'repo')) {
-    dragState = { id: null };
-    return;
+    st = { id: null };
+  } else {
+    // 矩形は canvas 座標。候補はドラッグ中に動かない（動かすのは掴んだノードだけ）ので、1 回測れば足りる
+    var boxes = dropCandidateIds(graphNodes.get(), nodeId, cachedIslands).map(function(id) {
+      var b = graphNetwork.getBoundingBox(id);
+      return { id: id, left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+    });
+    // 取り消し・無操作・失敗のときに、掴んだノードを元の位置へ戻すために開始位置を控える
+    st = { id: nodeId, boxes: boxes, target: null, saved: null, cancelled: false, finished: false, start: graphNetwork.getPosition(nodeId) };
   }
-  // 矩形は canvas 座標。候補はドラッグ中に動かない（動かすのは掴んだノードだけ）ので、1 回測れば足りる
-  var boxes = dropCandidateIds(graphNodes.get(), nodeId, cachedIslands).map(function(id) {
-    var b = graphNetwork.getBoundingBox(id);
-    return { id: id, left: b.left, right: b.right, top: b.top, bottom: b.bottom };
-  });
-  dragState = { id: nodeId, boxes: boxes, target: null, saved: null, cancelled: false };
+  dragState = st;
+  armDragSafety(st);
 }
 
-function updateDragTarget(canvasPoint) {
+// dragEnd が来ない終わり方への備え。このドラッグの間だけ window に登録し、終わったら外す。
+// pointercancel（タッチの中断等）は vis に dragEnd が届かず、dragState が残ると描画の保留が解けなくなる。
+// pointerup は通常 dragEnd が先に処理するので、次の tick でまだこのドラッグが残っていたときだけ終わらせる。
+function armDragSafety(st) {
+  function disarm() {
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onCancel);
+  }
+  function onUp() {
+    disarm();
+    setTimeout(function() { if (dragState === st) finishDrag(); }, 0);
+  }
+  function onCancel() {
+    disarm();
+    if (dragState !== st) return;
+    revertDragPosition(st);
+    cancelDrag();
+    flushPending();
+  }
+  st.disarm = disarm;
+  window.addEventListener('pointerup', onUp, { once: true });
+  window.addEventListener('pointercancel', onCancel, { once: true });
+}
+
+// 掴んだノードを開始位置へ戻す。親が変わらなかった（取り消し・無操作・失敗）のに、落とした場所に
+// 残ると付け替わったように見えるため。成功時は再描画が配置し直すので戻さない。
+function revertDragPosition(st) {
+  if (st && st.id && st.start && graphNodes.get(st.id)) graphNetwork.moveNode(st.id, st.start.x, st.start.y);
+}
+
+function updateDragTarget(canvasPoint, inside) {
   var st = dragState;
   if (!st || !st.id || st.cancelled) return;
-  setDropHighlight(hitTarget(st.boxes, canvasPoint));
+  // グラフの外では落とし先を持たない（戻ってくるまで null のまま）
+  setDropHighlight(inside === false ? null : hitTarget(st.boxes, canvasPoint));
 }
 
 // ドラッグ終了。強調中の落とし先があり、結果が無操作でなければ runIslandOp で送る。
-// 落とし先は離す直前の強調（dragging で更新した target）だけを見る。グラフの外へ出たときは mouseleave が外している。
+// 落とし先は、グラフの内側にいる間に選ばれた強調（dragging で更新した target）だけを見る。
 // 送る間は dragState を残す（= 描画を保留する）ので、応答の木は保留に入り、完了後に flushPending で反映される。
 // Why: ポーリング由来の古い保留が、操作の結果を上書きして描画しないようにする（応答反映時に refreshSeq も進む）。
 function finishDrag() {
   var st = dragState;
-  if (!st) return;
+  if (!st || st.finished) return;
+  st.finished = true;
+  if (st.disarm) st.disarm();
   var target = st.id && !st.cancelled ? st.target : null;
   restoreDropHighlight();
   var op = target ? dropOpFor(st.id, target, cachedIslands) : null;
   if (!op) {
+    revertDragPosition(st);
     dragState = null;
     flushPending();
     return;
   }
-  runIslandOp(op).then(function() {
+  runIslandOp(op).then(function(ok) {
     // 待っている間に次のドラッグが始まっていたら、その状態は触らない
     if (dragState !== st) return;
+    if (ok === false) revertDragPosition(st); // 失敗時は再描画が起きないことがあるので、位置を戻す
     dragState = null;
     flushPending();
   });
@@ -2348,6 +2416,7 @@ function softCancelDrag() {
 
 // 表示切り替え・プロジェクト切り替え・再描画で、ドラッグ状態を捨てる。
 function cancelDrag() {
+  if (dragState && dragState.disarm) dragState.disarm();
   restoreDropHighlight();
   dragState = null;
 }
@@ -2370,7 +2439,7 @@ window.addEventListener('scroll', function() { if (editState.menu) endEditing(tr
 
 // グラフにフォーカスがあり、編集可能なノードが 1 つ選ばれ、編集 UI が開いていないときだけキー操作を受ける。
 function onGraphKeydown(e) {
-  if (!graphRootId || !graphNetwork || editingActive()) return;
+  if (!graphRootId || !graphNetwork || holdRender()) return;
   // 入力欄などではなく、グラフ自身（vis の frame）にフォーカスがあるときだけ
   if (e.target !== graphFocusEl()) return;
   if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2528,9 +2597,13 @@ function renderGraphView(groups, graphData, opts) {
     beginDrag(params.nodes.length === 1 ? params.nodes[0] : null);
   });
   graphNetwork.on('dragging', function(params) {
-    if (dragState && dragState.id) updateDragTarget(params.pointer.canvas);
+    if (dragState && dragState.id) updateDragTarget(params.pointer.canvas, pointerInsideGraph(params.pointer.DOM));
   });
-  graphNetwork.on('dragEnd', function() { finishDrag(); });
+  graphNetwork.on('dragEnd', function(params) {
+    // 外で離した場合、最後の dragging が内側のものでも落とし先を無効にする
+    if (dragState && dragState.id && params && params.pointer && !pointerInsideGraph(params.pointer.DOM)) setDropHighlight(null);
+    finishDrag();
+  });
 
   graphNetwork.on('click', function(params) {
     // キー操作を受けるため、クリックでグラフにフォーカスを移す

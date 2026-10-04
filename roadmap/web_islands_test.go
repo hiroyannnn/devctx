@@ -141,24 +141,29 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"graphNetwork.on('dragEnd'",                       // 離したら attach / detach を送る
 		"var DROP_BORDER = '#EF6F6F';",                    // 落とし先の強調色
 		"/api/islands/known-repos",                        // 「repo を付ける」の一覧（選んだときだけ取る）
-		"function holdRender()",                           // 描画の保留は編集 UI とドラッグ中
-		"function showRepoSubmenu(",                       // 一覧は「repo を付ける…」を選んだときに取る
-		"function attachableRepos(",                       // 子・祖先（循環）を除いた repo の候補
-		"repo を付ける…",                                      // メニュー項目
-		"var refreshInFlight = false;",                    // ポーリングが重ならない
-		"normalizeIslands(res.data.islands)",              // 成功後は応答の木で描画する（全体取得しない）
-		"function siblingParentRef(",                      // Enter で兄弟を足すときの親
-		"function childrenRefsOf(",                        // 削除確認で見せる子（server に children として送る）
-		"keyboard: { enabled: true, bindToWindow: false",  // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
-		"graphNetwork.moveTo({ scale: keep.scale",         // 再描画で視点（拡大率・位置）を保つ
-		"子が変わりました。もう一度確認してください",                           // children の 409 のトースト
+		"window.addEventListener('pointercancel', onCancel, { once: true })", // pointercancel でドラッグ状態が残らない（このドラッグの間だけ登録）
+		"function pointerInsideGraph(",                                       // グラフの外では落とし先を選ばない
+		"borderDashes: false",                                                // 強調の破線は省略ではなく false で消す（vis は深くマージする）
+		"function fullColor(",                                                // highlight / hover まで省略なしで元へ戻す
+		"graphNetwork.moveNode(st.id, st.start.x, st.start.y)",               // 取り消し・無操作・失敗では元の位置へ戻す
+		"function holdRender()",                                              // 描画の保留は編集 UI とドラッグ中
+		"function showRepoSubmenu(",                                          // 一覧は「repo を付ける…」を選んだときに取る
+		"function attachableRepos(",                                          // 子・祖先（循環）を除いた repo の候補
+		"repo を付ける…",                                                         // メニュー項目
+		"var refreshInFlight = false;",                                       // ポーリングが重ならない
+		"normalizeIslands(res.data.islands)",                                 // 成功後は応答の木で描画する（全体取得しない）
+		"function siblingParentRef(",                                         // Enter で兄弟を足すときの親
+		"function childrenRefsOf(",                                           // 削除確認で見せる子（server に children として送る）
+		"keyboard: { enabled: true, bindToWindow: false",                     // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
+		"graphNetwork.moveTo({ scale: keep.scale",                            // 再描画で視点（拡大率・位置）を保つ
+		"子が変わりました。もう一度確認してください",                                              // children の 409 のトースト
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)
 		}
 	}
-	// ドラッグの間引き（rAF）と document 全体の mouseup 保険は持たない
-	for _, gone := range []string{"requestAnimationFrame", "settling"} {
+	// ドラッグの間引き（rAF）と、ドラッグに依らない document 全体の mouseup 保険は持たない
+	for _, gone := range []string{"requestAnimationFrame", "settling", "document.addEventListener('mouseup'"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("index.html still contains %q", gone)
 		}
