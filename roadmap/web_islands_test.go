@@ -130,14 +130,17 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"function selectAfterOp(",                         // 全 op が同じ再描画経路で選択を引き継ぐ
 		"var islandSides = {};",                           // 部分木の左右は再描画をまたいで保つ
 		"var refreshSeq = 0;",
-		"function closeEditUI()",                  // 編集 UI を閉じる処理は 1 か所
-		"var refreshInFlight = false;",            // ポーリングが重ならない
-		"normalizeIslands(res.data.islands)",      // 成功後は応答の木で描画する（全体取得しない）                             // 古い取得が新しい取得を巻き戻さない
-		"function siblingParentRef(",              // Enter で兄弟を足すときの親
-		"function childrenRefsOf(",                // 削除確認で見せる子（server に children として送る）
-		"keyboard: { enabled: false }",            // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
-		"graphNetwork.moveTo({ scale: keep.scale", // 再描画で視点（拡大率・位置）を保つ
-		"子が変わりました。もう一度確認してください",                   // children の 409 のトースト
+		"function closeEditUIOnOutsideMouseDown()",       // 外側クリックで閉じても、更新の反映はクリックが済んでから
+		"function deleteConfirmModel(",                   // 削除は子がいなくても必ず確認する
+		"function graphFocusEl()",                        // キー操作の受け手は vis の frame
+		"function closeEditUI()",                         // 編集 UI を閉じる処理は 1 か所
+		"var refreshInFlight = false;",                   // ポーリングが重ならない
+		"normalizeIslands(res.data.islands)",             // 成功後は応答の木で描画する（全体取得しない）                             // 古い取得が新しい取得を巻き戻さない
+		"function siblingParentRef(",                     // Enter で兄弟を足すときの親
+		"function childrenRefsOf(",                       // 削除確認で見せる子（server に children として送る）
+		"keyboard: { enabled: true, bindToWindow: false", // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
+		"graphNetwork.moveTo({ scale: keep.scale",        // 再描画で視点（拡大率・位置）を保つ
+		"子が変わりました。もう一度確認してください",                          // children の 409 のトースト
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)

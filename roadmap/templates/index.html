@@ -435,7 +435,8 @@ h1 {
 }
 #graph-toolbar button:hover { color: #f0f6fc; border-color: #484f58; }
 #graph-toolbar select { margin-right: 8px; }
-#graph-canvas:focus { outline: none; border-color: #388bfd; }
+#graph-canvas:focus-within { border-color: #388bfd; }
+#graph-canvas .vis-network:focus { outline: none; }
 .ctx-menu {
   position: fixed;
   z-index: 1000;
@@ -545,7 +546,7 @@ h1 {
     <button onclick="graphFit()">Fit</button>
     <button onclick="graphReset()">Reset</button>
   </div>
-  <div id="graph-canvas" tabindex="0"></div>
+  <div id="graph-canvas"></div>
   <div id="graph-inspector">
     <div class="inspector-header">
       <span class="inspector-name" id="inspector-name"></span>
@@ -579,6 +580,8 @@ var graphEdges = null;
 var allSessionsFlat = [];
 
 function setView(view) {
+  // 編集 UI（特に削除確認）を開いたまま別の表示へ移ると、editingActive() が真のまま自動更新が止まる
+  cancelEditing();
   currentView = view;
   localStorage.setItem('devctx-view', view);
   document.getElementById('btn-project').className = 'view-btn' + (view === 'project' ? ' active' : '');
@@ -1798,7 +1801,8 @@ function keyAction(key, kind) {
   if (key === 'Enter') return 'addSibling';
   if (kind !== 'island') return null;
   if (key === 'F2' || key === ' ') return 'rename';
-  if (key === 'Delete' || key === 'Backspace') return 'delete';
+  // Mac の「delete」キーは Backspace だが、打ち間違いで島を消さないよう Delete だけにする
+  if (key === 'Delete') return 'delete';
   return null;
 }
 
@@ -1848,15 +1852,41 @@ function flushPending() {
 // クリックされた側のフォーカスを奪わないよう noFocus を渡す。
 function endEditing(noFocus) {
   closeEditUI();
-  var canvasEl = document.getElementById('graph-canvas');
-  if (!noFocus && canvasEl && graphRootId) canvasEl.focus({ preventScroll: true });
+  var focusEl = graphFocusEl();
+  if (!noFocus && focusEl && graphRootId) focusEl.focus({ preventScroll: true });
   flushPending();
+}
+
+// キー操作を受ける要素は vis の frame（tabindex=0 で、vis の keyboard もここに束縛される）。再描画のたびに作り直される。
+function graphFocusEl() {
+  var canvasEl = document.getElementById('graph-canvas');
+  return canvasEl && (canvasEl.querySelector('.vis-network') || canvasEl);
+}
+
+// 編集 UI の外を押したときの閉じ方。UI はすぐ閉じるが、保留していた更新の反映（= network の作り直し）は
+// そのクリックが済んでから行う。押下の直後に作り直すと、続くクリック / 右クリックが
+// レイアウト前の network に当たり、描画完了後に古い選択へ戻されるため。
+var deferredFlushTimer = null;
+function closeEditUIOnOutsideMouseDown() {
+  closeEditUI();
+  function flushLater() {
+    document.removeEventListener('click', flushLater, true);
+    document.removeEventListener('contextmenu', flushLater, true);
+    clearTimeout(deferredFlushTimer);
+    deferredFlushTimer = null;
+    setTimeout(flushPending, 0); // vis のクリック処理（選択）が先に済むようにする
+  }
+  document.addEventListener('click', flushLater, true);
+  document.addEventListener('contextmenu', flushLater, true);
+  // クリックにならなかった（ドラッグ等）場合の保険
+  deferredFlushTimer = setTimeout(flushLater, 1000);
 }
 
 // 描画の作り直し（フィルタ・プロジェクト切り替え）で消える UI を捨てる。保留分も捨てる（次の refresh が取り直す）。
 function cancelEditing() {
   closeEditUI();
   pendingData = null;
+  pendingSelect = null; // 古い操作の選択が、次の無関係な描画で効かないように
 }
 
 var toastTimer = null;
@@ -2004,27 +2034,36 @@ function refLabel(ref) {
   return ref.indexOf(REPO_PREFIX) === 0 ? repoBaseName(ref.slice(REPO_PREFIX.length)) : ref;
 }
 
-// 子がいる island は、子を親へ付け替えて消すことを確認してから消す。子がいなければそのまま消す。
+// 削除確認の文言。子がいれば付け替え先の説明と一覧、いなければ単純な確認。純関数。
+function deleteConfirmModel(name, childLabels) {
+  if (childLabels.length === 0) {
+    return { title: '「' + name + '」を削除', lead: 'この島を削除します。', items: [], okLabel: '削除' };
+  }
+  return {
+    title: '「' + name + '」を削除',
+    lead: '次の ' + childLabels.length + ' 件は親へ付け替えられます。',
+    items: childLabels,
+    okLabel: '子を親へ付け替えて削除'
+  };
+}
+
+// 島の削除は必ず確認する（元に戻せないため）。子がいれば子を親へ付け替えて消す。
 function startDeleteIsland(ref) {
   var children = childrenRefsOf(ref, cachedIslands);
-  if (children.length === 0) {
-    endEditing();
-    runIslandOp({ op: 'remove', ref: ref, children: [] });
-    return;
-  }
+  var model = deleteConfirmModel(refLabel(ref), children.map(refLabel));
   closeEditUI();
   var panel = document.createElement('div');
   panel.className = 'island-confirm';
   panel.setAttribute('role', 'dialog');
   var title = document.createElement('div');
   title.className = 'confirm-title';
-  title.textContent = '「' + refLabel(ref) + '」を削除';
+  title.textContent = model.title;
   var lead = document.createElement('div');
-  lead.textContent = '次の ' + children.length + ' 件は親へ付け替えられます。';
+  lead.textContent = model.lead;
   var list = document.createElement('ul');
-  children.forEach(function(c) {
+  model.items.forEach(function(label) {
     var li = document.createElement('li');
-    li.textContent = refLabel(c);
+    li.textContent = label;
     list.appendChild(li);
   });
   var actions = document.createElement('div');
@@ -2036,7 +2075,7 @@ function startDeleteIsland(ref) {
   var ok = document.createElement('button');
   ok.type = 'button';
   ok.className = 'danger';
-  ok.textContent = '子を親へ付け替えて削除';
+  ok.textContent = model.okLabel;
   ok.addEventListener('click', function() {
     endEditing();
     runIslandOp({ op: 'remove', ref: ref, children: children });
@@ -2111,7 +2150,9 @@ function openContextMenu(nodeId, x, y) {
 
 // 編集 UI を閉じる共通のきっかけ（メニュー外クリック / Esc / スクロール）。入力欄はスクロールに追従するので残す。
 document.addEventListener('mousedown', function(e) {
-  if (editState.menu && !editState.menu.contains(e.target)) endEditing(true);
+  var outside = (editState.menu && !editState.menu.contains(e.target)) ||
+    (editState.confirm && !editState.confirm.contains(e.target));
+  if (outside) closeEditUIOnOutsideMouseDown();
 });
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && (editState.menu || editState.confirm)) endEditing();
@@ -2121,8 +2162,16 @@ window.addEventListener('scroll', function() { if (editState.menu) endEditing(tr
 // グラフにフォーカスがあり、編集可能なノードが 1 つ選ばれ、編集 UI が開いていないときだけキー操作を受ける。
 function onGraphKeydown(e) {
   if (!graphRootId || !graphNetwork || editingActive()) return;
-  if (e.target !== e.currentTarget) return;
-  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  // 入力欄などではなく、グラフ自身（vis の frame）にフォーカスがあるときだけ
+  if (e.target !== graphFocusEl()) return;
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'Escape') {
+    // 編集 UI が無いときの Esc は、選択を外してグラフからフォーカスを離す
+    graphNetwork.unselectAll();
+    e.target.blur();
+    return;
+  }
+  if (e.shiftKey) return; // Shift+Tab（フォーカスを戻す）などを奪わない
   var sel = graphNetwork.getSelectedNodes();
   if (sel.length !== 1) return;
   var kind = editableKind(graphNodes.get(sel[0]));
@@ -2139,6 +2188,10 @@ var cachedGraphData = null; // cached /api/roadmap-graph data
 // opts.select: 描画後に選択するノード ID（add で作ったノード）。
 function renderGraphView(groups, graphData, opts) {
   opts = opts || {};
+  // 作り直すと vis の frame（フォーカス先）も新しくなるので、フォーカスを持っていたかを先に控える
+  var focusEl = graphFocusEl();
+  var hadFocus = !!focusEl && document.activeElement === focusEl;
+  var userPicked = false; // 作り直しの後、レイアウト完了前に利用者がノードを選んだか
   cancelEditing(); // ノードごと作り直すので、開いている編集 UI は残せない
   var keep = null;
   if (opts.preserveView && graphNetwork && graphRootId) {
@@ -2199,8 +2252,8 @@ function renderGraphView(groups, graphData, opts) {
       zoomSpeed: 0.3,
       multiselect: false,
       navigationButtons: false,
-      // vis のキー操作は window に束縛され、名前入力中の矢印や '-' でも視点を動かす・入力を奪うので切る（拡大・移動はマウス）
-      keyboard: { enabled: false }
+      // 矢印・+/- による移動・拡大は frame に束縛する。window 束縛だと名前入力中の矢印や '-' を奪うため
+      keyboard: { enabled: true, bindToWindow: false, speed: { x: 10, y: 10, zoom: 0.03 } }
     },
     edges: {
       arrows: { to: false },
@@ -2238,7 +2291,11 @@ function renderGraphView(groups, graphData, opts) {
       }
       var reselect = opts.select && graphNodes.get(opts.select) ? opts.select
         : keep && keep.selected && graphNodes.get(keep.selected) ? keep.selected : null;
-      if (reselect) graphNetwork.selectNodes([reselect]);
+      if (reselect && !userPicked) graphNetwork.selectNodes([reselect]);
+    }
+    if (hadFocus) {
+      var fe = graphFocusEl();
+      if (fe) fe.focus({ preventScroll: true });
     }
   });
 
@@ -2260,7 +2317,11 @@ function renderGraphView(groups, graphData, opts) {
 
   graphNetwork.on('click', function(params) {
     // キー操作を受けるため、クリックでグラフにフォーカスを移す
-    document.getElementById('graph-canvas').focus({ preventScroll: true });
+    var fe = graphFocusEl();
+    if (fe) fe.focus({ preventScroll: true });
+    // 描画の作り直しの直後（レイアウト前）に押された場合、完了後に古い選択へ戻さない
+    userPicked = true;
+    if (keep) keep.selected = params.nodes[0] || null;
     if (params.nodes.length > 0) {
       var nodeData = graphNodes.get(params.nodes[0]);
       if (nodeData._type === 'session') {
@@ -2458,9 +2519,11 @@ function graphFit() {
   if (graphNetwork) graphNetwork.fit({ animation: true, maxZoomLevel: FIT_MAX_ZOOM });
 }
 
+// Reset は視点を全体表示に戻し、部分木の左右も振り直す（islandSides は新しい島ほど片側に偏りうるので、ここで手放す）。
 function graphReset() {
-  if (graphNetwork) {
-    graphNetwork.fit({ animation: { duration: 500 }, maxZoomLevel: FIT_MAX_ZOOM });
+  islandSides = {};
+  if (currentView === 'graph' && graphGroups && graphNetwork) {
+    renderGraphView(graphGroups, cachedGraphData); // preserveView なし = fit し直す
   }
 }
 
