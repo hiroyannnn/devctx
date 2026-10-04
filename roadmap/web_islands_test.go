@@ -164,8 +164,8 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"function taskPromptText(",                                           // タスク名 + 空行 + marker（最終行）
 		"kind: 'task'",                                                       // タスク追加は add の kind で送る
 		"op: 'done'",                                                         // 完了の切り替え
-		"var draggedIsTask = isTaskRef(draggedId, islandsData);",             // タスクのドラッグでは root を候補から外す
-		"function isTaskRef(",                                                // タスクの root へのドロップは無操作
+		"var draggedIsTask = editableKind(dragged) === 'task';",              // タスクのドラッグでは root を候補から外す
+		"function buildConfirmPanel(",                                        // 削除確認とコピーのフォールバックが共有する確認パネル
 		"_type: 'task'",                                                      // タスクは島と別の種別（メニュー・キー・ドラッグの分岐点）
 		"完了にする",                                                              // タスクのメニュー
 		"未完了に戻す",                                                             // タスクのメニュー

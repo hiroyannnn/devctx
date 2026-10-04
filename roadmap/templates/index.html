@@ -1856,7 +1856,8 @@ function descendantsOf(ref, islandsData) {
 function dropCandidateIds(nodes, draggedId, islandsData) {
   var banned = descendantsOf(draggedId, islandsData);
   banned[draggedId] = true;
-  var draggedIsTask = isTaskRef(draggedId, islandsData);
+  var dragged = nodes.filter(function(n) { return n.id === draggedId; })[0];
+  var draggedIsTask = editableKind(dragged) === 'task';
   return nodes.filter(function(n) {
     var kind = editableKind(n);
     // タスクのドロップは root では無操作（dropOpFor）。強調だけ出ると操作できそうに見えるので候補から外す
@@ -1864,16 +1865,11 @@ function dropCandidateIds(nodes, draggedId, islandsData) {
   }).map(function(n) { return n.id; });
 }
 
-// ノード ID（= island ref）がタスクか。
-function isTaskRef(id, islandsData) {
-  return islandsData.islands.some(function(is) { return is.kind === 'task' && islandNodeId(is.id) === id; });
-}
-
 // 落とした結果の操作。root へは親から外す（既にトップレベルなら何もしない。タスクは親が要るので常に何もしない）、
 // island / repo へは付ける（既にそこが親なら何もしない）。無操作は null。
 function dropOpFor(draggedId, targetId, islandsData) {
   var parent = parentRefOf(draggedId, islandsData);
-  if (targetId === ROOT_ID) return parent === '' || isTaskRef(draggedId, islandsData) ? null : { op: 'detach', child: draggedId };
+  if (targetId === ROOT_ID) return parent === '' || editableKind(graphNodes.get(draggedId)) === 'task' ? null : { op: 'detach', child: draggedId };
   if (parent === targetId) return null;
   return { op: 'attach', child: draggedId, parent: targetId };
 }
@@ -1926,7 +1922,7 @@ function keyAction(key, kind) {
 // 編集 UI（メニュー / 名前入力 / 削除確認）の状態。
 // 編集中に届いた refresh は pendingData に預け、閉じてから反映する。
 // Why: 5 秒ごとの再描画（graphNetwork の作り直し）で、開いている入力欄やメニューの足元からノードが消えるのを防ぐ。
-var editState = { menu: null, input: null, confirm: null, copy: null };
+var editState = { menu: null, input: null, confirm: null };
 var pendingData = null;   // 編集中に届いた {mapData, graphData, islandsData}
 var pendingSelect = null; // 操作成功後の再描画で選択するノード（add の戻り値）
 var graphLaidOut = false; // 直近の描画の左右バランス配置が済んだか（視点の保存はこのとき以外は信用しない）
@@ -1936,7 +1932,7 @@ var dragState = null;     // ドラッグ中の状態（親付け替えの対象
 
 // 編集 UI（メニュー / 名前入力 / 削除確認）が開いているか。
 function editingActive() {
-  return !!(editState.menu || editState.input || editState.confirm || editState.copy);
+  return !!(editState.menu || editState.input || editState.confirm);
 }
 
 // 更新の反映（= network の作り直し）を保留すべきか。編集 UI に加えて、ドラッグ中も保留する
@@ -1951,9 +1947,6 @@ function removeMenu() {
 function removeConfirm() {
   if (editState.confirm) { editState.confirm.remove(); editState.confirm = null; }
 }
-function removeCopyPanel() {
-  if (editState.copy) { editState.copy.remove(); editState.copy = null; }
-}
 function removeInput() {
   if (editState.input) {
     var el = editState.input;
@@ -1964,7 +1957,7 @@ function removeInput() {
 
 // 編集 UI（メニュー / 名前入力 / 削除確認）の DOM を全部外す。保留分の反映やフォーカス移動はしない。
 function closeEditUI() {
-  removeMenu(); removeInput(); removeConfirm(); removeCopyPanel();
+  removeMenu(); removeInput(); removeConfirm();
 }
 
 // 保留していた更新があり、編集 UI がすべて閉じていれば反映する（変化の有無は applyRefreshed が再判定する）。
@@ -2173,27 +2166,11 @@ function copyTaskPrompt(ref) {
 }
 
 function showCopyFallback(text) {
-  closeEditUI();
-  var panel = document.createElement('div');
-  panel.className = 'island-confirm';
-  panel.setAttribute('role', 'dialog');
-  var title = document.createElement('div');
-  title.className = 'confirm-title';
-  title.textContent = '自動でコピーできませんでした。手でコピーしてください';
   var area = document.createElement('textarea');
   area.readOnly = true;
   area.value = text;
   area.setAttribute('aria-label', 'プロンプト');
-  var actions = document.createElement('div');
-  actions.className = 'confirm-actions';
-  var close = document.createElement('button');
-  close.type = 'button';
-  close.textContent = '閉じる';
-  close.addEventListener('click', function() { endEditing(); });
-  actions.appendChild(close);
-  [title, area, actions].forEach(function(el) { panel.appendChild(el); });
-  document.getElementById('graph-container').appendChild(panel);
-  editState.copy = panel;
+  buildConfirmPanel('自動でコピーできませんでした。手でコピーしてください', [area], [{ label: '閉じる' }]);
   area.focus();
   area.select();
 }
@@ -2229,17 +2206,44 @@ function deleteConfirmModel(name, childLabels, noun) {
   };
 }
 
-// 島の削除は必ず確認する（元に戻せないため）。子がいれば子を親へ付け替えて消す。
-function startDeleteIsland(ref) {
-  var children = childrenRefsOf(ref, cachedIslands);
-  var model = deleteConfirmModel(refLabel(ref), children.map(refLabel), isTaskRef(ref, cachedIslands) ? 'タスク' : '島');
+// 確認・通知用のパネル（削除確認とコピーのフォールバックで共有）。editState.confirm として持つので、
+// 開いている間は再描画が保留され、外側クリック・Esc で閉じる。buttons: [{label, className, onClick}]（onClick 省略は閉じるだけ）。
+// 押されたボタンはまずパネルを閉じてから onClick を呼ぶ。戻り値はボタン要素の配列（フォーカス先の選択用）。
+function buildConfirmPanel(titleText, bodyEls, buttons) {
   closeEditUI();
   var panel = document.createElement('div');
   panel.className = 'island-confirm';
   panel.setAttribute('role', 'dialog');
   var title = document.createElement('div');
   title.className = 'confirm-title';
-  title.textContent = model.title;
+  title.textContent = titleText;
+  panel.appendChild(title);
+  bodyEls.forEach(function(el) { panel.appendChild(el); });
+  var actions = document.createElement('div');
+  actions.className = 'confirm-actions';
+  var els = buttons.map(function(b) {
+    var el = document.createElement('button');
+    el.type = 'button';
+    if (b.className) el.className = b.className;
+    el.textContent = b.label;
+    el.addEventListener('click', function() {
+      endEditing();
+      if (b.onClick) b.onClick();
+    });
+    actions.appendChild(el);
+    return el;
+  });
+  panel.appendChild(actions);
+  document.getElementById('graph-container').appendChild(panel);
+  editState.confirm = panel;
+  return els;
+}
+
+// 島の削除は必ず確認する（元に戻せないため）。子がいれば子を親へ付け替えて消す。
+function startDeleteIsland(ref) {
+  var children = childrenRefsOf(ref, cachedIslands);
+  var isTask = editableKind(graphNodes.get(ref)) === 'task';
+  var model = deleteConfirmModel(refLabel(ref), children.map(refLabel), isTask ? 'タスク' : '島');
   var lead = document.createElement('div');
   lead.textContent = model.lead;
   var list = document.createElement('ul');
@@ -2248,26 +2252,11 @@ function startDeleteIsland(ref) {
     li.textContent = label;
     list.appendChild(li);
   });
-  var actions = document.createElement('div');
-  actions.className = 'confirm-actions';
-  var cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.textContent = 'キャンセル';
-  cancel.addEventListener('click', function() { endEditing(); });
-  var ok = document.createElement('button');
-  ok.type = 'button';
-  ok.className = 'danger';
-  ok.textContent = model.okLabel;
-  ok.addEventListener('click', function() {
-    endEditing();
-    runIslandOp({ op: 'remove', ref: ref, children: children });
-  });
-  actions.appendChild(cancel);
-  actions.appendChild(ok);
-  [title, lead, list, actions].forEach(function(el) { panel.appendChild(el); });
-  document.getElementById('graph-container').appendChild(panel);
-  editState.confirm = panel;
-  cancel.focus(); // 既定は安全側（キャンセル）
+  var els = buildConfirmPanel(model.title, [lead, list], [
+    { label: 'キャンセル' },
+    { label: model.okLabel, className: 'danger', onClick: function() { runIslandOp({ op: 'remove', ref: ref, children: children }); } }
+  ]);
+  els[0].focus(); // 既定は安全側（キャンセル）
 }
 
 // 操作の実行。kind は editableKind の結果、id はノード ID（= ref。root は ROOT_ID）。
@@ -2448,7 +2437,7 @@ function pointerInsideGraph(dom) {
 function beginDrag(nodeId) {
   var kind = nodeId ? editableKind(graphNodes.get(nodeId)) : null;
   var st;
-  if (!graphRootId || (kind !== 'island' && kind !== 'repo' && kind !== 'task')) {
+  if (!graphRootId || !kind || kind === 'root') {
     st = { id: null };
   } else {
     // 矩形は canvas 座標。候補はドラッグ中に動かない（動かすのは掴んだノードだけ）ので、1 回測れば足りる
@@ -2546,13 +2535,12 @@ function cancelDrag() {
 // 編集 UI を閉じる共通のきっかけ（メニュー外クリック / Esc / スクロール）。入力欄はスクロールに追従するので残す。
 document.addEventListener('mousedown', function(e) {
   var outside = (editState.menu && !editState.menu.contains(e.target)) ||
-    (editState.confirm && !editState.confirm.contains(e.target)) ||
-    (editState.copy && !editState.copy.contains(e.target));
+    (editState.confirm && !editState.confirm.contains(e.target));
   if (outside) closeEditUIOnOutsideMouseDown();
 });
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape' && dragState) softCancelDrag();
-  if (e.key === 'Escape' && (editState.menu || editState.confirm || editState.copy)) endEditing();
+  if (e.key === 'Escape' && (editState.menu || editState.confirm)) endEditing();
 });
 // ポインタがグラフの外へ出たら、落とし先の強調を外す（離しても何も起きない）
 document.getElementById('graph-canvas').addEventListener('mouseleave', function() {
