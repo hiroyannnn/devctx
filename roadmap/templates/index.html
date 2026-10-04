@@ -1099,9 +1099,16 @@ function normalizeIslands(d) {
   return { islands: (d && d.islands) || [], repos: (d && d.repos) || [] };
 }
 
-// repo ノード ID。session / more / DAG ノードは _repoId でこれを指し、island 階層ぶんの level をずらす
+// ノード ID は /api/islands の親 ref（island:<id> / repo:<path>）と同じ形にしてある。親をそのままノード ID として辿れる
+var REPO_PREFIX = 'repo:';
+var ISLAND_PREFIX = 'island:';
+
 function repoNodeId(repoRoot) {
-  return 'repo:' + (repoRoot || '__ungrouped__');
+  return REPO_PREFIX + (repoRoot || '__ungrouped__');
+}
+
+function islandNodeId(id) {
+  return ISLAND_PREFIX + id;
 }
 
 function repoBaseName(root) {
@@ -1134,14 +1141,6 @@ var MINDMAP_THEME = {
   repoDim: { bg: '#4A525B', border: '#5A626B', font: '#B6BEC6' }
 };
 
-function themedKind(kind) {
-  var c = MINDMAP_THEME[kind];
-  return {
-    color: { background: c.bg, border: c.border },
-    font: { color: c.font, size: MINDMAP_THEME.fontSize, face: MINDMAP_THEME.fontFace, bold: true, multi: true }
-  };
-}
-
 // ツリー辺（root / island / repo / session を繋ぐ辺）。DAG の意味付きの辺には使わない
 function treeEdge(from, to) {
   return {
@@ -1152,8 +1151,17 @@ function treeEdge(from, to) {
   };
 }
 
-// 全ノードに共通の形（角丸・余白・影・折り返し幅）を足す。色とノード固有の font は壊さない。
-// 構造ノード（root / island / repo / session）だけ文字サイズも揃え、DAG のタスクノードは自前のサイズを保つ。
+// _type から色の種別を決める。session / タスク等は null で、builder が与えた意味色をそのまま使う。
+// アクティブな session が無い repo は dim。
+function themeKindOf(n) {
+  if (n._type === 'root' || n._type === 'island') return n._type;
+  if (n._type === 'project') return n._data && n._data.sessions && n._data.sessions.length === 0 ? 'repoDim' : 'repo';
+  return null;
+}
+
+// 見た目を決める唯一の場所。全ノードに共通の形（角丸・余白・影・折り返し幅）と、構造ノードの色を与える。
+// 構造ノード（root / island / repo / session）だけ文字サイズも揃え、DAG のタスクノードは自前のサイズと色を保つ。
+// Why: builder / overlay には構造（id・label・level・_type・_data）だけを持たせ、色を散らさない。
 function applyMindmapTheme(nodes) {
   var T = MINDMAP_THEME;
   var uniform = { root: 1, island: 1, project: 1, session: 1 };
@@ -1167,100 +1175,101 @@ function applyMindmapTheme(nodes) {
     n.widthConstraint = { maximum: T.maxWidth };
     var f = Object.assign({}, n.font, { face: T.fontFace });
     if (uniform[n._type]) f.size = T.fontSize;
-    if (n._type === 'project') {
-      // repo ノードの色はここで決める（builder は構造だけを持つ）。セッションが無い repo は dim
-      var k = themedKind(n._data && n._data.sessions && n._data.sessions.length === 0 ? 'repoDim' : 'repo');
-      n.color = k.color;
-      f.color = k.font.color;
+    var kind = themeKindOf(n);
+    if (kind) {
+      var c = T[kind];
+      n.color = { background: c.bg, border: c.border };
+      f.color = c.font;
       f.bold = true;
+      f.multi = true;
     }
     n.font = f;
   });
 }
 
+// builder 共通の後処理。All Projects は island / root を重ね、全モードにテーマを当てる。
+// rootId は中央 root があるときだけ入る（左右バランス配置の起点。単一プロジェクト表示では null）。
+function postProcess(nodes, edges, isAllProjects) {
+  var rootId = isAllProjects ? islandOverlay(nodes, edges, cachedIslands) : null;
+  applyMindmapTheme(nodes);
+  return { nodes: nodes, edges: edges, rootId: rootId };
+}
+
 // ── Islands overlay ──
-// nodes / edges を破壊的に更新する。All Projects 専用。
-// repo ノードの ID は repoNodeId で builder と共通。builder が置いた repo ノードは nodes から拾う。
+// nodes / edges を破壊的に更新する。All Projects 専用。戻り値は root の ID（ノードが無ければ null）。
+// repo ノードは builder が置いたものを nodes から拾う。親は /api/islands が dangling を "" に解決済み（ここでは再検証しない）。
 function islandOverlay(nodes, edges, islandsData) {
-  var data = normalizeIslands(islandsData);
   var nodeIds = {};
   nodes.forEach(function(n) { nodeIds[n.id] = true; });
 
-  // 親は /api/islands が dangling を "" に解決済み。ここでは描画できるものだけを辿る
   var parentOf = {};
-  data.islands.forEach(function(is) { if (is.parent) parentOf['island:' + is.id] = is.parent; });
-  data.repos.forEach(function(r) { if (r.parent) parentOf['repo:' + r.root] = r.parent; });
+  islandsData.islands.forEach(function(is) { if (is.parent) parentOf[islandNodeId(is.id)] = is.parent; });
+  islandsData.repos.forEach(function(r) { if (r.parent) parentOf[repoNodeId(r.root)] = r.parent; });
 
   // セッションが無い（またはフィルタで消えた）repo も、island 構造に関わるなら薄いノードで出す。
   // Why: 手で組んだ構造が「アクティブな context がある repo だけ」に依存して消えるのを避ける
-  function ensureRepoNode(ref) {
-    if (ref.indexOf('repo:') !== 0 || nodeIds[ref]) return;
-    var root = ref.substring(5);
-    nodeIds[ref] = true;
+  function ensureRepoNode(id, root) {
+    if (nodeIds[id]) return;
+    nodeIds[id] = true;
     nodes.push({
-      id: ref,
+      id: id,
       label: repoBaseName(root) + '\n(no active sessions)',
       level: 0,
       _type: 'project',
       _data: { name: repoBaseName(root), repo_root: root, sessions: [] }
     });
   }
-  data.repos.forEach(function(r) {
-    if (!r.parent) return;
-    ensureRepoNode('repo:' + r.root);
-    ensureRepoNode(r.parent);
-  });
-  data.islands.forEach(function(is) { if (is.parent) ensureRepoNode(is.parent); });
-
-  data.islands.forEach(function(is) {
-    nodeIds['island:' + is.id] = true;
-    nodes.push(Object.assign({
-      id: 'island:' + is.id,
-      label: is.name,
-      level: 0,
-      _type: 'island',
-      _data: is
-    }, themedKind('island')));
-  });
-
-  Object.keys(parentOf).forEach(function(child) {
-    var parent = parentOf[child];
-    if (!nodeIds[child] || !nodeIds[parent]) { delete parentOf[child]; return; }
-    edges.push(treeEdge(parent, child));
-  });
-
-  // level は根からの深さ。island→repo→island→repo の鎖でも LR に並ぶ。循環（手編集）は visiting で打ち切る
-  var memo = {};
-  function depth(id, visiting) {
-    if (memo[id] !== undefined) return memo[id];
-    var p = parentOf[id];
-    if (!p || visiting[id]) return 0;
-    visiting[id] = true;
-    var d = depth(p, visiting) + 1;
-    delete visiting[id];
-    memo[id] = d;
-    return d;
+  function ensureParentRepo(parentRef) {
+    if (parentRef.indexOf(REPO_PREFIX) === 0) ensureRepoNode(parentRef, parentRef.slice(REPO_PREFIX.length));
   }
-  // 中央の root を level 0 に置くので、全体を 1 段右にずらす
-  nodes.forEach(function(n) {
-    if (n._type === 'island' || n._type === 'project') {
-      n.level = depth(n.id, {}) + 1;
-    } else if (n._repoId) {
-      n.level += depth(n._repoId, {}) + 1;
+  islandsData.repos.forEach(function(r) {
+    if (!r.parent) return;
+    ensureRepoNode(repoNodeId(r.root), r.root);
+    ensureParentRepo(r.parent);
+  });
+  islandsData.islands.forEach(function(is) { if (is.parent) ensureParentRepo(is.parent); });
+
+  islandsData.islands.forEach(function(is) {
+    nodeIds[islandNodeId(is.id)] = true;
+    nodes.push({ id: islandNodeId(is.id), label: is.name, level: 0, _type: 'island', _data: is });
+  });
+
+  // island / repo の木の辺と、根からの深さ。island→repo→island→repo の鎖でも LR に並ぶ。
+  // 深さは DAG と同じ computeNodeDepth（根 = 1、循環は打ち切り）。root を level 0 に置くので、そのまま level になる
+  var treeEdges = Object.keys(parentOf).map(function(child) { return { from: parentOf[child], to: child }; });
+  var memo = {};
+  var treeNodes = nodes.filter(function(n) { return n._type === 'island' || n._type === 'project'; });
+
+  // repo 配下（session / more / DAG）は、repo の level 分だけまとめてずらす。builder は repo = 0 起点で level を振っている。
+  // 辺を下向きに辿るので、辺で繋がらない DAG ノードは builder が不可視の辺で繋いである（buildSemanticGraph）。
+  // 木の辺を足す前の builder の辺だけを辿る（repo→island の辺を辿ると island を二重にずらす）
+  var kids = {};
+  edges.forEach(function(e) { (kids[e.from] = kids[e.from] || []).push(e.to); });
+  var nodeById = {};
+  nodes.forEach(function(n) { nodeById[n.id] = n; });
+  treeNodes.forEach(function(n) {
+    n.level = computeNodeDepth(n.id, treeEdges, nodes, memo);
+    if (n._type !== 'project') return;
+    var seen = {};
+    var stack = (kids[n.id] || []).slice();
+    while (stack.length) {
+      var id = stack.pop();
+      if (seen[id]) continue;
+      seen[id] = true;
+      nodeById[id].level += n.level;
+      (kids[id] || []).forEach(function(c) { stack.push(c); });
     }
   });
+  treeEdges.forEach(function(e) { edges.push(treeEdge(e.from, e.to)); });
 
   // 親の無い island / repo（未登録 repo や Other を含む）を全て root にぶら下げる。
   // Why: 左右バランス配置が root 起点の部分木分割で成り立つため、孤立したトップレベルを作らない
-  if (nodes.length === 0) return;
-  var tops = nodes.filter(function(n) {
-    return (n._type === 'island' || n._type === 'project') && !parentOf[n.id];
+  if (nodes.length === 0) return null;
+  nodes.push({ id: ROOT_ID, label: 'devctx', level: 0, _type: 'root' });
+  treeNodes.forEach(function(n) {
+    if (!parentOf[n.id]) edges.push(treeEdge(ROOT_ID, n.id));
   });
-  var rootStyle = themedKind('root');
-  nodes.push(Object.assign({
-    id: ROOT_ID, label: 'devctx', level: 0, _type: 'root'
-  }, rootStyle));
-  tops.forEach(function(n) { edges.push(treeEdge(ROOT_ID, n.id)); });
+  return ROOT_ID;
 }
 
 function buildMindMapData(groups) {
@@ -1314,18 +1323,7 @@ function buildMindMapData(groups) {
       }
 
       // Project nodes are always neutral — attention shown via badges in label
-      nodes.push({
-        id: projectId,
-        label: projLabel,
-        shape: 'box',
-        color: { background: '#21262d', border: '#484f58' },
-        font: { color: '#f0f6fc', size: 15, face: '-apple-system, sans-serif', bold: true, multi: true },
-        margin: { top: 10, bottom: 10, left: 14, right: 14 },
-        borderWidth: 1,
-        level: projectLevel,
-        _type: 'project',
-        _data: group
-      });
+      nodes.push({ id: projectId, label: projLabel, level: projectLevel, _type: 'project', _data: group });
     }
 
     var sessionParent = showProject ? projectId : null;
@@ -1349,8 +1347,7 @@ function buildMindMapData(groups) {
         color: sessionNodeStyle(session).color,
         font: { color: '#f0f6fc', size: 13, face: '-apple-system, sans-serif', bold: true, multi: true },
         margin: { top: 6, bottom: 6, left: 10, right: 10 },
-        borderWidth: sessionNodeStyle(session).borderWidth, level: sessionLevel, _type: 'session', _data: session,
-        _repoId: projectId
+        borderWidth: sessionNodeStyle(session).borderWidth, level: sessionLevel, _type: 'session', _data: session
       });
       if (sessionParent) {
         edges.push(treeEdge(sessionParent, sessionId));
@@ -1364,14 +1361,14 @@ function buildMindMapData(groups) {
           color: { background: '#2a1215', border: '#f85149' },
           font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
-          borderWidth: 1, borderDashes: [4, 4], level: detailLevel, _type: 'warning', _repoId: projectId
+          borderWidth: 1, borderDashes: [4, 4], level: detailLevel, _type: 'warning'
         });
         edges.push({ from: sessionId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
       }
     });
 
     if (truncated && sessionParent) {
-      var moreId = 'more:' + (group.repo_root || '__ungrouped__');
+      var moreId = 'more:' + projectId;
       var remaining = group.sessions.length - maxSessions;
       nodes.push({
         id: moreId,
@@ -1384,16 +1381,13 @@ function buildMindMapData(groups) {
         borderDashes: [4, 4],
         level: sessionLevel,
         _type: 'more',
-        _data: group,
-        _repoId: projectId
+        _data: group
       });
       edges.push({ from: sessionParent, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
     }
   });
 
-  if (isAllProjects) islandOverlay(nodes, edges, cachedIslands);
-  applyMindmapTheme(nodes);
-  return { nodes: nodes, edges: edges };
+  return postProcess(nodes, edges, isAllProjects);
 }
 
 // Compute topological depth of a node in the DAG (longest path from root)
@@ -1417,6 +1411,30 @@ function computeNodeDepth(nodeId, edges, nodes, memo, visiting) {
   memo[nodeId] = maxDepth + 1;
   delete visiting[nodeId];
   return memo[nodeId];
+}
+
+// sessionId から辺（edges[fromIndex..]）で辿れないノードを、不可視の辺で sessionId に繋ぐ。
+// Why: goal の無い session のタスクは goal→task の辺が無く、辺を辿る後処理（repo 配下の level ずらし・左右の振り分け）から漏れる。
+// Why not 全ノードに所属タグを付ける: タグを builder が持つと overlay との結合が増えるので、辺という既存の構造だけで繋ぐ。
+function connectOrphanNodes(edges, fromIndex, sessionId, nodeIds) {
+  var kids = {};
+  edges.slice(fromIndex).forEach(function(e) { (kids[e.from] = kids[e.from] || []).push(e.to); });
+  var reached = {};
+  function walk(id) {
+    var stack = [id];
+    while (stack.length) {
+      var cur = stack.pop();
+      if (reached[cur]) continue;
+      reached[cur] = true;
+      (kids[cur] || []).forEach(function(c) { stack.push(c); });
+    }
+  }
+  walk(sessionId);
+  nodeIds.forEach(function(id) {
+    if (reached[id]) return;
+    edges.push({ from: sessionId, to: id, hidden: true });
+    walk(id);
+  });
 }
 
 // Build DAG from /api/roadmap-graph data for Single Project view
@@ -1465,13 +1483,7 @@ function buildSemanticGraph(graphData) {
 
     if (showProjectNode) {
       projectNodeId = repoNodeId(projectGroup.repo_root);
-      nodes.push({
-        id: projectNodeId, label: projectGroup.name, shape: 'box',
-        color: { background: '#21262d', border: '#484f58' },
-        font: { color: '#f0f6fc', size: 15, bold: true },
-        margin: { top: 10, bottom: 10, left: 14, right: 14 },
-        borderWidth: 1, level: 0, _type: 'project', _data: projectGroup
-      });
+      nodes.push({ id: projectNodeId, label: projectGroup.name, level: 0, _type: 'project', _data: projectGroup });
     }
 
     filteredSessions.forEach(function(session) {
@@ -1494,8 +1506,7 @@ function buildSemanticGraph(graphData) {
         color: sessionNodeStyle(session).color,
         font: { color: '#f0f6fc', size: 14, bold: true, multi: true },
         margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        borderWidth: sessionNodeStyle(session).borderWidth, level: baseLevel, _type: 'session', _data: session,
-        _repoId: projectNodeId
+        borderWidth: sessionNodeStyle(session).borderWidth, level: baseLevel, _type: 'session', _data: session
       });
       if (projectNodeId) {
         edges.push(treeEdge(projectNodeId, sessionNodeId));
@@ -1510,7 +1521,7 @@ function buildSemanticGraph(graphData) {
           color: { background: '#2a1215', border: '#f85149' },
           font: { color: '#f85149', size: 10 },
           margin: { top: 3, bottom: 3, left: 8, right: 8 },
-          borderWidth: 1, borderDashes: [4, 4], level: baseLevel + 1, _type: 'warning', _repoId: projectNodeId
+          borderWidth: 1, borderDashes: [4, 4], level: baseLevel + 1, _type: 'warning'
         });
         edges.push({ from: sessionNodeId, to: warnId, color: { color: '#f8514944' }, width: 1, dashes: true });
         return;
@@ -1558,11 +1569,11 @@ function buildSemanticGraph(graphData) {
           shadow: shadow,
           level: level,
           _type: gn.type,
-          _data: gn,
-          _repoId: projectNodeId
+          _data: gn
         });
       });
 
+      var sessionEdgeStart = edges.length;
       // Connect fork/rejected edges from session node instead of goal node
       sessionEdges.forEach(function(ge) {
         if (ge.from === 'goal') {
@@ -1604,10 +1615,13 @@ function buildSemanticGraph(graphData) {
           arrows: ge.type === 'dependency' ? { to: { enabled: true, scaleFactor: 0.5 } } : undefined
         });
       });
+      // All Projects の level ずらしと左右の振り分けは辺を辿るので、辺で繋がらないタスクを不可視の辺で session に繋ぐ。
+      // 単一プロジェクトの配置は変えない
+      if (isAllProjects) connectOrphanNodes(edges, sessionEdgeStart, sessionNodeId, Object.keys(idMap).map(function(k) { return idMap[k]; }));
     });
 
     if (truncated && projectNodeId) {
-      var moreId = 'more:' + (projectGroup.repo_root || '__ungrouped__');
+      var moreId = 'more:' + projectNodeId;
       var remaining = filteredCount - maxSessions;
       nodes.push({
         id: moreId,
@@ -1617,15 +1631,13 @@ function buildSemanticGraph(graphData) {
         font: { color: '#8b949e', size: 11, face: '-apple-system, sans-serif' },
         margin: { top: 3, bottom: 3, left: 6, right: 6 },
         borderWidth: 1, borderDashes: [4, 4], level: 1,
-        _type: 'more', _data: projectGroup, _repoId: projectNodeId
+        _type: 'more', _data: projectGroup
       });
       edges.push({ from: projectNodeId, to: moreId, color: { color: '#30363d44' }, width: 1, dashes: true });
     }
   });
 
-  if (isAllProjects) islandOverlay(nodes, edges, cachedIslands);
-  applyMindmapTheme(nodes);
-  return { nodes: nodes, edges: edges };
+  return postProcess(nodes, edges, isAllProjects);
 }
 
 var cachedGraphData = null; // cached /api/roadmap-graph data
@@ -1689,17 +1701,17 @@ function renderGraphView(groups, graphData) {
   });
 
   // After initial hierarchical layout, disable it so nodes can be dragged freely
-  var hasRoot = data.nodes.some(function(n) { return n.id === ROOT_ID; });
+  var rootId = data.rootId;
   graphNetwork.once('afterDrawing', function() {
     var layout = null;
-    if (hasRoot) {
+    if (rootId) {
       // hierarchical を切る前に、初期配置の座標と実寸の高さを読む
       var pos = graphNetwork.getPositions();
       var measured = graphNodes.getIds().map(function(id) {
         var box = graphNetwork.getBoundingBox(id);
         return { id: id, label: graphNodes.get(id).label, x: pos[id].x, y: pos[id].y, h: box.bottom - box.top };
       });
-      layout = balancedLayout(measured, graphEdges.get(), ROOT_ID);
+      layout = balancedLayout(measured, graphEdges.get(), rootId);
     }
     graphNetwork.setOptions({ layout: { hierarchical: { enabled: false } } });
     if (layout) {
@@ -1894,12 +1906,10 @@ async function onProjectChange() {
   projectChanging = true;
   selectedProject = document.getElementById('project-select').value;
   // Fetch graph data for DAG view
-  try {
-    var gres = await fetch('/api/roadmap-graph');
-    if (gres.ok) cachedGraphData = await gres.json();
-  } catch (e) { cachedGraphData = null; }
+  cachedGraphData = await fetchOptionalJSON('/api/roadmap-graph'); // refresh と同じ失敗時の扱い（null → tree に fallback）
   var islandsData = await fetchOptionalJSON('/api/islands');
   if (islandsData) cachedIslands = normalizeIslands(islandsData);
+  lastJson = dataFingerprint(cachedData, cachedGraphData, cachedIslands);
   renderGraphView(graphGroups, cachedGraphData);
   projectChanging = false;
 }
@@ -1912,6 +1922,12 @@ function graphReset() {
   if (graphNetwork) {
     graphNetwork.fit({ animation: { duration: 500 }, maxZoomLevel: FIT_MAX_ZOOM });
   }
+}
+
+// 再描画の要否判定用。map / graph / islands のどれが変わっても差が出る
+var lastJson = '';
+function dataFingerprint(mapData, graphData, islandsData) {
+  return JSON.stringify(mapData) + JSON.stringify(graphData) + JSON.stringify(islandsData);
 }
 
 // 任意の API: 失敗・非 2xx は null（呼び出し側が前回値や fallback に戻す）
@@ -1942,11 +1958,11 @@ async function refresh() {
       if (extras[1]) islandsData = normalizeIslands(extras[1]);
     }
 
+    // 比較用の文字列は前回分を持ち回り、新しいデータだけ stringify する
+    var newJson = dataFingerprint(newData, graphData, islandsData);
     // For mind map view, skip re-render if data hasn't changed (preserves zoom/pan)
     if (currentView === 'graph' && cachedData && graphNetwork) {
-      var newJson = JSON.stringify(newData) + JSON.stringify(graphData) + JSON.stringify(islandsData);
-      var oldJson = JSON.stringify(cachedData) + JSON.stringify(cachedGraphData) + JSON.stringify(cachedIslands);
-      if (newJson === oldJson) {
+      if (newJson === lastJson) {
         var sessionCount = 0;
         newData.forEach(function(g) { sessionCount += g.sessions.length; });
         var now = new Date();
@@ -1958,6 +1974,7 @@ async function refresh() {
     cachedData = newData;
     cachedGraphData = graphData;
     cachedIslands = islandsData;
+    lastJson = newJson;
     if (currentView === 'graph') {
       renderGraphView(cachedData, cachedGraphData);
     } else {

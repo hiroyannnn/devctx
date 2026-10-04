@@ -118,16 +118,18 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 	body := w.Body.String()
 
 	for _, want := range []string{
-		"/api/islands",                               // refresh と同じ周期で取得する
-		"function islandOverlay(",                    // tree / semantic の両 builder が共有する
-		"islandOverlay(nodes, edges, cachedIslands)", // 両 builder から呼ばれる
-		"JSON.stringify(islandsData)",                // island の編集が再描画の変化検知に入る
-		"'session:' + session.name",                  // 連番ではなく安定した ID
-		"repoNodeId(",                                // repo ノードの安定 ID
-		"'more:' + ",                                 // more ノードも repo 単位の安定 ID
-		"var MINDMAP_THEME = {",                      // 見た目の数値・色は 1 か所
-		"function balancedLayout(",                   // 左右バランス配置の純関数
-		"applyMindmapTheme(nodes);",                  // 両 builder で共通のテーマ適用
+		"/api/islands",                                      // refresh と同じ周期で取得する
+		"function islandOverlay(",                           // tree / semantic の両 builder が共有する
+		"islandOverlay(nodes, edges, cachedIslands)",        // 両 builder から呼ばれる
+		"JSON.stringify(islandsData)",                       // island の編集が再描画の変化検知に入る
+		"'session:' + session.name",                         // 連番ではなく安定した ID
+		"repoNodeId(",                                       // repo ノードの安定 ID
+		"'more:' + ",                                        // more ノードも repo 単位の安定 ID
+		"var MINDMAP_THEME = {",                             // 見た目の数値・色は 1 か所
+		"function balancedLayout(",                          // 左右バランス配置の純関数
+		"function postProcess(nodes, edges, isAllProjects)", // 両 builder が通る後処理の単一入口
+		"function islandNodeId(",                            // ノード ID を手組みしない
+		"applyMindmapTheme(nodes);",                         // 両 builder で共通のテーマ適用
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)
