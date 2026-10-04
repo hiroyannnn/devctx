@@ -142,3 +142,30 @@ func TestHandleAPIIslands_LoaderError(t *testing.T) {
 		t.Errorf("status = %d, want 500", w.Code)
 	}
 }
+
+// index.html は埋め込み静的ファイルでブラウザ無しでは動作を試せないため、
+// island 描画に必要な取得・共通 helper・安定ノード ID が残っていることだけを守る。
+func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+
+	for _, want := range []string{
+		"/api/islands",                               // refresh と同じ周期で取得する
+		"function islandOverlay(",                    // tree / semantic の両 builder が共有する
+		"islandOverlay(nodes, edges, cachedIslands)", // 両 builder から呼ばれる
+		"JSON.stringify(islandsData)",                // island の編集が再描画の変化検知に入る
+		"'session:' + session.name",                  // 連番ではなく安定した ID
+		"repoNodeId(",                                // repo ノードの安定 ID
+		"'more:' + ",                                 // more ノードも repo 単位の安定 ID
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index.html does not contain %q", want)
+		}
+	}
+	for _, gone := range []string{"'proj:' + (++nid)", "'sess:' + (++nid)"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("index.html still uses sequential id %q", gone)
+		}
+	}
+}
