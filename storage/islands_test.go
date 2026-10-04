@@ -47,6 +47,48 @@ func TestUpdateIslandsRoundTrip(t *testing.T) {
 	}
 }
 
+// 削除後も TaskSeq が保存を跨いで進み、タスク id が再利用されない。
+func TestUpdateIslandsPersistsTasksAndSeq(t *testing.T) {
+	s := &Storage{basePath: t.TempDir()}
+	add := func(name string) string {
+		t.Helper()
+		var id string
+		err := s.UpdateIslands(func(st *model.IslandStore) error {
+			if len(st.Islands) == 0 {
+				if _, err := st.AddIsland("HR", "hr", ""); err != nil {
+					return err
+				}
+			}
+			is, err := st.AddTask(name, "island:hr")
+			id = is.ID
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	if id := add("a"); id != "t1" {
+		t.Fatalf("first id = %s", id)
+	}
+	if err := s.UpdateIslands(func(st *model.IslandStore) error { return st.RemoveIsland("t1", false) }); err != nil {
+		t.Fatal(err)
+	}
+	if id := add("b"); id != "t2" {
+		t.Errorf("id after delete = %s, want t2", id)
+	}
+	if err := s.UpdateIslands(func(st *model.IslandStore) error { return st.SetTaskDone("t2", true) }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadIslands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskSeq != 2 || got.Islands[1].Kind != "task" || !got.Islands[1].Done {
+		t.Errorf("got %+v", got)
+	}
+}
+
 func TestUpdateIslandsSerializesConcurrentUpdates(t *testing.T) {
 	s := &Storage{basePath: t.TempDir()}
 	const writers = 20

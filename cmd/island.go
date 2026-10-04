@@ -242,6 +242,15 @@ func islandList(s *storage.Storage, out io.Writer) error {
 func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, active map[string]int) {
 	names := map[string]string{}
 	for _, i := range is.Islands {
+		if i.Kind == model.KindTask {
+			// タスクは ref ではなく id だけ見せる（task done / island rename に渡せる形）
+			label := fmt.Sprintf("%s [task %s]", i.Name, i.ID)
+			if i.Done {
+				label += " ✓"
+			}
+			names[model.IslandRef(i.ID)] = label
+			continue
+		}
 		names[model.IslandRef(i.ID)] = fmt.Sprintf("%s [%s]", i.Name, model.IslandRef(i.ID))
 	}
 	label := func(ref string) string {
