@@ -41,6 +41,10 @@ func (s *Storage) eventsPath() string {
 	return filepath.Join(s.basePath, "events.yaml")
 }
 
+func (s *Storage) islandsPath() string {
+	return filepath.Join(s.basePath, "islands.yaml")
+}
+
 func (s *Storage) LoadStore() (*model.Store, error) {
 	store := &model.Store{}
 	data, err := os.ReadFile(s.contextsPath())
@@ -160,6 +164,45 @@ func (s *Storage) UpdateInsights(fn func(*model.InsightStore) error) error {
 			return err
 		}
 		return atomicWriteFile(s.insightsPath(), data, 0644)
+	})
+}
+
+// LoadIslands は islands.yaml を読む。無ければ空（island 機能を使っていない環境で作成しない）。
+func (s *Storage) LoadIslands() (*model.IslandStore, error) {
+	store := &model.IslandStore{}
+	data, err := os.ReadFile(s.islandsPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return store, nil
+		}
+		return nil, err
+	}
+	if err := yaml.Unmarshal(data, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// UpdateIslands は islands.yaml を 1 つのロック内で読み込み・更新・保存する。
+// fn が ErrSkipSave を返すと保存せず成功扱い。
+// Why not Load + Save: CLI の連続実行や Web の読み取りと並行しても、後勝ちで他の編集を落とさないため。
+func (s *Storage) UpdateIslands(fn func(*model.IslandStore) error) error {
+	return s.withFileLock(s.islandsPath(), func() error {
+		store, err := s.LoadIslands()
+		if err != nil {
+			return err
+		}
+		if err := fn(store); err != nil {
+			if errors.Is(err, ErrSkipSave) {
+				return nil
+			}
+			return err
+		}
+		data, err := yaml.Marshal(store)
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(s.islandsPath(), data, 0644)
 	})
 }
 
