@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandler_RequestGuard(t *testing.T) {
@@ -132,5 +133,37 @@ func TestServe_PortZeroUsesTheActualListeningPort(t *testing.T) {
 	}
 	if got := get("evil.com"); got != http.StatusForbidden {
 		t.Errorf("evil host: status = %d", got)
+	}
+}
+
+// テストやライブラリとして Serve を呼んでも、利用者のブラウザを勝手に開かない。開くのは OpenBrowser を渡した呼び出し側だけ。
+func TestServe_OpensBrowserOnlyWhenRequested(t *testing.T) {
+	serveOnce := func(open func(string)) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &Server{OpenBrowser: open}
+		go srv.Serve(ln)
+		defer ln.Close()
+		// Serve が listen 済みの ln で配信を始めるまで待つ
+		req, _ := http.NewRequest("GET", "http://"+ln.Addr().String()+"/", nil)
+		req.Host = ln.Addr().String()
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			res.Body.Close()
+		}
+	}
+
+	serveOnce(nil) // OpenBrowser 未設定で panic せず、何も開かない
+
+	opened := make(chan string, 1)
+	serveOnce(func(url string) { opened <- url })
+	select {
+	case url := <-opened:
+		if !strings.HasPrefix(url, "http://127.0.0.1:") {
+			t.Errorf("opened %q", url)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OpenBrowser was not called")
 	}
 }
