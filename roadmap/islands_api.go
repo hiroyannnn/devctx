@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
 
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -41,4 +42,42 @@ func (s *Server) handleAPIIslands(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("islands: failed to encode: %v", err)
 	}
+}
+
+// handleAPIKnownRepos は island に付けられる repo（contexts / islands.yaml に現れる repo）の一覧を返す。
+// UI がメニューを開いたときだけ取りに来る（5 秒のポーリングには含めない）。
+// Why: 親を外した repo は、アクティブな context が無いと Mind Map から消える。この一覧から付け直せるようにする。
+// 定義は編集 API の repo 検査と同じ model.KnownRepos（CLI とも同じ）。
+func (s *Server) handleAPIKnownRepos(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	islands := &model.IslandStore{}
+	if s.IslandLoader != nil {
+		loaded, err := s.IslandLoader.LoadIslands()
+		if err != nil {
+			log.Printf("known-repos: failed to load islands: %v", err)
+			http.Error(w, "failed to load islands", http.StatusInternalServerError)
+			return
+		}
+		islands = loaded
+	}
+	roots, err := s.knownRepoList(islands)
+	if err != nil {
+		log.Printf("known-repos: failed to load store: %v", err)
+		http.Error(w, "failed to load session data", http.StatusInternalServerError)
+		return
+	}
+
+	type repoEntry struct {
+		Root  string `json:"root"`
+		Label string `json:"label"`
+	}
+	repos := []repoEntry{} // 空でも null ではなく []
+	for _, root := range roots {
+		repos = append(repos, repoEntry{Root: root, Label: filepath.Base(root)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
 }

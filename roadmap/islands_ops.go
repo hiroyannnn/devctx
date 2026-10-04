@@ -138,20 +138,30 @@ func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// knownRepoList は contexts と is から既知 repo（昇順・重複なし）を求める。contexts の読み込みはここで行う。
+// Why: 編集 API の repo 検査と、UI へ返す known-repos 一覧が同じ定義（model.KnownRepos）を通るようにする。
+func (s *Server) knownRepoList(is *model.IslandStore) ([]string, error) {
+	store := &model.Store{}
+	if s.StoreLoader != nil {
+		loaded, err := s.StoreLoader.LoadStore()
+		if err != nil {
+			return nil, err
+		}
+		store = loaded
+	}
+	return model.KnownRepos(store, is), nil
+}
+
 // knownRepos は既知 repo の集合を返す関数を作る。contexts の読み込みは repo ref を検査するときに 1 回だけ行う。
 // Why: island だけの操作（rename / remove 等）が contexts.yaml の不調や読み込みコストに巻き込まれないため。
 func (s *Server) knownRepos(is *model.IslandStore) func() (map[string]bool, error) {
 	return sync.OnceValues(func() (map[string]bool, error) {
-		store := &model.Store{}
-		if s.StoreLoader != nil {
-			loaded, err := s.StoreLoader.LoadStore()
-			if err != nil {
-				return nil, err
-			}
-			store = loaded
+		roots, err := s.knownRepoList(is)
+		if err != nil {
+			return nil, err
 		}
 		known := map[string]bool{}
-		for _, root := range model.KnownRepos(store, is) {
+		for _, root := range roots {
 			known[root] = true
 		}
 		return known, nil
