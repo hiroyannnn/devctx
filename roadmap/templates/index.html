@@ -1026,6 +1026,18 @@ function repoBaseName(root) {
 
 // nodes / edges を破壊的に更新する。All Projects 専用。
 // repo ノードの ID は repoNodeId で builder と共通。builder が置いた repo ノードは nodes から拾う。
+// island ノードの見た目はここだけに集約する（MindMup 風の調整はこの定数と islandEdgeStyle の差し替えで済ませるため）。
+// 背景は不透明（半透明だとエッジが透ける）。
+var ISLAND_STYLE = {
+  shape: 'box',
+  color: { background: '#1c1530', border: '#a371f7' },
+  font: { color: '#e6d8ff', size: 16, face: '-apple-system, sans-serif', bold: true },
+  margin: { top: 12, bottom: 12, left: 18, right: 18 },
+  borderWidth: 2,
+  shapeProperties: { borderRadius: 14 }
+};
+var islandEdgeStyle = { color: { color: '#a371f7' }, width: 2 };
+
 function islandOverlay(nodes, edges, islandsData) {
   var data = normalizeIslands(islandsData);
   var nodeIds = {};
@@ -1064,26 +1076,19 @@ function islandOverlay(nodes, edges, islandsData) {
 
   data.islands.forEach(function(is) {
     nodeIds['island:' + is.id] = true;
-    nodes.push({
+    nodes.push(Object.assign({
       id: 'island:' + is.id,
       label: is.name,
-      shape: 'box',
-      // 不透明背景（半透明だとエッジが透ける）
-      color: { background: '#1c1530', border: '#a371f7' },
-      font: { color: '#e6d8ff', size: 16, face: '-apple-system, sans-serif', bold: true },
-      margin: { top: 12, bottom: 12, left: 18, right: 18 },
-      borderWidth: 2,
-      shapeProperties: { borderRadius: 14 },
       level: 0,
       _type: 'island',
       _data: is
-    });
+    }, ISLAND_STYLE));
   });
 
   Object.keys(parentOf).forEach(function(child) {
     var parent = parentOf[child];
     if (!nodeIds[child] || !nodeIds[parent]) { delete parentOf[child]; return; }
-    edges.push({ from: parent, to: child, color: { color: '#a371f7' }, width: 2 });
+    edges.push(Object.assign({ from: parent, to: child }, islandEdgeStyle));
   });
 
   // level は根からの深さ。island→repo→island→repo の鎖でも LR に並ぶ。循環（手編集）は visiting で打ち切る
