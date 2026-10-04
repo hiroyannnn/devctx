@@ -266,6 +266,15 @@ func (s *IslandStore) removeIsland(id string, reparent bool, newParent string) e
 	if len(children) > 0 && !reparent {
 		return fmt.Errorf("island %q has %d child(ren) (%s); use --reparent to move them up", id, len(children), strings.Join(children, ", "))
 	}
+	// Why: 親のない島を reparent で消すと子が最上位へ上がる。タスクは親が要る（Detach と同じ不変条件）ので、
+	// 先に別の親へ移してもらう。テーマ島の子は最上位でもよい。
+	if newParent == "" {
+		for _, c := range children {
+			if s.isTask(c) {
+				return fmt.Errorf("island %q has task child %s; tasks need a parent; move them first", id, c)
+			}
+		}
+	}
 	for _, c := range children {
 		// 付け替え先は削除対象の親なので存在・循環の検査は不要（木の中で 1 段持ち上げるだけ）
 		s.setParentUnchecked(c, newParent)
@@ -500,7 +509,17 @@ func (s *IslandStore) Validate() error {
 			report(RepoRef(rn.Root), rn.Parent)
 		}
 	}
+	// 親が "" のタスクは Resolved 前後で変わらないので、上の判定には載らない
+	var orphanTasks []string
+	for _, is := range s.Islands {
+		if is.Kind == KindTask && is.Parent == "" {
+			orphanTasks = append(orphanTasks, IslandRef(is.ID))
+		}
+	}
 	var msgs []string
+	if len(orphanTasks) > 0 {
+		msgs = append(msgs, fmt.Sprintf("task without parent: %s", strings.Join(orphanTasks, ", ")))
+	}
 	if len(bad) > 0 {
 		msgs = append(msgs, fmt.Sprintf("invalid parent (dangling or cyclic): %s", strings.Join(bad, "; ")))
 	}

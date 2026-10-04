@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/hiroyannnn/devctx/model"
 )
 
 func TestTaskAddDoneAndList(t *testing.T) {
@@ -93,5 +95,40 @@ func TestTaskCommandsRejectInvalidInput(t *testing.T) {
 	}
 	if err := islandRm(s, &out, "t1", false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIslandRmReparentRefusesToOrphanTasks(t *testing.T) {
+	s, base := islandFixture(t, fixtureContexts()...)
+	var out bytes.Buffer
+	if err := islandAdd(s, &out, base, "Top", "top", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := taskAdd(s, &out, base, "t", "top"); err != nil {
+		t.Fatal(err)
+	}
+	if err := islandRm(s, &out, "top", true); err == nil || !strings.Contains(err.Error(), "tasks need a parent") {
+		t.Errorf("err = %v", err)
+	}
+	is, _ := s.LoadIslands()
+	if !is.HasIsland("top") || !is.HasIsland("t1") {
+		t.Error("store changed")
+	}
+}
+
+func TestIslandListWarnsOnTaskWithoutParent(t *testing.T) {
+	s, _ := islandFixture(t, fixtureContexts()...)
+	if err := s.UpdateIslands(func(is *model.IslandStore) error {
+		is.Islands = append(is.Islands, model.Island{ID: "t1", Name: "孤児", Kind: model.KindTask})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := islandList(s, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "warning: task without parent: island:t1") {
+		t.Errorf("list output:\n%s", out.String())
 	}
 }

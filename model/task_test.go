@@ -225,3 +225,69 @@ func TestTaskMarker(t *testing.T) {
 		t.Errorf("marker = %q", got)
 	}
 }
+
+func TestRemoveIslandRefusesToOrphanTasks(t *testing.T) {
+	newS := func(parent string) *IslandStore {
+		return &IslandStore{
+			Islands: []Island{
+				{ID: "top", Name: "Top", Parent: parent},
+				{ID: "t1", Name: "T", Kind: KindTask, Parent: "island:top"},
+				{ID: "sub", Name: "Sub", Parent: "island:top"},
+			},
+			TaskSeq: 1,
+		}
+	}
+	t.Run("top-level island with task child: reparent refused", func(t *testing.T) {
+		s := newS("")
+		before := *newS("")
+		err := s.RemoveIsland("top", true)
+		if err == nil || !strings.Contains(err.Error(), "tasks need a parent; move them first") {
+			t.Fatalf("err = %v", err)
+		}
+		if !reflect.DeepEqual(*s, before) {
+			t.Error("store changed on error")
+		}
+	})
+	t.Run("RemoveIslandExpecting is refused the same way", func(t *testing.T) {
+		s := newS("")
+		err := s.RemoveIslandExpecting("top", []string{"island:t1", "island:sub"})
+		if err == nil || !strings.Contains(err.Error(), "tasks need a parent") {
+			t.Fatalf("err = %v", err)
+		}
+		if !s.HasIsland("top") {
+			t.Error("island removed")
+		}
+	})
+	t.Run("island with a parent: tasks move up", func(t *testing.T) {
+		s := newS("repo:/r/a")
+		if err := s.RemoveIsland("top", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.ParentOf("island:t1"); got != "repo:/r/a" {
+			t.Errorf("t1 parent = %q", got)
+		}
+	})
+	t.Run("theme-only children may go top level", func(t *testing.T) {
+		s := newS("")
+		s.Islands = s.Islands[:1:1]
+		s.Islands = append(s.Islands, Island{ID: "sub", Name: "Sub", Parent: "island:top"})
+		if err := s.RemoveIsland("top", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.ParentOf("island:sub"); got != "" {
+			t.Errorf("sub parent = %q", got)
+		}
+	})
+}
+
+func TestValidateReportsTaskWithoutParent(t *testing.T) {
+	s := newTree()
+	s.Islands = append(s.Islands, Island{ID: "t1", Name: "T", Kind: KindTask})
+	err := s.Validate()
+	if err == nil || !strings.Contains(err.Error(), "task without parent: island:t1") {
+		t.Errorf("Validate = %v", err)
+	}
+	if err := treeWithTask().Validate(); err != nil {
+		t.Errorf("valid: %v", err)
+	}
+}

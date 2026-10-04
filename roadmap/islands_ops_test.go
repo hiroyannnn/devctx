@@ -592,3 +592,18 @@ func TestIslandOps_NothingUnderATask(t *testing.T) {
 		t.Errorf("move task: status = %d", w.Code)
 	}
 }
+
+func TestIslandOps_RemoveRefusesToOrphanTasks(t *testing.T) {
+	s, up := newOpsServer(&model.IslandStore{
+		Islands: []model.Island{{ID: "top", Name: "Top"}, {ID: "t1", Name: "T", Kind: "task", Parent: "island:top"}},
+		TaskSeq: 1,
+	})
+	before := *up.store
+	w, resp := postOps(t, s, `{"op":"remove","ref":"island:top","children":["island:t1"]}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(errorOf(resp), "tasks need a parent") {
+		t.Errorf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !reflect.DeepEqual(*up.store, before) {
+		t.Error("store changed")
+	}
+}
