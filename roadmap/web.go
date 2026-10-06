@@ -4,10 +4,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -21,6 +23,11 @@ import (
 
 //go:embed templates/*
 var templateFS embed.FS
+
+// Why not static/* : static/test の Node テストまでバイナリに入るのを避け、配信する css / js だけを埋め込む。
+//
+//go:embed static/*.css static/*.js
+var staticFS embed.FS
 
 // StoreLoader abstracts store loading for testing.
 type StoreLoader interface {
@@ -163,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/islands/ops", s.handleAPIIslandOps)
 	mux.HandleFunc("/api/islands/known-repos", s.handleAPIKnownRepos)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
+	mux.Handle("/static/", s.staticHandler())
 	mux.HandleFunc("/", s.handleIndex)
 	return s.guard(mux)
 }
@@ -221,6 +229,39 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
+}
+
+// staticHandler は index.html が読む css / js を配信する。guard の内側に置くので Host 検査は API と同じ。
+// Why Cache-Control: no-cache: 埋め込み FS は更新時刻を持たず条件付きリクエストが効かないので、
+// 付けないとブラウザが古い js を使い続け、roadmap serve を作り直した直後の挙動確認がずれる。
+// Why Content-Type を自前で決める: FileServer は OS の mime 表を引き、環境によって js が application/javascript になる。
+// Why 末尾 "/" を 404 にする: FileServer の一覧表示（ファイル名の列挙）を出さない。
+func (s *Server) staticHandler() http.Handler {
+	sub, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		// embed のパスは固定なので到達しない
+		panic(err)
+	}
+	files := http.StripPrefix("/static/", http.FileServer(http.FS(sub)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		switch path.Ext(r.URL.Path) {
+		case ".css":
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case ".js":
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	})
 }
 
 // loadRoadmapEntries は /api/roadmap と /api/roadmap-map が共有する entry 組み立て。

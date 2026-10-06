@@ -25,3 +25,18 @@ jobs:
 
       - name: Test
         run: go test -v ./...
+
+  # roadmap の Web UI（roadmap/static/*.js）の純関数テスト。Go のテストは JS の中身を実行しない
+  js-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ディレクトリ指定（node --test dir/）は Node 21 以降で動かないので glob で渡す
+      - name: Test
+        run: node --test 'roadmap/static/test/*.test.js'
