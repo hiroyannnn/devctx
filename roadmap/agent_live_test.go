@@ -75,10 +75,8 @@ func TestAPIsWithoutLiveReportHookSource(t *testing.T) {
 
 // UI は待ちの理由をサーバー提供フィールドから表示する（JS 側で状態を再導出しない）
 func TestIndexRendersWaitingReason(t *testing.T) {
-	w := httptest.NewRecorder()
-	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
-	if !strings.Contains(w.Body.String(), "agent_waiting_for") {
-		t.Error("index.html が agent_waiting_for を参照していない")
+	if !strings.Contains(dashboardSource(t), "agent_waiting_for") {
+		t.Error("dashboard source が agent_waiting_for を参照していない")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -110,12 +111,10 @@ func TestHandleAPIIslands_LoaderError(t *testing.T) {
 	}
 }
 
-// index.html は埋め込み静的ファイルでブラウザ無しでは動作を試せないため、
+// index.html と static/*.js は埋め込み静的ファイルでブラウザ無しでは動作を試せないため、
 // island 描画に必要な取得・共通 helper・安定ノード ID が残っていることだけを守る。
 func TestHandleIndex_WiresIslandEditing(t *testing.T) {
-	w := httptest.NewRecorder()
-	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
-	body := w.Body.String()
+	body := dashboardSource(t)
 
 	for _, want := range []string{
 		"fetch('/api/islands/ops'",                        // 編集は専用 endpoint に JSON で送る
@@ -173,25 +172,23 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"未完了に戻す",                                                             // タスクのメニュー
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("index.html does not contain %q", want)
+			t.Errorf("dashboard source does not contain %q", want)
 		}
 	}
 	// ドラッグの間引き（rAF）と、ドラッグに依らない document 全体の mouseup 保険は持たない
 	for _, gone := range []string{"requestAnimationFrame", "settling", "document.addEventListener('mouseup'"} {
 		if strings.Contains(body, gone) {
-			t.Errorf("index.html still contains %q", gone)
+			t.Errorf("dashboard source still contains %q", gone)
 		}
 	}
 	// 編集 UI の DOM は innerHTML で組まない（島の名前は利用者入力）
 	if strings.Contains(body, "innerHTML") {
-		t.Error("index.html must not use innerHTML")
+		t.Error("dashboard source (index.html + static/*.js) must not use innerHTML")
 	}
 }
 
 func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
-	w := httptest.NewRecorder()
-	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
-	body := w.Body.String()
+	body := dashboardSource(t)
 
 	for _, want := range []string{
 		"/api/islands",                                      // refresh と同じ周期で取得する
@@ -209,22 +206,84 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 		"applyMindmapTheme(nodes);",                                       // 両 builder で共通のテーマ適用
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("index.html does not contain %q", want)
+			t.Errorf("dashboard source does not contain %q", want)
 		}
 	}
 	for _, gone := range []string{"'proj:' + (++nid)", "'sess:' + (++nid)"} {
 		if strings.Contains(body, gone) {
-			t.Errorf("index.html still uses sequential id %q", gone)
+			t.Errorf("dashboard source still uses sequential id %q", gone)
 		}
 	}
 }
 
 // JS 側の marker 書式が model.TaskMarkerPrefix とずれると、次の PR のセッション紐づけが黙って外れる。
 func TestHandleIndex_TaskMarkerMatchesModel(t *testing.T) {
-	w := httptest.NewRecorder()
-	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
 	want := "var TASK_MARKER_PREFIX = '" + model.TaskMarkerPrefix + "';"
-	if !strings.Contains(w.Body.String(), want) {
-		t.Errorf("index.html does not contain %q", want)
+	if !strings.Contains(dashboardSource(t), want) {
+		t.Errorf("dashboard source does not contain %q", want)
+	}
+}
+
+// dashboardSource は index.html と static/*.js（読み込み順）を連結した文字列を返す。
+// Why: ダッシュボードの JS は複数ファイルに分かれているので、文字列で配線を守るテストは全体を対象にする。
+// 読み込み順は index.html の <script src> から取り、配信できないファイルを参照していればここで落ちる。
+func dashboardSource(t *testing.T) string {
+	t.Helper()
+	index, err := templateFS.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sb strings.Builder
+	sb.Write(index)
+	srcs := scriptSrcPattern.FindAllStringSubmatch(string(index), -1)
+	if len(srcs) == 0 {
+		t.Fatal("index.html に <script src=\"/static/...\"> が無い")
+	}
+	for _, m := range srcs {
+		js, err := staticFS.ReadFile("static/" + m[1])
+		if err != nil {
+			t.Fatalf("index.html が参照する static/%s を読めない: %v", m[1], err)
+		}
+		sb.WriteString("\n")
+		sb.Write(js)
+	}
+	return sb.String()
+}
+
+var scriptSrcPattern = regexp.MustCompile(`<script src="/static/([^"]+\.js)"></script>`)
+
+func TestStaticScripts(t *testing.T) {
+	handler := (&Server{Port: 3333}).Handler()
+	entries, err := staticFS.ReadDir("static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	referenced := map[string]bool{}
+	for _, m := range scriptSrcPattern.FindAllStringSubmatch(dashboardSource(t), -1) {
+		referenced[m[1]] = true
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".js") {
+			continue
+		}
+		req := httptest.NewRequest("GET", "/static/"+e.Name(), nil)
+		req.Host = "127.0.0.1:3333"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200", e.Name(), w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != "text/javascript; charset=utf-8" {
+			t.Errorf("%s: Content-Type = %q", e.Name(), got)
+		}
+		// 置いただけで読み込まれない js は、配線し忘れの兆候
+		if !referenced[e.Name()] {
+			t.Errorf("%s は index.html から読み込まれていない", e.Name())
+		}
+	}
+	// app.js は他ファイルの関数を呼ぶので最後に読む
+	order := scriptSrcPattern.FindAllStringSubmatch(dashboardSource(t), -1)
+	if last := order[len(order)-1][1]; last != "app.js" {
+		t.Errorf("最後に読み込む script = %s, want app.js", last)
 	}
 }

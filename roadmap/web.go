@@ -25,7 +25,7 @@ var templateFS embed.FS
 
 // Why not static/* : static/test の Node テストまでバイナリに入るのを避け、配信する css / js だけを埋め込む。
 //
-//go:embed static/*.css
+//go:embed static/*.css static/*.js
 var staticFS embed.FS
 
 // StoreLoader abstracts store loading for testing.
