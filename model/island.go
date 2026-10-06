@@ -628,3 +628,9 @@ func normalizeRepoRef(ref string) string {
 	}
 	return ref
 }
+
+// HasTask は id が実在するタスク（Kind が task の island）かを返す。
+func (s *IslandStore) HasTask(id string) bool {
+	is := s.findIsland(id)
+	return is != nil && is.Kind == KindTask
+}
