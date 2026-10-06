@@ -162,6 +162,34 @@ In **All Projects**, the Mind Map edits the same tree as the CLI (changes go thr
 - Only repos devctx already knows (from sessions or `islands.yaml`) can be attached.
 - vis-network's own keyboard pan/zoom is off (it listens on the whole window and would fight the name input); use the mouse to pan and zoom.
 
+#### Tasks
+
+A **task** is a hand-made node for one piece of work, placed under an island or a repo (it is an island of kind `task` in `islands.yaml`). A task always has a parent, and **nothing can be placed under a task** (no island, repo or task); adding or attaching one is rejected. Ids are `t1`, `t2`, ... from a counter (`task_seq`) that is never reused, even after a task is deleted.
+
+```bash
+devctx task add 求人票を直す --to hiring       # --to takes the same refs as island attach; prints island:t1
+devctx task done t1                            # --undo to reopen
+devctx island rename t1 "求人票を直す (v2)"     # rename / rm / attach work on tasks too
+devctx island list                             # └── 求人票を直す [task t1] ✓
+```
+
+In the Mind Map, tasks are white boxes with a blue border, prefixed `☐` (open) or `✓` (done, dimmed).
+
+- **Right-click** a task: "プロンプトとしてコピー" / "完了にする" (or "未完了に戻す") / "名前を変更" / "削除". There is no "親から外す" because a task needs a parent. An island or repo offers "タスクを追加". Keyboard on a task: `Enter` adds a sibling task, `F2` / `Space` renames, `Delete` deletes; `Tab` does nothing.
+- **Drag** a task onto an island or repo to move it. Tasks are never drop targets, and the root is not highlighted as a target while dragging a task (it needs a parent).
+- `island rm --reparent` on a top-level island that has task children is refused ("tasks need a parent; move them first"); move the tasks with `island attach` first. `island list` warns about a task with no parent (hand-edited yaml).
+- **プロンプトとしてコピー** puts the task name and a marker line on the clipboard:
+
+  ```
+  求人票を直す
+
+  [devctx:task:t1]
+  ```
+
+  The marker `[devctx:task:<id>]` is always the last line. If the browser refuses clipboard access, a small panel with the text preselected is shown instead.
+- Linking agent sessions to a task automatically (by finding this marker in the session's first prompt) comes in the next change; for now the marker is only copied.
+- API: `POST /api/islands/ops` accepts `{"op":"add","kind":"task","name":...,"parent":...}` (parent required) and `{"op":"done","ref":"island:t1","done":true}`.
+
 #### Security note
 
 The dashboard listens on `127.0.0.1` only, and now also checks every request: the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (guards against DNS rebinding, GET included), and changes (`POST /api/islands/ops`) additionally need `Content-Type: application/json` and an `Origin` equal to `http://<Host>`. Open the dashboard at `http://127.0.0.1:<port>` or `http://localhost:<port>`; other host names (a LAN IP, a tunnel, a reverse proxy) get `403`.

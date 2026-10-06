@@ -502,6 +502,10 @@ h1 {
   font-size: 0.78rem;
 }
 .island-confirm button.danger { border-color: #f85149; color: #f85149; }
+.island-confirm textarea {
+  width: 100%; box-sizing: border-box; height: 96px; margin-bottom: 10px; resize: vertical;
+  background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font: inherit;
+}
 .island-confirm button:focus { outline: 2px solid #388bfd; }
 .devctx-toast {
   position: fixed;
@@ -1237,7 +1241,11 @@ var MINDMAP_THEME = {
   island:  { bg: '#E0E0E0', border: '#707070', font: '#4F4F4F' },
   repo:    { bg: '#C9D3DC', border: '#707070', font: '#2F2F2F' },
   // アクティブな context が無い repo。暗い背景のページに溶けない程度に落とした色
-  repoDim: { bg: '#4A525B', border: '#5A626B', font: '#B6BEC6' }
+  repoDim: { bg: '#4A525B', border: '#5A626B', font: '#B6BEC6' },
+  // タスク。島（灰）・repo（青灰）と見分けるため白地に root と同じ青の枠。太字にしないので島より軽く見える。
+  // 完了は透明度ではなく不透明の淡い色で沈める（半透明だとエッジが透ける）
+  task:     { bg: '#FFFFFF', border: '#22AAE0', font: '#2F2F2F', plain: true },
+  taskDone: { bg: '#E3E7EA', border: '#A9B7C2', font: '#8A8A8A', plain: true }
 };
 
 // ツリー辺（root / island / repo / session を繋ぐ辺）。DAG の意味付きの辺には使わない
@@ -1255,6 +1263,7 @@ function treeEdge(from, to) {
 function themeKindOf(n) {
   if (n._type === 'root' || n._type === 'island') return n._type;
   if (n._type === 'project') return n._data && n._data.sessions && n._data.sessions.length === 0 ? 'repoDim' : 'repo';
+  if (n._type === 'task') return n._data && n._data.done ? 'taskDone' : 'task';
   return null;
 }
 
@@ -1263,7 +1272,7 @@ function themeKindOf(n) {
 // Why: builder / overlay には構造（id・label・level・_type・_data）だけを持たせ、色を散らさない。
 function applyMindmapTheme(nodes) {
   var T = MINDMAP_THEME;
-  var uniform = { root: 1, island: 1, project: 1, session: 1 };
+  var uniform = { root: 1, island: 1, task: 1, project: 1, session: 1 };
   nodes.forEach(function(n) {
     n.shape = 'box';
     n.shapeProperties = Object.assign({}, n.shapeProperties, { borderRadius: T.radius });
@@ -1280,8 +1289,8 @@ function applyMindmapTheme(nodes) {
       var c = T[kind];
       n.color = { background: c.bg, border: c.border };
       f.color = c.font;
-      f.bold = true;
-      f.multi = true;
+      f.bold = !c.plain;
+      f.multi = !c.plain;
     }
     n.font = f;
   });
@@ -1293,6 +1302,23 @@ function postProcess(nodes, edges, isAllProjects) {
   var rootId = isAllProjects ? islandOverlay(nodes, edges, cachedIslands) : null;
   applyMindmapTheme(nodes);
   return { nodes: nodes, edges: edges, rootId: rootId };
+}
+
+// タスクの表示名。未完了は ☐、完了は ✓ を前に付ける。
+function taskLabel(task) {
+  return (task.done ? '✓ ' : '☐ ') + task.name;
+}
+
+// 「プロンプトとしてコピー」の marker。形式は model.TaskMarker（Go）と同じで、次の PR でセッションの
+// 最初のプロンプトからこれを拾ってタスクの下へ付ける。片方だけ変えると紐づかなくなる。
+var TASK_MARKER_PREFIX = '[devctx:task:';
+function taskMarker(id) {
+  return TASK_MARKER_PREFIX + id + ']';
+}
+
+// コピーするプロンプト。タスク名の後ろに空行を挟み、marker を独立した最終行に置く。
+function taskPromptText(task) {
+  return task.name + '\n\n' + taskMarker(task.id);
 }
 
 // ── Islands overlay ──
@@ -1331,6 +1357,11 @@ function islandOverlay(nodes, edges, islandsData) {
 
   islandsData.islands.forEach(function(is) {
     nodeIds[islandNodeId(is.id)] = true;
+    if (is.kind === 'task') {
+      // 親付け替え・メニュー・キーの種別は _type で決まるので、タスクは島と別の種別にする。完了は先頭の記号で示す
+      nodes.push({ id: islandNodeId(is.id), label: taskLabel(is), level: 0, _type: 'task', _data: is });
+      return;
+    }
     nodes.push({ id: islandNodeId(is.id), label: is.name, level: 0, _type: 'island', _data: is });
   });
 
@@ -1338,7 +1369,7 @@ function islandOverlay(nodes, edges, islandsData) {
   // 深さは DAG と同じ computeNodeDepth（根 = 1、循環は打ち切り）。root を level 0 に置くので、そのまま level になる
   var treeEdges = Object.keys(parentOf).map(function(child) { return { from: parentOf[child], to: child }; });
   var memo = {};
-  var treeNodes = nodes.filter(function(n) { return n._type === 'island' || n._type === 'project'; });
+  var treeNodes = nodes.filter(function(n) { return n._type === 'island' || n._type === 'task' || n._type === 'project'; });
 
   // repo 配下（session / more / DAG）は、repo の level 分だけまとめてずらす。builder は repo = 0 起点で level を振っている。
   // 辺を下向きに辿るので、辺で繋がらない DAG ノードは builder が不可視の辺で繋いである（buildSemanticGraph）。
@@ -1752,6 +1783,7 @@ function editableKind(node) {
   if (!node) return null;
   if (node._type === 'root') return 'root';
   if (node._type === 'island') return 'island';
+  if (node._type === 'task') return 'task';
   if (node._type === 'project' && node.id !== repoNodeId('')) return 'repo';
   return null;
 }
@@ -1785,9 +1817,18 @@ function childrenRefsOf(ref, islandsData) {
 }
 
 // 右クリックメニューの項目。「親から外す」は親があるときだけ。
-function contextMenuItems(kind, hasParent) {
+// タスクは親が要る（外せない）葉なので、子や repo は付けられず、「親から外す」も出さない。root の下にはタスクを置かない。
+function contextMenuItems(kind, hasParent, done) {
   if (kind === 'root') return [{ action: 'addChild', label: '島を追加' }];
-  var items = [{ action: 'addChild', label: '子の島を追加' }];
+  if (kind === 'task') {
+    return [
+      { action: 'copyPrompt', label: 'プロンプトとしてコピー' },
+      { action: 'toggleDone', label: done ? '未完了に戻す' : '完了にする' },
+      { action: 'rename', label: '名前を変更' },
+      { action: 'delete', label: '削除', danger: true }
+    ];
+  }
+  var items = [{ action: 'addChild', label: '子の島を追加' }, { action: 'addTask', label: 'タスクを追加' }];
   if (kind === 'island') items.push({ action: 'attachRepo', label: 'repo を付ける…' });
   if (kind === 'island') items.push({ action: 'rename', label: '名前を変更' });
   if (hasParent) items.push({ action: 'detach', label: '親から外す' });
@@ -1811,17 +1852,24 @@ function descendantsOf(ref, islandsData) {
 }
 
 // ドラッグの落とし先の候補（ノード ID の配列）。island / repo / root のうち、ドラッグ中のノードとその子孫を除く。
+// タスクは落とし先にならない（タスクの下には何も置けない）。ドラッグ中のノードがタスクなら root も外す。
 function dropCandidateIds(nodes, draggedId, islandsData) {
   var banned = descendantsOf(draggedId, islandsData);
   banned[draggedId] = true;
-  return nodes.filter(function(n) { return editableKind(n) && !banned[n.id]; }).map(function(n) { return n.id; });
+  var dragged = nodes.filter(function(n) { return n.id === draggedId; })[0];
+  var draggedIsTask = editableKind(dragged) === 'task';
+  return nodes.filter(function(n) {
+    var kind = editableKind(n);
+    // タスクのドロップは root では無操作（dropOpFor）。強調だけ出ると操作できそうに見えるので候補から外す
+    return kind && kind !== 'task' && !(draggedIsTask && kind === 'root') && !banned[n.id];
+  }).map(function(n) { return n.id; });
 }
 
-// 落とした結果の操作。root へは親から外す（既にトップレベルなら何もしない）、
+// 落とした結果の操作。root へは親から外す（既にトップレベルなら何もしない。タスクは親が要るので常に何もしない）、
 // island / repo へは付ける（既にそこが親なら何もしない）。無操作は null。
 function dropOpFor(draggedId, targetId, islandsData) {
   var parent = parentRefOf(draggedId, islandsData);
-  if (targetId === ROOT_ID) return parent === '' ? null : { op: 'detach', child: draggedId };
+  if (targetId === ROOT_ID) return parent === '' || editableKind(graphNodes.get(draggedId)) === 'task' ? null : { op: 'detach', child: draggedId };
   if (parent === targetId) return null;
   return { op: 'attach', child: draggedId, parent: targetId };
 }
@@ -1858,12 +1906,13 @@ function repoMenuItems(repos) {
   });
 }
 
-// キー → 編集操作。対応しないキーは null（preventDefault しない）。rename / delete は island のみ。
+// キー → 編集操作。対応しないキーは null（preventDefault しない）。rename / delete は island とタスクのみ。
+// タスクは子を持てないので Tab は何もせず、Enter は同じ親の下にタスクを足す（runEditAction が種別で分ける）。
 function keyAction(key, kind) {
   if (!kind) return null;
-  if (key === 'Tab') return 'addChild';
+  if (key === 'Tab') return kind === 'task' ? null : 'addChild';
   if (key === 'Enter') return 'addSibling';
-  if (kind !== 'island') return null;
+  if (kind !== 'island' && kind !== 'task') return null;
   if (key === 'F2' || key === ' ') return 'rename';
   // Mac の「delete」キーは Backspace だが、打ち間違いで島を消さないよう Delete だけにする
   if (key === 'Delete') return 'delete';
@@ -1997,7 +2046,7 @@ async function postIslandOp(body) {
 // 操作後に選択するノード（add 以外）。rename / attach / detach は対象、remove は親（トップレベルなら無し）。
 // add は作ったノードが応答の ref で決まる。
 function selectAfterOp(body) {
-  if (body.op === 'rename') return body.ref;
+  if (body.op === 'rename' || body.op === 'done') return body.ref;
   if (body.op === 'attach' || body.op === 'detach') return body.child;
   if (body.op === 'remove') return parentRefOf(body.ref, cachedIslands) || null;
   return null;
@@ -2057,8 +2106,8 @@ function openNameInput(o) {
   input.className = 'island-name-input';
   input.maxLength = 80;
   input.value = o.initial || '';
-  input.placeholder = '島の名前';
-  input.setAttribute('aria-label', '島の名前');
+  input.placeholder = o.placeholder || '島の名前';
+  input.setAttribute('aria-label', o.placeholder || '島の名前');
   input.style.left = (canvasEl.offsetLeft + left) + 'px';
   input.style.top = (canvasEl.offsetTop + top) + 'px';
   input.style.width = width + 'px';
@@ -2091,11 +2140,51 @@ function startAddIsland(parentRef, anchorId) {
   });
 }
 
+function startAddTask(parentRef, anchorId) {
+  openNameInput({
+    mode: 'add', anchorId: anchorId, initial: '', placeholder: 'タスクの名前',
+    onCommit: function(name) { runIslandOp({ op: 'add', kind: 'task', name: name, parent: parentRef }); }
+  });
+}
+
+// 「プロンプトとしてコピー」。clipboard.writeText はクリックの同期部分で呼ぶ（await や timer を挟むとユーザー操作の扱いから外れる）。
+// 使えない・拒否されたときは、選択済みの textarea を出して手でコピーしてもらう。
+function copyTaskPrompt(ref) {
+  var node = graphNodes.get(ref);
+  var task = node && node._data;
+  if (!task) return;
+  var text = taskPromptText(task);
+  var pending = null;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) pending = navigator.clipboard.writeText(text);
+  } catch (e) {
+    pending = null;
+  }
+  endEditing(); // メニューを閉じ、保留分を反映する
+  if (!pending) { showCopyFallback(text); return; }
+  pending.then(function() { showToast('コピーしました'); }, function() {
+    // 待っている間に別の編集 UI が開いていたら、フォールバックのパネルでそれを閉じてしまわない
+    if (editingActive()) showToast('コピーできませんでした');
+    else showCopyFallback(text);
+  });
+}
+
+function showCopyFallback(text) {
+  var area = document.createElement('textarea');
+  area.readOnly = true;
+  area.value = text;
+  area.setAttribute('aria-label', 'プロンプト');
+  buildConfirmPanel('自動でコピーできませんでした。手でコピーしてください', [area], [{ label: '閉じる' }]);
+  area.focus();
+  area.select();
+}
+
 function startRenameIsland(ref) {
   var node = graphNodes.get(ref);
   var current = node && node._data ? node._data.name : '';
   openNameInput({
     mode: 'rename', anchorId: ref, initial: current,
+    placeholder: node && node._type === 'task' ? 'タスクの名前' : undefined,
     onCommit: function(name) {
       if (name !== current) runIslandOp({ op: 'rename', ref: ref, name: name });
     }
@@ -2109,9 +2198,9 @@ function refLabel(ref) {
 }
 
 // 削除確認の文言。子がいれば付け替え先の説明と一覧、いなければ単純な確認。純関数。
-function deleteConfirmModel(name, childLabels) {
+function deleteConfirmModel(name, childLabels, noun) {
   if (childLabels.length === 0) {
-    return { title: '「' + name + '」を削除', lead: 'この島を削除します。', items: [], okLabel: '削除' };
+    return { title: '「' + name + '」を削除', lead: 'この' + (noun || '島') + 'を削除します。', items: [], okLabel: '削除' };
   }
   return {
     title: '「' + name + '」を削除',
@@ -2121,17 +2210,52 @@ function deleteConfirmModel(name, childLabels) {
   };
 }
 
-// 島の削除は必ず確認する（元に戻せないため）。子がいれば子を親へ付け替えて消す。
-function startDeleteIsland(ref) {
-  var children = childrenRefsOf(ref, cachedIslands);
-  var model = deleteConfirmModel(refLabel(ref), children.map(refLabel));
+// 確認・通知用のパネル（削除確認とコピーのフォールバックで共有）。editState.confirm として持つので、
+// 開いている間は再描画が保留され、外側クリック・Esc で閉じる。buttons: [{label, className, onClick}]（onClick 省略は閉じるだけ）。
+// 押されたボタンはまずパネルを閉じてから onClick を呼ぶ。戻り値はボタン要素の配列（フォーカス先の選択用）。
+function buildConfirmPanel(titleText, bodyEls, buttons) {
   closeEditUI();
   var panel = document.createElement('div');
   panel.className = 'island-confirm';
   panel.setAttribute('role', 'dialog');
   var title = document.createElement('div');
   title.className = 'confirm-title';
-  title.textContent = model.title;
+  title.textContent = titleText;
+  panel.appendChild(title);
+  bodyEls.forEach(function(el) { panel.appendChild(el); });
+  var actions = document.createElement('div');
+  actions.className = 'confirm-actions';
+  var els = buttons.map(function(b) {
+    var el = document.createElement('button');
+    el.type = 'button';
+    if (b.className) el.className = b.className;
+    el.textContent = b.label;
+    el.addEventListener('click', function() {
+      endEditing();
+      if (b.onClick) b.onClick();
+    });
+    actions.appendChild(el);
+    return el;
+  });
+  panel.appendChild(actions);
+  document.getElementById('graph-container').appendChild(panel);
+  editState.confirm = panel;
+  return els;
+}
+
+// 島の削除は必ず確認する（元に戻せないため）。子がいれば子を親へ付け替えて消す。
+function startDeleteIsland(ref) {
+  var children = childrenRefsOf(ref, cachedIslands);
+  var isTask = editableKind(graphNodes.get(ref)) === 'task';
+  // 親のない島は、消すと子が最上位へ上がる。タスクの子がいれば server が拒否するので、確認を出さず理由だけ見せる
+  var hasTaskChild = children.some(function(c) { return editableKind(graphNodes.get(c)) === 'task'; });
+  if (!isTask && hasTaskChild && !parentRefOf(ref, cachedIslands)) {
+    var reason = document.createElement('div');
+    reason.textContent = 'タスクは親が必要です。先にタスクを別の島か repo へ移してください';
+    buildConfirmPanel('「' + refLabel(ref) + '」は削除できません', [reason], [{ label: '閉じる' }])[0].focus();
+    return;
+  }
+  var model = deleteConfirmModel(refLabel(ref), children.map(refLabel), isTask ? 'タスク' : '島');
   var lead = document.createElement('div');
   lead.textContent = model.lead;
   var list = document.createElement('ul');
@@ -2140,35 +2264,34 @@ function startDeleteIsland(ref) {
     li.textContent = label;
     list.appendChild(li);
   });
-  var actions = document.createElement('div');
-  actions.className = 'confirm-actions';
-  var cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.textContent = 'キャンセル';
-  cancel.addEventListener('click', function() { endEditing(); });
-  var ok = document.createElement('button');
-  ok.type = 'button';
-  ok.className = 'danger';
-  ok.textContent = model.okLabel;
-  ok.addEventListener('click', function() {
-    endEditing();
-    runIslandOp({ op: 'remove', ref: ref, children: children });
-  });
-  actions.appendChild(cancel);
-  actions.appendChild(ok);
-  [title, lead, list, actions].forEach(function(el) { panel.appendChild(el); });
-  document.getElementById('graph-container').appendChild(panel);
-  editState.confirm = panel;
-  cancel.focus(); // 既定は安全側（キャンセル）
+  var els = buildConfirmPanel(model.title, [lead, list], [
+    { label: 'キャンセル' },
+    { label: model.okLabel, className: 'danger', onClick: function() { runIslandOp({ op: 'remove', ref: ref, children: children }); } }
+  ]);
+  els[0].focus(); // 既定は安全側（キャンセル）
 }
 
 // 操作の実行。kind は editableKind の結果、id はノード ID（= ref。root は ROOT_ID）。
 function runEditAction(action, id, kind) {
   if (action === 'addChild') {
     startAddIsland(kind === 'root' ? '' : id, id);
+  } else if (action === 'addTask') {
+    startAddTask(id, id);
   } else if (action === 'addSibling') {
     var parent = siblingParentRef(id, kind, cachedIslands);
-    startAddIsland(parent, parent || ROOT_ID);
+    if (kind !== 'task') {
+      startAddIsland(parent, parent || ROOT_ID);
+    } else if (parent) {
+      startAddTask(parent, parent);
+    } else {
+      showToast('親のないタスクの隣にはタスクを追加できません');
+    }
+  } else if (action === 'copyPrompt') {
+    copyTaskPrompt(id);
+  } else if (action === 'toggleDone') {
+    var task = graphNodes.get(id);
+    endEditing();
+    runIslandOp({ op: 'done', ref: id, done: !(task && task._data && task._data.done) });
   } else if (action === 'rename') {
     startRenameIsland(id);
   } else if (action === 'detach') {
@@ -2245,7 +2368,7 @@ function openContextMenu(nodeId, x, y) {
   var kind = editableKind(node);
   if (!kind) return false;
   closeEditUI();
-  var items = contextMenuItems(kind, !!parentRefOf(nodeId, cachedIslands));
+  var items = contextMenuItems(kind, !!parentRefOf(nodeId, cachedIslands), !!(node._data && node._data.done));
   editState.menu = buildContextMenu(items, x, y, function(action) {
     if (action === 'attachRepo') {
       showRepoSubmenu(nodeId, x, y);
@@ -2326,7 +2449,7 @@ function pointerInsideGraph(dom) {
 function beginDrag(nodeId) {
   var kind = nodeId ? editableKind(graphNodes.get(nodeId)) : null;
   var st;
-  if (!graphRootId || (kind !== 'island' && kind !== 'repo')) {
+  if (!graphRootId || !kind || kind === 'root') {
     st = { id: null };
   } else {
     // 矩形は canvas 座標。候補はドラッグ中に動かない（動かすのは掴んだノードだけ）ので、1 回測れば足りる

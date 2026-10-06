@@ -18,6 +18,10 @@ var islandCmd = &cobra.Command{
 form one tree: a repo can sit under an island, and an island can sit under a repo.
 Agent sessions attach to their repo automatically.
 
+Tasks are islands of kind "task": rename / rm / attach work on them too, but a task
+needs a parent and nothing can be placed under it. Create and complete them with
+"devctx task add" / "devctx task done".
+
 Refs are island:<id> or repo:<path>. A bare name matches an island id, else a
 repo basename; if it matches more than one, devctx lists the candidates and stops.
 "repo:." means the repo of the current directory.
@@ -240,8 +244,20 @@ func islandList(s *storage.Storage, out io.Writer) error {
 // renderIslandTree はトップレベル（親なし、または親が実在しない）の island → repo の順に木を描く。
 // 親を持たない repo も、既知なら全て出す（island に未接続の repo も一覧で見えるように）。
 func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, active map[string]int) {
+	// 解決後の木で描く。生の親で辿ると、手編集でタスクの下に置かれたノードが、トップレベルとタスクの下に二重に出る
+	resolved := is.Resolved()
+	is = &resolved
 	names := map[string]string{}
 	for _, i := range is.Islands {
+		if i.Kind == model.KindTask {
+			// タスクは ref ではなく id だけ見せる（task done / island rename に渡せる形）
+			label := fmt.Sprintf("%s [task %s]", i.Name, i.ID)
+			if i.Done {
+				label += " ✓"
+			}
+			names[model.IslandRef(i.ID)] = label
+			continue
+		}
 		names[model.IslandRef(i.ID)] = fmt.Sprintf("%s [%s]", i.Name, model.IslandRef(i.ID))
 	}
 	label := func(ref string) string {

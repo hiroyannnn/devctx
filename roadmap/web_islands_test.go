@@ -157,6 +157,20 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"keyboard: { enabled: true, bindToWindow: false",                     // vis の window 束縛キー操作が入力中の矢印・- を奪うため切る
 		"graphNetwork.moveTo({ scale: keep.scale",                            // 再描画で視点（拡大率・位置）を保つ
 		"子が変わりました。もう一度確認してください",                                              // children の 409 のトースト
+		"プロンプトとしてコピー",                                                        // タスクのメニュー（marker 付きの本文をクリップボードへ）
+		"navigator.clipboard.writeText(text)",                                // クリックの同期部分で直接呼ぶ
+		"function showCopyFallback(",                                         // clipboard が使えない・拒否されたときの textarea
+		"var TASK_MARKER_PREFIX = '[devctx:task:';",                          // model.TaskMarkerPrefix と同じ書式
+		"function taskPromptText(",                                           // タスク名 + 空行 + marker（最終行）
+		"kind: 'task'",                                                       // タスク追加は add の kind で送る
+		"op: 'done'",                                                         // 完了の切り替え
+		"var draggedIsTask = editableKind(dragged) === 'task';",              // タスクのドラッグでは root を候補から外す
+		"コピーできませんでした",                                                        // 別の編集 UI が開いている間の clipboard 拒否は toast だけにする
+		"タスクは親が必要です",                                                         // 親のない島のタスク付き削除は、確認ではなく理由を見せる
+		"function buildConfirmPanel(",                                        // 削除確認とコピーのフォールバックが共有する確認パネル
+		"_type: 'task'",                                                      // タスクは島と別の種別（メニュー・キー・ドラッグの分岐点）
+		"完了にする",                                                              // タスクのメニュー
+		"未完了に戻す",                                                             // タスクのメニュー
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index.html does not contain %q", want)
@@ -202,5 +216,15 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 		if strings.Contains(body, gone) {
 			t.Errorf("index.html still uses sequential id %q", gone)
 		}
+	}
+}
+
+// JS 側の marker 書式が model.TaskMarkerPrefix とずれると、次の PR のセッション紐づけが黙って外れる。
+func TestHandleIndex_TaskMarkerMatchesModel(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).handleIndex(w, httptest.NewRequest("GET", "/", nil))
+	want := "var TASK_MARKER_PREFIX = '" + model.TaskMarkerPrefix + "';"
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("index.html does not contain %q", want)
 	}
 }
