@@ -35,6 +35,21 @@ function repoMenuItems(repos) {
   });
 }
 
+// セッションの右クリックメニュー。「タスクから外す」は紐付けがあるとき（消えたタスクへの紐付けも）だけ。
+function sessionMenuItems(session) {
+  var items = [{ action: 'linkTask', label: 'タスクに付ける…' }];
+  if (session && session.task_ref) items.push({ action: 'unlinkTask', label: 'タスクから外す' });
+  return items;
+}
+
+// 「タスクに付ける…」の候補メニュー。並びは taskOptions（未完了 → 完了）のまま。
+function taskMenuItems(options) {
+  if (options.length === 0) return [{ action: 'none', label: 'タスクがありません', disabled: true }];
+  return options.map(function(o) {
+    return { action: 'pickTask', ref: o.ref, label: (o.done ? '\u2713 ' : '') + o.name + (o.path ? '  (' + o.path + ')' : ''), title: o.path || undefined };
+  });
+}
+
 // キー → 編集操作。対応しないキーは null（preventDefault しない）。rename / delete は island とタスクのみ。
 // タスクは子を持てないので Tab は何もせず、Enter は同じ親の下にタスクを足す（runEditAction が種別で分ける）。
 function keyAction(key, kind) {
@@ -156,9 +171,13 @@ function showToast(message) {
 }
 
 // POST /api/islands/ops。ネットワーク失敗も {ok:false} で返し、呼び出し側は 1 経路で扱う。
-async function postIslandOp(body) {
+function postIslandOp(body) {
+  return postOp('/api/islands/ops', body);
+}
+
+async function postOp(url, body) {
   try {
-    var res = await fetch('/api/islands/ops', {
+    var res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -203,6 +222,21 @@ async function runIslandOp(body) {
   // 編集 UI が開いていて保留になった場合だけ、選択を保留の反映まで残す
   if (!pendingData) pendingSelect = null;
   return true;
+}
+
+// セッションのタスク紐付け（POST /api/sessions/ops）。応答に木は無いので、成功したら全体を取り直して描画する。
+// Why: 紐付けは session の親（描画上の位置）を変えるだけで、islands は変わらない。取り直せば polling と同じ経路で描画できる。
+// 失敗も取り直す（server の現状に合わせる）。refreshSeq を進め、この操作より前に始まった取得は捨てさせる。
+async function runSessionOp(body) {
+  var res = await postOp('/api/sessions/ops', body);
+  if (!res.ok || !res.data || !res.data.ok) {
+    showToast((res.data && res.data.error) || ('HTTP ' + res.status));
+  } else {
+    pendingSelect = 'session:' + body.name;
+  }
+  refreshSeq++;
+  refresh();
+  return res.ok;
 }
 
 // ノードの DOM 座標（graph-canvas 内）の矩形
@@ -491,8 +525,39 @@ async function showRepoSubmenu(islandRef, x, y) {
   if (first) first.focus();
 }
 
+// 「タスクに付ける…」。メニューをタスクの一覧に差し替える（同じ位置）。一覧は描画済みの islands から作る（取得は要らない）。
+function showTaskSubmenu(session, x, y) {
+  removeMenu();
+  editState.menu = buildContextMenu(taskMenuItems(taskOptions(cachedIslands)), x, y, function(action, item) {
+    if (action !== 'pickTask') return;
+    endEditing();
+    runSessionOp({ op: 'link', name: session.name, task: item.ref });
+  });
+  var first = editState.menu.querySelector('.ctx-item:not([disabled])');
+  if (first) first.focus();
+}
+
+function openSessionMenu(node, x, y) {
+  var session = node._data;
+  closeEditUI();
+  editState.menu = buildContextMenu(sessionMenuItems(session), x, y, function(action) {
+    if (action === 'linkTask') {
+      showTaskSubmenu(session, x, y);
+    } else if (action === 'unlinkTask') {
+      endEditing();
+      runSessionOp({ op: 'unlink', name: session.name });
+    }
+  });
+  var first = editState.menu.querySelector('.ctx-item');
+  if (first) first.focus();
+}
+
 function openContextMenu(nodeId, x, y) {
   var node = graphNodes.get(nodeId);
+  if (node && node._type === 'session') {
+    openSessionMenu(node, x, y);
+    return true;
+  }
   var kind = editableKind(node);
   if (!kind) return false;
   closeEditUI();
@@ -549,4 +614,4 @@ function onGraphKeydown(e) {
 document.getElementById('graph-canvas').addEventListener('keydown', onGraphKeydown);
 
 // Node の単体テスト用。ブラウザでは module が無いので何も起きない。
-if (typeof module !== 'undefined') module.exports = { contextMenuItems, repoMenuItems, keyAction, selectAfterOp, deleteConfirmModel };
+if (typeof module !== 'undefined') module.exports = { sessionMenuItems, taskMenuItems, contextMenuItems, repoMenuItems, keyAction, selectAfterOp, deleteConfirmModel };

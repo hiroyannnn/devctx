@@ -153,7 +153,7 @@ A parent that no longer exists is shown at the top level, and `island list` warn
 
 In **All Projects**, the Mind Map edits the same tree as the CLI (changes go through the same lock, so they do not clobber each other).
 
-- **Right-click** a node: the root offers "島を追加"; an island offers "子の島を追加" / "名前を変更" / "親から外す" (only if it has a parent) / "削除"; a repo offers "子の島を追加" / "親から外す". Session nodes have no menu.
+- **Right-click** a node: the root offers "島を追加"; an island offers "子の島を追加" / "名前を変更" / "親から外す" (only if it has a parent) / "削除"; a repo offers "子の島を追加" / "親から外す". A session offers "タスクに付ける…" / "タスクから外す" (see [Tasks](#tasks)).
 - **Keyboard** (click the map to focus it, select a root / island / repo node): `Tab` adds a child island, `Enter` adds a sibling (under the root for top-level nodes), `F2` or `Space` renames, `Delete` / `Backspace` deletes (islands only). `Enter` / `Esc` confirm / cancel the name input.
 - **Drag to re-parent**: drag an island or repo node onto another island or repo to attach it there, or onto the root (`devctx`) node to detach it to the top level. The drop target gets a dashed red border while you hover it; `Esc` cancels, and dragging outside the map clears the highlight so releasing there does nothing. A node that was not re-parented (cancel, no-op drop, or a rejected change) returns to where it started. Nodes you cannot drop on (the dragged node and its descendants) are never highlighted. Dropping on the current parent does nothing. Sessions and "+N more" nodes cannot be re-parented (they can still be moved visually).
 - **repo を付ける…** (island menu): attach any repo devctx knows about (`GET /api/islands/known-repos`: sessions and `islands.yaml`), minus repos already under that island and repos that would create a cycle. This is how you re-attach a repo that disappeared from the map after "親から外す" because it has no active sessions.
@@ -187,12 +187,21 @@ In the Mind Map, tasks are white boxes with a blue border, prefixed `☐` (open)
   ```
 
   The marker `[devctx:task:<id>]` is always the last line. If the browser refuses clipboard access, a small panel with the text preselected is shown instead.
-- Linking agent sessions to a task automatically (by finding this marker in the session's first prompt) comes in the next change; for now the marker is only copied.
 - API: `POST /api/islands/ops` accepts `{"op":"add","kind":"task","name":...,"parent":...}` (parent required) and `{"op":"done","ref":"island:t1","done":true}`.
+
+##### Linking sessions to a task
+
+A session hangs under a task in the All Projects Mind Map (the task → session edge replaces repo → session). In the single-project view and the inspector the task name is shown as "▸ <task name>". If the task was deleted, the session stays under its repo and shows "▸ 削除済み tN".
+
+- **By marker (automatic)**: paste the copied prompt as the first prompt of a session. On `UserPromptSubmit`, the hook looks at the **last line** of the prompt (blank lines and Claude Code's `<pasted_content ...>` tag lines are skipped); if that line is exactly `[devctx:task:<id>]` and the task exists, the session is linked. A marker in the middle of the text, or not on the last line, is ignored. The prompt text itself is parsed in memory and never stored.
+- **By hand**: `devctx task link <context> <task>` / `devctx task unlink <context>`, or right-click a session in the Mind Map ("タスクに付ける…" lists existing tasks with their parent path, open tasks first and done tasks marked `✓`; "タスクから外す" appears when it is linked). `island list` shows how many sessions are linked under each task (`[task t3] (2 sessions)`).
+- **Only the first marker of a session counts.** A later marker in the same session is ignored. Claude Code reuses one context per worktree, so a link **stays when the same worktree starts a new session**, and the first marker of that new session replaces it. Codex has one context per session.
+- **Linking never changes the task.** It does not mark the task done, and PR created / merged milestones do not touch `islands.yaml` either; completion is always `task done` or the menu.
+- API: `POST /api/sessions/ops` accepts `{"op":"link","name":"<context>","task":"island:t1"}` and `{"op":"unlink","name":"<context>"}`. `/api/roadmap`, `/api/roadmap-map` and `/api/roadmap-graph` carry `task_ref` and `task_label` per session.
 
 #### Security note
 
-The dashboard listens on `127.0.0.1` only, and now also checks every request: the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (guards against DNS rebinding, GET included), and changes (`POST /api/islands/ops`) additionally need `Content-Type: application/json` and an `Origin` equal to `http://<Host>`. Open the dashboard at `http://127.0.0.1:<port>` or `http://localhost:<port>`; other host names (a LAN IP, a tunnel, a reverse proxy) get `403`.
+The dashboard listens on `127.0.0.1` only, and now also checks every request: the `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (guards against DNS rebinding, GET included), and changes (`POST /api/islands/ops`, `POST /api/sessions/ops`) additionally need `Content-Type: application/json` and an `Origin` equal to `http://<Host>`. Open the dashboard at `http://127.0.0.1:<port>` or `http://localhost:<port>`; other host names (a LAN IP, a tunnel, a reverse proxy) get `403`.
 
 ### Optional Setup
 

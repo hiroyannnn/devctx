@@ -64,6 +64,8 @@ function buildMindMapData(groups) {
     visibleSessions.forEach(function(session) {
       var sessionId = 'session:' + session.name;
       var label = session.name + '\n' + agentLine(session);
+      var taskLine = sessionTaskLine(session, isAllProjects, cachedIslands);
+      if (taskLine) label += '\n' + taskLine;
       if (session.current_focus) {
         var f = session.current_focus;
         if (f.length > 30) f = f.substring(0, 28) + '..';
@@ -220,6 +222,8 @@ function buildSemanticGraph(graphData) {
       // Session header node — Goal is integrated as subtitle, not a separate node
       var sessionNodeId = 'session:' + session.name;
       var sessionLabel = session.name + '\n' + agentLine(session);
+      var taskLine = sessionTaskLine(session, isAllProjects, cachedIslands);
+      if (taskLine) sessionLabel += '\n' + taskLine;
       if (session.goal) {
         var goalText = session.goal;
         if (goalText.length > 30) goalText = goalText.substring(0, 28) + '..';
@@ -296,7 +300,8 @@ function buildSemanticGraph(graphData) {
           borderDashes: (gn.type === 'rejected' || gn.status === 'rejected') ? [4, 4] : false,
           shadow: shadow,
           level: level,
-          _type: gn.type,
+          // Why 'dag': gn.type は 'task' になりうる。島のタスク（_type 'task'）と同じだと overlay が DAG ノードを島の木として扱う。種別は _data.type に残る
+          _type: 'dag',
           _data: gn
         });
       });
