@@ -882,3 +882,62 @@ func TestHandleAPIRoadmap_StoreError(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
 	}
 }
+
+func TestStaticAssets(t *testing.T) {
+	handler := (&Server{Port: 3333}).Handler()
+	get := func(method, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.Host = "127.0.0.1:3333"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("css は text/css・no-cache で返る", func(t *testing.T) {
+		w := get("GET", "/static/app.css")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != "text/css; charset=utf-8" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("Cache-Control = %q", got)
+		}
+		if w.Body.Len() == 0 {
+			t.Error("body is empty")
+		}
+	})
+	t.Run("存在しないファイルは 404", func(t *testing.T) {
+		if w := get("GET", "/static/nope.js"); w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+	t.Run("ディレクトリの一覧は出さない", func(t *testing.T) {
+		for _, p := range []string{"/static/", "/static/test/"} {
+			if w := get("GET", p); w.Code != http.StatusNotFound {
+				t.Errorf("%s: status = %d, want 404", p, w.Code)
+			}
+		}
+	})
+	t.Run("GET / HEAD 以外は guard を通っても 405", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/static/app.css", strings.NewReader("{}"))
+		req.Host = "127.0.0.1:3333"
+		req.Header.Set("Origin", "http://127.0.0.1:3333")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want 405", w.Code)
+		}
+	})
+	t.Run("Host 検査は guard が掛ける", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/static/app.css", nil)
+		req.Host = "evil.example:3333"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want 403", w.Code)
+		}
+	})
+}
