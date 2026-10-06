@@ -135,11 +135,7 @@ func taskLink(s *storage.Storage, out io.Writer, contextName, taskArg string) er
 	if err != nil {
 		return err
 	}
-	is, err := s.LoadIslands()
-	if err != nil {
-		return err
-	}
-	if !is.HasTask(id) {
+	if !taskExists(s, id) {
 		return fmt.Errorf("task %q not found (use t<n> or island:t<n>)", id)
 	}
 	ref := model.IslandRef(id)

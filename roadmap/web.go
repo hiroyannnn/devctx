@@ -406,6 +406,12 @@ func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (s *Server) invalidateRoadmapCache() {
+	s.cacheMu.Lock()
+	s.cachedResult = nil
+	s.cacheMu.Unlock()
+}
+
 func (s *Server) handleAPIRoadmapMap(w http.ResponseWriter, r *http.Request) {
 	active, entries, _, err := s.loadRoadmapEntries()
 	if err != nil {

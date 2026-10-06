@@ -56,11 +56,24 @@ function taskPromptText(task) {
 // ── タスクへの紐付け（セッション） ──
 // session の task_ref（"island:t<n>"）が、実在するタスクを指すときだけそのノード ID を返す。
 // Why: 消えたタスクや島を指す紐付けは、描画上は無いものとして repo の下に残す（task_label が「削除済み」と知らせる）。
-function linkedTaskNodeId(session, islandsData) {
+// index は taskIndex の結果。ループから呼ぶ側が 1 度だけ作って渡す（省くと毎回作る）。
+function linkedTaskNodeId(session, islandsData, index) {
   if (!session || !session.task_ref || session.task_ref.indexOf(ISLAND_PREFIX) !== 0) return null;
-  var id = session.task_ref.slice(ISLAND_PREFIX.length);
-  var found = islandsData.islands.some(function(is) { return is.id === id && is.kind === 'task'; });
-  return found ? islandNodeId(id) : null;
+  var task = findTask(islandsData, session.task_ref, index);
+  return task ? islandNodeId(task.id) : null;
+}
+
+// id → タスク（kind が task の island）の引き表。
+function taskIndex(islandsData) {
+  var byId = {};
+  islandsData.islands.forEach(function(is) { if (is.kind === 'task') byId[is.id] = is; });
+  return byId;
+}
+
+// ref（"island:t<n>"、または素の id）が指す実在のタスク。無ければ undefined。
+function findTask(islandsData, ref, index) {
+  var id = ref.indexOf(ISLAND_PREFIX) === 0 ? ref.slice(ISLAND_PREFIX.length) : ref;
+  return (index || taskIndex(islandsData))[id];
 }
 
 // 紐付いたタスクの表示名。紐付けが無ければ ''。消えたタスクは「削除済み tN」。
@@ -68,9 +81,9 @@ function linkedTaskNodeId(session, islandsData) {
 function sessionTaskName(session, islandsData) {
   if (!session || !session.task_ref) return '';
   if (session.task_label) return session.task_label;
-  var id = session.task_ref.indexOf(ISLAND_PREFIX) === 0 ? session.task_ref.slice(ISLAND_PREFIX.length) : session.task_ref;
-  var task = islandsData.islands.filter(function(is) { return is.id === id && is.kind === 'task'; })[0];
-  return task ? task.name : '削除済み ' + id;
+  var task = findTask(islandsData, session.task_ref);
+  if (task) return task.name;
+  return '削除済み ' + (session.task_ref.indexOf(ISLAND_PREFIX) === 0 ? session.task_ref.slice(ISLAND_PREFIX.length) : session.task_ref);
 }
 
 // セッションのラベルに足す「▸ タスク名」。紐付けが無ければ ''。
@@ -108,6 +121,20 @@ function taskOptions(islandsData) {
   return opts.sort(function(a, b) {
     return (a.done ? 1 : 0) - (b.done ? 1 : 0) || cmp(a.path, b.path) || cmp(a.name, b.name) || cmp(a.ref, b.ref);
   });
+}
+
+// startIds から kids の辺を下向きに辿り、到達した全ノード（startIds 自身を含む）の level を base 分ずらす。
+// 辺が輪でも 1 度ずつしか触れない（seen）。
+function shiftSubtree(startIds, base, kids, nodeById) {
+  var seen = {};
+  var stack = startIds.slice();
+  while (stack.length) {
+    var id = stack.pop();
+    if (seen[id]) continue;
+    seen[id] = true;
+    nodeById[id].level += base;
+    (kids[id] || []).forEach(function(c) { stack.push(c); });
+  }
 }
 
 // ── Islands overlay ──
@@ -164,9 +191,10 @@ function islandOverlay(nodes, edges, islandsData) {
   // Why 先に辺を外す: 下の kids は builder の辺から repo 配下の level ずらしを辿るので、外さないと
   // セッションが repo の level で二重にずれる。外したセッションの部分木は、タスクの level でずらす。
   var linkedSessions = [];
+  var tasks = taskIndex(islandsData);
   nodes.forEach(function(n) {
     if (n._type !== 'session') return;
-    var taskId = linkedTaskNodeId(n._data, islandsData);
+    var taskId = linkedTaskNodeId(n._data, islandsData, tasks);
     if (taskId) linkedSessions.push({ session: n, taskId: taskId });
   });
   var movedIds = {};
@@ -185,28 +213,11 @@ function islandOverlay(nodes, edges, islandsData) {
   treeNodes.forEach(function(n) {
     n.level = computeNodeDepth(n.id, treeEdges, nodes, memo);
     if (n._type !== 'project') return;
-    var seen = {};
-    var stack = (kids[n.id] || []).slice();
-    while (stack.length) {
-      var id = stack.pop();
-      if (seen[id]) continue;
-      seen[id] = true;
-      nodeById[id].level += n.level;
-      (kids[id] || []).forEach(function(c) { stack.push(c); });
-    }
+    shiftSubtree(kids[n.id] || [], n.level, kids, nodeById);
   });
   linkedSessions.forEach(function(l) {
-    var taskNode = nodeById[l.taskId];
     // セッション自身と、その下（DAG ノード）を task の level 分ずらす
-    var seen = {};
-    var stack = [l.session.id];
-    while (stack.length) {
-      var id = stack.pop();
-      if (seen[id]) continue;
-      seen[id] = true;
-      nodeById[id].level += taskNode.level;
-      (kids[id] || []).forEach(function(c) { stack.push(c); });
-    }
+    shiftSubtree([l.session.id], nodeById[l.taskId].level, kids, nodeById);
   });
   treeEdges.forEach(function(e) { edges.push(treeEdge(e.from, e.to)); });
   linkedSessions.forEach(function(l) { edges.push(treeEdge(l.taskId, l.session.id)); });

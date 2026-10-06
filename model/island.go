@@ -130,8 +130,7 @@ func (s *IslandStore) isTask(ref string) bool {
 	if err != nil || kind != RefIsland {
 		return false
 	}
-	is := s.findIsland(v)
-	return is != nil && is.Kind == KindTask
+	return s.HasTask(v)
 }
 
 // errTaskParent は、タスクの下に子を置こうとしたことを表す。
@@ -631,8 +630,7 @@ func normalizeRepoRef(ref string) string {
 
 // HasTask は id が実在するタスク（Kind が task の island）かを返す。
 func (s *IslandStore) HasTask(id string) bool {
-	is := s.findIsland(id)
-	return is != nil && is.Kind == KindTask
+	return s.FindTask(id) != nil
 }
 
 // FindTask は id のタスクを返す。タスクでなければ nil。

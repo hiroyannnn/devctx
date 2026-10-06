@@ -1,7 +1,6 @@
 package roadmap
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -41,16 +40,8 @@ func (s *Server) handleAPISessionOps(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req sessionOp
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxOpsBodyBytes))
-	// islands ops と同じく、未知フィールドは UI と server のずれとして弾く
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeOpError(w, plainError(http.StatusRequestEntityTooLarge, "request body too large"))
-			return
-		}
-		writeOpError(w, plainError(http.StatusBadRequest, "malformed JSON body"))
+	if oe := decodeOpBody(w, r, &req); oe != nil {
+		writeOpError(w, oe)
 		return
 	}
 	if oe := s.checkSessionOp(req); oe != nil {
@@ -112,16 +103,10 @@ func (s *Server) checkSessionOp(req sessionOp) *opError {
 		log.Printf("sessions: failed to load islands: %v", err)
 		return plainError(http.StatusInternalServerError, "failed to load islands")
 	}
-	if !is.HasTask(id) {
+	if is.FindTask(id) == nil {
 		return badRequest("task %q not found", req.Task)
 	}
 	return nil
-}
-
-func (s *Server) invalidateRoadmapCache() {
-	s.cacheMu.Lock()
-	s.cachedResult = nil
-	s.cacheMu.Unlock()
 }
 
 // taskLabel は task_ref の表示名を返す。紐付けが無ければ ""、タスクが消えていれば「削除済み tN」。
