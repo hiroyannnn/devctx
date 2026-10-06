@@ -634,3 +634,11 @@ func (s *IslandStore) HasTask(id string) bool {
 	is := s.findIsland(id)
 	return is != nil && is.Kind == KindTask
 }
+
+// FindTask は id のタスクを返す。タスクでなければ nil。
+func (s *IslandStore) FindTask(id string) *Island {
+	if is := s.findIsland(id); is != nil && is.Kind == KindTask {
+		return is
+	}
+	return nil
+}

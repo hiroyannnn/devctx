@@ -133,6 +133,8 @@ func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
 		writeOpError(w, plainError(http.StatusInternalServerError, "failed to update islands"))
 		return
 	}
+	// task_label を載せた /api/roadmap の応答キャッシュを捨てる（タスクの改名・削除を 5 秒待たずに見せる）
+	s.invalidateRoadmapCache()
 	resp := map[string]any{"ok": true, "islands": tree}
 	if ref != "" {
 		resp["ref"] = ref

@@ -64,6 +64,8 @@ type SessionGraph struct {
 	AgentWaiting    bool                `json:"agent_waiting,omitempty"`
 	AgentWaitingFor  string              `json:"agent_waiting_for,omitempty"`
 	AgentStateSource string              `json:"agent_state_source,omitempty"`
+	TaskRef        string               `json:"task_ref,omitempty"`
+	TaskLabel      string               `json:"task_label,omitempty"`
 	Nodes          []GraphNode          `json:"nodes"`
 	Edges          []GraphEdge          `json:"edges"`
 }
@@ -99,6 +101,8 @@ func BuildSessionGraph(entry RoadmapEntry) SessionGraph {
 		AgentWaiting:    entry.AgentWaiting,
 		AgentWaitingFor:  entry.AgentWaitingFor,
 		AgentStateSource: entry.AgentStateSource,
+		TaskRef:          entry.TaskRef,
+		TaskLabel:        entry.TaskLabel,
 		// nil だと JSON が null になり、フロントの session.edges.filter 等が落ちる
 		Nodes: []GraphNode{},
 		Edges: []GraphEdge{},

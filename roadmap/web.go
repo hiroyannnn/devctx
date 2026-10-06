@@ -93,6 +93,9 @@ type RoadmapEntry struct {
 	// 待ちの詳細（待ち要求のラベル、なければ live の待ち理由 permission prompt 等）と状態の出どころ（live / hook）。live は agent view 由来
 	AgentWaitingFor  string                `json:"agent_waiting_for,omitempty"`
 	AgentStateSource string                `json:"agent_state_source,omitempty"`
+	// 手で作ったタスクへの紐付け。task_label は表示名（タスクが消えていれば「削除済み tN」）
+	TaskRef   string `json:"task_ref,omitempty"`
+	TaskLabel string `json:"task_label,omitempty"`
 }
 
 // applyAgentFields は provider（空なら claude）と、view（live と hook を突き合わせた状態）を entry に写す。
@@ -123,6 +126,8 @@ type Server struct {
 	IslandLoader IslandLoader
 	// IslandUpdater は POST /api/islands/ops の書き込み先。nil なら 503（編集は有効化した呼び出しだけに限る）
 	IslandUpdater IslandUpdater
+	// ContextUpdater は POST /api/sessions/ops の書き込み先。nil なら 503
+	ContextUpdater ContextUpdater
 	Scanner       *Scanner
 	Port          int
 	// Live は agent view の snapshot 供給元。nil なら無効（hook 状態のみ。テストで claude を実行しない）
@@ -169,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/islands", s.handleAPIIslands)
 	mux.HandleFunc("/api/islands/ops", s.handleAPIIslandOps)
 	mux.HandleFunc("/api/islands/known-repos", s.handleAPIKnownRepos)
+	mux.HandleFunc("/api/sessions/ops", s.handleAPISessionOps)
 	mux.HandleFunc("/api/timeline/", s.handleAPITimeline)
 	mux.Handle("/static/", s.staticHandler())
 	mux.HandleFunc("/", s.handleIndex)
@@ -289,6 +295,8 @@ func (s *Server) loadRoadmapEntries() (active []model.Context, entries []Roadmap
 		events, _ = s.EventLoader.LoadEvents()
 	}
 
+	islands := s.loadIslandsForLabels()
+
 	scanned, phaseValidUntil := s.scanPhases(active)
 	entries = make([]RoadmapEntry, 0, len(active))
 	for _, ctx := range active {
@@ -312,6 +320,8 @@ func (s *Server) loadRoadmapEntries() (active []model.Context, entries []Roadmap
 			CreatedAt:     ctx.CreatedAt.Format(time.RFC3339),
 			LastSeen:      ctx.LastSeen.Format(time.RFC3339),
 			RepoRoot:      ctx.RepoRoot,
+			TaskRef:       ctx.TaskRef,
+			TaskLabel:     taskLabel(islands, ctx.TaskRef),
 		}
 		applyAgentFields(&entry, ctx, views[ctx.Name])
 
@@ -341,6 +351,19 @@ func (s *Server) loadRoadmapEntries() (active []model.Context, entries []Roadmap
 		entries = append(entries, entry)
 	}
 	return active, entries, phaseValidUntil, nil
+}
+
+// loadIslandsForLabels はタスク名の表示用に islands を読む。無い・読めないときは nil（ラベルを付けないだけで、一覧は返す）。
+func (s *Server) loadIslandsForLabels() *model.IslandStore {
+	if s.IslandLoader == nil {
+		return nil
+	}
+	is, err := s.IslandLoader.LoadIslands()
+	if err != nil {
+		log.Printf("roadmap: failed to load islands for task labels: %v", err)
+		return nil
+	}
+	return is
 }
 
 func (s *Server) handleAPIRoadmap(w http.ResponseWriter, r *http.Request) {
@@ -445,6 +468,8 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 		insights, _ = s.InsightLoader.LoadInsights()
 	}
 
+	islands := s.loadIslandsForLabels()
+
 	// Group by project (repo root)
 	projectMap := make(map[string]*ProjectGraphGroup)
 	var projectOrder []string
@@ -477,6 +502,8 @@ func (s *Server) handleAPIRoadmapGraph(w http.ResponseWriter, r *http.Request) {
 			PRURL:    ctx.PRURL,
 			IssueURL: ctx.IssueURL,
 			LastSeen: ctx.LastSeen.Format(time.RFC3339),
+			TaskRef:   ctx.TaskRef,
+			TaskLabel: taskLabel(islands, ctx.TaskRef),
 		}
 		applyAgentFields(&entry, ctx, views[ctx.Name])
 
