@@ -367,3 +367,6 @@ function buildSemanticGraph(graphData) {
 
   return postProcess(nodes, edges, isAllProjects);
 }
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { computeNodeDepth, connectOrphanNodes };

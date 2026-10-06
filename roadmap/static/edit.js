@@ -547,3 +547,6 @@ function onGraphKeydown(e) {
   runEditAction(action, sel[0], kind);
 }
 document.getElementById('graph-canvas').addEventListener('keydown', onGraphKeydown);
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { contextMenuItems, repoMenuItems, keyAction, selectAfterOp, deleteConfirmModel };

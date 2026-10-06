@@ -97,3 +97,6 @@ function balancedLayout(nodes, edges, rootId, prevSides) {
   place(left, true);
   return { positions: positions, side: side, headSides: headSides };
 }
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { balancedLayout };

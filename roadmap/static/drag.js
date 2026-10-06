@@ -209,3 +209,6 @@ function attachableRepos(repos, islandRef, islandsData) {
     return !children[ref] && !descendantsOf(ref, islandsData)[islandRef];
   });
 }
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { dropCandidateIds, dropOpFor, hitTarget, attachableRepos };

@@ -76,3 +76,6 @@ function applyMindmapTheme(nodes) {
     n.font = f;
   });
 }
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { themeKindOf, applyMindmapTheme };

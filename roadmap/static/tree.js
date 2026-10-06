@@ -189,3 +189,6 @@ function descendantsOf(ref, islandsData) {
   }
   return out;
 }
+
+// Node の単体テスト用。ブラウザでは module が無いので何も起きない。
+if (typeof module !== 'undefined') module.exports = { repoNodeId, islandNodeId, repoBaseName, normalizeIslands, taskLabel, taskMarker, taskPromptText, islandOverlay, editableKind, parentRefOf, siblingParentRef, childrenRefsOf, descendantsOf };
