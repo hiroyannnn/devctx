@@ -92,6 +92,21 @@ func TestApplyTaskMarker(t *testing.T) {
 			t.Fatal("same task, no relink needed")
 		}
 	})
+	t.Run("earlier same-task marker pulls the timestamp back so a later-arriving earlier marker for another task cannot win", func(t *testing.T) {
+		// C=t1@T2, A=t1@T0, B=t2@T1 の順に届く。最初の marker は A なので、最終的に t1
+		ctx := &Context{SessionID: "s1"}
+		ApplyTaskMarker(ctx, "s1", "t1", linkT0.Add(2*time.Minute)) // C
+		ApplyTaskMarker(ctx, "s1", "t1", linkT0)                    // A
+		if !ctx.TaskLinkAt.Equal(linkT0) {
+			t.Fatalf("TaskLinkAt = %v, want earliest %v", ctx.TaskLinkAt, linkT0)
+		}
+		if ApplyTaskMarker(ctx, "s1", "t2", linkT0.Add(time.Minute)) { // B
+			t.Fatal("B is later than A and must not win")
+		}
+		if ctx.TaskRef != "island:t1" {
+			t.Fatalf("TaskRef = %q, want island:t1", ctx.TaskRef)
+		}
+	})
 	t.Run("new session relinks to a different task", func(t *testing.T) {
 		ctx := &Context{SessionID: "s2", TaskRef: "island:t1", TaskLinkSession: "s1", TaskLinkSource: "marker", TaskLinkAt: linkT0}
 		if !ApplyTaskMarker(ctx, "s2", "t2", linkT0.Add(time.Hour)) {

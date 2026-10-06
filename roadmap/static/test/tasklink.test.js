@@ -158,3 +158,21 @@ test('islandOverlay: DAG ノードは島の木に入れず、root にもぶら�
   assert.ok(!edges.some((e) => e.from === 'root' && e.to.startsWith('dag:')));
   assert.equal(nodes.find((n) => n.id === 'dag:linked:n1').level, 3);
 });
+
+test('limitSessions: タスクに付いたセッションは枠に数えず常に残し、「+N more」は隠した未リンクだけ数える', () => {
+  const mk = (name, ref) => ({ name, task_ref: ref });
+  const sessions = [mk('a'), mk('b'), mk('c'), mk('linked1', I('t1')), mk('d'), mk('e'), mk('linked2', I('t4')), mk('f'), mk('ghost', I('t9'))];
+  const { visible, hiddenCount } = api.limitSessions(sessions, 3, tree);
+  assert.deepEqual(
+    visible.map((s) => s.name),
+    ['a', 'b', 'c', 'linked1', 'linked2'],
+    '未リンク先頭 3 件 + リンク済み全件、元の順序を保つ',
+  );
+  assert.equal(hiddenCount, 4, 'd e f ghost（消えたタスクはリンク扱いしない）');
+});
+
+test('limitSessions: 上限なし・上限内ならそのまま', () => {
+  const sessions = [{ name: 'a' }, { name: 'b', task_ref: I('t1') }];
+  assert.deepEqual(api.limitSessions(sessions, Infinity, tree), { visible: sessions, hiddenCount: 0 });
+  assert.deepEqual(api.limitSessions(sessions, 5, tree), { visible: sessions, hiddenCount: 0 });
+});

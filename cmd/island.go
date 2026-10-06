@@ -241,10 +241,11 @@ func islandList(s *storage.Storage, out io.Writer) error {
 	return nil
 }
 
-// linkedSessionCounts はタスク ref ごとの、紐付いている context の数を返す。
+// linkedSessionCounts はタスク ref ごとの、紐付いている active な context の数を返す。
+// Why active だけ: Mind Map に出るのは active な context だけなので、件数を揃える。
 func linkedSessionCounts(store *model.Store) map[string]int {
 	counts := map[string]int{}
-	for _, c := range store.Contexts {
+	for _, c := range store.Active() {
 		if c.TaskRef != "" {
 			counts[c.TaskRef]++
 		}

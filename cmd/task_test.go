@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -243,5 +245,35 @@ func TestTaskLink_Errors(t *testing.T) {
 	}
 	if err := taskUnlink(s, &out, "nope"); err == nil {
 		t.Error("unlink unknown context should fail")
+	}
+}
+
+// 完了済み context は Mind Map に出ないので、island list の件数にも数えない。
+func TestLinkedSessionCounts_OnlyActive(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "a1", Status: model.StatusInProgress, TaskRef: "island:t1"},
+		{Name: "a2", Status: model.StatusDone, TaskRef: "island:t1"},
+		{Name: "a3", Status: model.StatusReview},
+	}}
+	got := linkedSessionCounts(store)
+	if got["island:t1"] != 1 || len(got) != 1 {
+		t.Fatalf("counts = %v, want {island:t1: 1}", got)
+	}
+}
+
+// islands.yaml が壊れているときに「task not found」と誤報せず、読み込みエラーを返す。hook 経路は従来どおり黙って無視する。
+func TestTaskLink_ReportsIslandsLoadError(t *testing.T) {
+	s, _ := islandFixture(t, fixtureContexts()...)
+	// islandFixture は HOME を temp にしており、設定ディレクトリは ~/.config/devctx
+	path := filepath.Join(os.Getenv("HOME"), ".config", "devctx", "islands.yaml")
+	if err := os.WriteFile(path, []byte("islands: [unclosed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := taskLink(s, &bytes.Buffer{}, "a1", "t1")
+	if err == nil || strings.Contains(err.Error(), "not found") {
+		t.Fatalf("err = %v, want the islands load error", err)
+	}
+	if taskExists(s, "t1") {
+		t.Fatal("hook path must keep treating a load failure as 'no such task'")
 	}
 }

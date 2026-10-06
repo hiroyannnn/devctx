@@ -60,7 +60,12 @@ func ApplyTaskMarker(ctx *Context, sessionID, taskID string, at time.Time) bool 
 	}
 	ref := IslandRef(taskID)
 	if ctx.TaskLinkSession == sessionID {
-		if !at.Before(ctx.TaskLinkAt) || ctx.TaskRef == ref {
+		if !at.Before(ctx.TaskLinkAt) {
+			return false
+		}
+		if ctx.TaskRef == ref {
+			// 同じタスクでも時刻は早い方へ引き戻す。引き戻さないと、後から届く「A より遅く C より早い」別タスクの marker が最初の marker として勝ってしまう
+			ctx.TaskLinkAt = at
 			return false
 		}
 		ctx.TaskRef, ctx.TaskLinkSource, ctx.TaskLinkAt = ref, TaskLinkSourceMarker, at

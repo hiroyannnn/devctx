@@ -110,7 +110,7 @@ func TestMergeHookConfigs_DifferentMatcherIsSeparate(t *testing.T) {
 func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 	configs := hookConfigsByEvent(devctxHookSpecs("devctx"))
 	want := map[string][]string{
-		"SessionStart":     {"devctx register", "devctx register"},
+		"SessionStart":     {"devctx register", "devctx register", "devctx register"},
 		"UserPromptSubmit": {"devctx touch --quick --track-state"},
 		"Notification":     {"devctx touch --quick --track-state"},
 		"Stop":             {"devctx roadmap analyze --if-stale --background", "devctx touch --quick --track-state"},
@@ -130,6 +130,18 @@ func TestDevctxHookConfigs_TracksAgentState(t *testing.T) {
 			}
 		}
 		assertCommands(t, got, wantCmds...)
+	}
+}
+
+// /clear は新しい session_id で始まるが SessionStart の source は "clear" で、startup|resume には当たらない。
+// register が走らないと touch が context を見つけられず、clear 後に貼った marker が黙って捨てられる。
+func TestDevctxHookSpecs_SessionStartCoversClearButNotCompact(t *testing.T) {
+	var matchers []string
+	for _, c := range hookConfigsByEvent(devctxHookSpecs("devctx"))["SessionStart"] {
+		matchers = append(matchers, c.Matcher)
+	}
+	if !reflect.DeepEqual(matchers, []string{"startup", "resume", "clear"}) {
+		t.Fatalf("SessionStart matchers = %v, want startup/resume/clear (compact keeps the same session)", matchers)
 	}
 }
 

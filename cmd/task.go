@@ -135,7 +135,12 @@ func taskLink(s *storage.Storage, out io.Writer, contextName, taskArg string) er
 	if err != nil {
 		return err
 	}
-	if !taskExists(s, id) {
+	// Why 読み込みエラーを区別する: 壊れた islands.yaml を「task not found」と誤報しないため。hook 経路（taskExists）は従来どおり黙って無視する
+	is, err := s.LoadIslands()
+	if err != nil {
+		return err
+	}
+	if !is.HasTask(id) {
 		return fmt.Errorf("task %q not found (use t<n> or island:t<n>)", id)
 	}
 	ref := model.IslandRef(id)
