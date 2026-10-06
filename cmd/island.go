@@ -234,16 +234,27 @@ func islandList(s *storage.Storage, out io.Writer) error {
 		return err
 	}
 	repos, active := model.ScanRepos(store, is)
-	renderIslandTree(out, is, repos, active)
+	renderIslandTree(out, is, repos, active, linkedSessionCounts(store))
 	if err := is.Validate(); err != nil {
 		fmt.Fprintf(out, "warning: %v\n", err)
 	}
 	return nil
 }
 
+// linkedSessionCounts はタスク ref ごとの、紐付いている context の数を返す。
+func linkedSessionCounts(store *model.Store) map[string]int {
+	counts := map[string]int{}
+	for _, c := range store.Contexts {
+		if c.TaskRef != "" {
+			counts[c.TaskRef]++
+		}
+	}
+	return counts
+}
+
 // renderIslandTree はトップレベル（親なし、または親が実在しない）の island → repo の順に木を描く。
 // 親を持たない repo も、既知なら全て出す（island に未接続の repo も一覧で見えるように）。
-func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, active map[string]int) {
+func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, active map[string]int, linked map[string]int) {
 	// 解決後の木で描く。生の親で辿ると、手編集でタスクの下に置かれたノードが、トップレベルとタスクの下に二重に出る
 	resolved := is.Resolved()
 	is = &resolved
@@ -254,6 +265,11 @@ func renderIslandTree(out io.Writer, is *model.IslandStore, repos []string, acti
 			label := fmt.Sprintf("%s [task %s]", i.Name, i.ID)
 			if i.Done {
 				label += " ✓"
+			}
+			if n := linked[model.IslandRef(i.ID)]; n == 1 {
+				label += " (1 session)"
+			} else if n > 1 {
+				label += fmt.Sprintf(" (%d sessions)", n)
 			}
 			names[model.IslandRef(i.ID)] = label
 			continue
