@@ -651,9 +651,12 @@ function renderGraphView(groups, graphData, opts) {
   });
 
   graphNetwork.on('oncontext', function(params) {
-    if (!graphRootId) return;
     var id = graphNetwork.getNodeAt(params.pointer.DOM);
-    if (id === undefined || !editableKind(graphNodes.get(id))) return;
+    if (id === undefined) return;
+    // セッションのメニュー（タスクに付ける）は単一プロジェクト表示でも出す。island の編集は All Projects だけ
+    var picked = graphNodes.get(id);
+    var isSession = !!picked && picked._type === 'session';
+    if (!isSession && (!graphRootId || !editableKind(picked))) return;
     graphNetwork.selectNodes([id]);
     var src = params.event && params.event.srcEvent;
     // ブラウザ標準のメニューを出さない（編集可能なノード上のときだけ）
@@ -754,6 +757,7 @@ function showInspector(session) {
   statusPhase.appendChild(phaseBadge);
   addSection('Status', statusPhase);
 
+  addSection('Task', sessionTaskName(session, cachedIslands));
   addSection('Branch', session.branch);
   if (session.goal) addSection('Goal', session.goal);
   if (session.current_focus) addSection('Focus', session.current_focus);

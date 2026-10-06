@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
@@ -56,9 +57,38 @@ var taskDoneCmd = &cobra.Command{
 	},
 }
 
+var taskLinkCmd = &cobra.Command{
+	Use:   "link <context> <task>",
+	Short: "Link an agent session (context) to a task",
+	Long: `Hang a context under a task in the All Projects mind map. <task> is t<n> or island:t<n>.
+Linking never marks the task done. The link stays when the same worktree starts a new
+session; the first [devctx:task:<id>] marker of a new session replaces it.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := storage.New()
+		if err != nil {
+			return err
+		}
+		return taskLink(s, cmd.OutOrStdout(), args[0], args[1])
+	},
+}
+
+var taskUnlinkCmd = &cobra.Command{
+	Use:   "unlink <context>",
+	Short: "Remove the task link from a context",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := storage.New()
+		if err != nil {
+			return err
+		}
+		return taskUnlink(s, cmd.OutOrStdout(), args[0])
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(taskCmd)
-	taskCmd.AddCommand(taskAddCmd, taskDoneCmd)
+	taskCmd.AddCommand(taskAddCmd, taskDoneCmd, taskLinkCmd, taskUnlinkCmd)
 
 	taskAddCmd.Flags().StringVar(&taskAddTo, "to", "", "Parent ref (island:<id>, repo:<path>, or a bare name)")
 	_ = taskAddCmd.MarkFlagRequired("to")
@@ -96,4 +126,52 @@ func taskDone(s *storage.Storage, out io.Writer, idArg string, undo bool) error 
 		}
 		return nil
 	})
+}
+
+// taskLink は context をタスクに手動で付ける。
+// Why islands をロックの外で読む: UpdateStore の中で UpdateIslands を取らない（hook の touch と同じ方針）。
+func taskLink(s *storage.Storage, out io.Writer, contextName, taskArg string) error {
+	id, err := islandID(taskArg)
+	if err != nil {
+		return err
+	}
+	// Why 読み込みエラーを区別する: 壊れた islands.yaml を「task not found」と誤報しないため。hook 経路（taskExists）は従来どおり黙って無視する
+	is, err := s.LoadIslands()
+	if err != nil {
+		return err
+	}
+	if !is.HasTask(id) {
+		return fmt.Errorf("task %q not found (use t<n> or island:t<n>)", id)
+	}
+	ref := model.IslandRef(id)
+	err = s.UpdateStore(func(store *model.Store) error {
+		ctx := store.FindByName(contextName)
+		if ctx == nil {
+			return fmt.Errorf("context [%s] not found", contextName)
+		}
+		model.LinkTask(ctx, ref, time.Now())
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "✓ Linked [%s] to %s\n", contextName, ref)
+	return nil
+}
+
+// taskUnlink は context のタスク紐付けを外す。
+func taskUnlink(s *storage.Storage, out io.Writer, contextName string) error {
+	err := s.UpdateStore(func(store *model.Store) error {
+		ctx := store.FindByName(contextName)
+		if ctx == nil {
+			return fmt.Errorf("context [%s] not found", contextName)
+		}
+		model.UnlinkTask(ctx)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "✓ Unlinked [%s]\n", contextName)
+	return nil
 }

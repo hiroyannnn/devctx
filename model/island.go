@@ -130,15 +130,14 @@ func (s *IslandStore) isTask(ref string) bool {
 	if err != nil || kind != RefIsland {
 		return false
 	}
-	is := s.findIsland(v)
-	return is != nil && is.Kind == KindTask
+	return s.HasTask(v)
 }
 
 // errTaskParent は、タスクの下に子を置こうとしたことを表す。
 var errTaskParent = errors.New("tasks cannot have children")
 
 // checkParentAllowed は parent の下に子を置けるかを検査する（形式・island の実在・タスクでないこと）。repo は未登録でもよい。
-// Why: 次の PR でエージェントセッションがタスクの下に付く。island / repo をタスクの下に許すと、
+// Why: エージェントセッションがタスクの下に付く（Context.TaskRef）。island / repo をタスクの下に許すと、
 // 「タスク = 葉」の前提（描画・完了判定）が崩れる。追加・タスク追加・付け替えの全経路でここを通し、
 // 読み出し側（ParentOf / Validate）も同じ判定で手編集の親を切る。
 func (s *IslandStore) checkParentAllowed(parent string) error {
@@ -627,4 +626,17 @@ func normalizeRepoRef(ref string) string {
 		return RepoRef(NormalizePath(v))
 	}
 	return ref
+}
+
+// HasTask は id が実在するタスク（Kind が task の island）かを返す。
+func (s *IslandStore) HasTask(id string) bool {
+	return s.FindTask(id) != nil
+}
+
+// FindTask は id のタスクを返す。タスクでなければ nil。
+func (s *IslandStore) FindTask(id string) *Island {
+	if is := s.findIsland(id); is != nil && is.Kind == KindTask {
+		return is
+	}
+	return nil
 }

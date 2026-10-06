@@ -239,6 +239,7 @@ The dashboard auto-refreshes every 5 seconds.`,
 		server.Live = agentview.NewRefresher(agentview.Fetch)
 		server.IslandLoader = s
 		server.IslandUpdater = s
+		server.ContextUpdater = s
 		server.OpenBrowser = roadmap.OpenBrowser
 		return server.ListenAndServe()
 	},

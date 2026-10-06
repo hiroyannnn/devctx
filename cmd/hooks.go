@@ -213,6 +213,10 @@ func devctxHookSpecs(devctxPath string) []hookEventSpec {
 		{"SessionStart", []HookConfig{
 			{Matcher: "startup", Hooks: command("register")},
 			{Matcher: "resume", Hooks: command("register")},
+			// /clear は新しい session_id で始まるが source は "clear"。startup|resume だけだと register が走らず、
+			// touch が context を見つけられず clear 後に貼った marker が黙って捨てられる。
+			// Why not compact: 同じセッションが続くので register し直す必要がない
+			{Matcher: "clear", Hooks: command("register")},
 		}},
 		// Agent state: running on prompt, waiting on notification / turn end
 		{"UserPromptSubmit", []HookConfig{{Hooks: command("touch --quick --track-state")}}},

@@ -20,6 +20,8 @@ type hookInput struct {
 	ToolName         string `json:"tool_name"`
 	// ToolInput は待ち要求の分類にだけ使う。Write の content やパッチ全文のように巨大でも、構造体には展開しない
 	ToolInput json.RawMessage `json:"tool_input"`
+	// Prompt は UserPromptSubmit のプロンプト本文。タスク marker の検出にだけ使い、保存しない
+	Prompt string `json:"prompt"`
 }
 
 // maxHookInputBytes は hook stdin の読み取り上限。tool_input は巨大になりうるので、
@@ -67,34 +69,11 @@ Use --track-state to record the agent state from the hook event (running / needs
 		// Why unlocked read first: 高頻度 hook の大半は no-op（同じ状態・quick の間引き）で、
 		// ロック待ちと書き込みを避けたい。store の書き込みは atomic rename なので、ロック無しの読み取りでも
 		// 中途半端なファイルは見えない。古い値を読んでも、変化ありと判断すれば下のロック内で再評価される
-		if touchIsNoop(s, provider, input, args, eventTime) {
+		if touchIsNoop(s, provider, input, args, eventTime, touchQuick, touchTrackState) {
 			return nil
 		}
 
-		var updated model.Context
-		var seen bool
-		err = s.UpdateStore(func(store *model.Store) error {
-			name := resolveTouchTarget(store, provider, input.SessionID, args)
-			if name == "" {
-				return fmt.Errorf("no context specified and no session ID found")
-			}
-
-			ctx := store.FindByName(name)
-			if ctx == nil {
-				return fmt.Errorf("context [%s] not found", name)
-			}
-
-			now := time.Now()
-
-			// State changes are saved even when last_seen is throttled
-			stateChanged := touchTrackState && applyHookState(ctx, input, eventTime)
-			seen = applyLastSeen(ctx, now, touchQuick)
-			if !seen && !stateChanged {
-				return storage.ErrSkipSave
-			}
-			updated = *ctx
-			return nil
-		})
+		updated, seen, err := touchOnce(s, provider, input, args, eventTime, touchQuick, touchTrackState)
 		if err != nil {
 			return err
 		}
@@ -121,9 +100,66 @@ Use --track-state to record the agent state from the hook event (running / needs
 	},
 }
 
+// touchOnce は store をロックして、hook イベント 1 件分の更新（状態・last_seen・タスク紐付け）を保存する。
+// 何も変わらなければ updated は ゼロ値（Name が空）。
+func touchOnce(s *storage.Storage, provider model.Provider, input hookInput, args []string, eventTime time.Time, quick, trackState bool) (updated model.Context, seen bool, err error) {
+	// Why islands をロックの外で読む: UpdateStore の中で UpdateIslands を呼ぶとロックの取り順が入れ子になる。
+	// タスクの実在確認は読み取りだけでよく、古い値を読んでも「無いタスクへは付けない」側に倒れるだけ
+	markerID, hasMarker := taskMarkerFromInput(input)
+	validMarker := hasMarker && taskExists(s, markerID)
+
+	err = s.UpdateStore(func(store *model.Store) error {
+		name := resolveTouchTarget(store, provider, input.SessionID, args)
+		if name == "" {
+			return fmt.Errorf("no context specified and no session ID found")
+		}
+
+		ctx := store.FindByName(name)
+		if ctx == nil {
+			return fmt.Errorf("context [%s] not found", name)
+		}
+
+		now := time.Now()
+
+		// State changes are saved even when last_seen is throttled
+		stateChanged := trackState && applyHookState(ctx, input, eventTime)
+		linked := validMarker && model.ApplyTaskMarker(ctx, input.SessionID, markerID, eventTime)
+		seen = applyLastSeen(ctx, now, quick)
+		if !seen && !stateChanged && !linked {
+			return storage.ErrSkipSave
+		}
+		updated = *ctx
+		return nil
+	})
+	return updated, seen, err
+}
+
+// taskMarkerFromInput は UserPromptSubmit のプロンプトから marker のタスク id を取り出す。
+// プロンプトを持つのは UserPromptSubmit だけだが、イベント名も見て他のイベントの偶然の prompt 項目を拾わない。
+func taskMarkerFromInput(input hookInput) (string, bool) {
+	if input.HookEventName != "UserPromptSubmit" {
+		return "", false
+	}
+	return model.ParseTaskMarker(input.Prompt)
+}
+
+// taskExists は id が実在するタスクかを islands.yaml から（ロック無しで）確かめる。読めなければ false。
+func taskExists(s *storage.Storage, id string) bool {
+	is, err := s.LoadIslands()
+	if err != nil {
+		return false
+	}
+	return is.HasTask(id)
+}
+
 // touchIsNoop は store をロック無しで読み、この touch が何も変えないことが確実なら true を返す。
 // 読み込み失敗・対象不明などは false を返し、エラー報告を UpdateStore 側に任せる。
-func touchIsNoop(s *storage.Storage, provider model.Provider, input hookInput, args []string, eventTime time.Time) bool {
+func touchIsNoop(s *storage.Storage, provider model.Provider, input hookInput, args []string, eventTime time.Time, quick, trackState bool) bool {
+	// marker 付きのプロンプトは、リンクが変わるか否かをロック内の ApplyTaskMarker に決めさせる。
+	// Why: ここで状態だけを見て no-op と判断すると、同じ running 状態の 2 つ目以降のプロンプトで付け替えを取りこぼす
+	if _, ok := taskMarkerFromInput(input); ok {
+		return false
+	}
 	store, err := s.LoadStore()
 	if err != nil {
 		return false
@@ -137,8 +173,8 @@ func touchIsNoop(s *storage.Storage, provider model.Provider, input hookInput, a
 		return false
 	}
 	probe := *ctx // 副作用を本物の store に残さないためコピーで評価する
-	stateChanged := touchTrackState && applyHookState(&probe, input, eventTime)
-	seen := applyLastSeen(&probe, time.Now(), touchQuick)
+	stateChanged := trackState && applyHookState(&probe, input, eventTime)
+	seen := applyLastSeen(&probe, time.Now(), quick)
 	return !stateChanged && !seen
 }
 

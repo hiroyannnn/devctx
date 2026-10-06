@@ -72,6 +72,14 @@ type Context struct {
 	AgentStateAt   time.Time       `yaml:"agent_state_at,omitempty"`
 	// PendingRequest は needs_input の間だけ、何を待っているか（hook 由来の単一スロット）
 	PendingRequest *PendingRequest `yaml:"pending_request,omitempty"`
+	// TaskRef は手で作ったタスク（"island:t<n>"）への紐付け。register は触らない。
+	// Why: Claude は worktree 単位で context を使い回すので、新しいセッションでも前のリンクを残して見失わないようにする
+	TaskRef string `yaml:"task_ref,omitempty"`
+	// TaskLinkSession / Source / At は、どのセッションがいつ・どう付けたか。
+	// 同じセッションの 2 つ目以降の marker を無視し、新セッションの最初の marker だけが付け替えられるようにするための記録
+	TaskLinkSession string    `yaml:"task_link_session,omitempty"`
+	TaskLinkSource  string    `yaml:"task_link_source,omitempty"` // "marker" | "manual"
+	TaskLinkAt      time.Time `yaml:"task_link_at,omitempty"`
 }
 
 type Config struct {
