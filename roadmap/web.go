@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -252,7 +253,7 @@ func (s *Server) staticHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		switch filepath.Ext(r.URL.Path) {
+		switch path.Ext(r.URL.Path) {
 		case ".css":
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		case ".js":

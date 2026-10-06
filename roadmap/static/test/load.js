@@ -10,8 +10,17 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const STATIC_DIR = path.join(__dirname, '..');
-// index.html の <script src> の順（app.js 以外）
-const FILES = ['theme.js', 'layout.js', 'tree.js', 'graphdata.js', 'edit.js', 'drag.js'];
+const INDEX_HTML = path.join(STATIC_DIR, '..', 'templates', 'index.html');
+
+// index.html の <script src="/static/..."> の順（app.js 以外）。
+// Why not 手書きの一覧: index.html の読み込み順とずれても気付けず、ブラウザと違う順でテストしてしまうため
+function scriptFiles() {
+  const html = fs.readFileSync(INDEX_HTML, 'utf8');
+  return [...html.matchAll(/<script src="\/static\/([^"]+\.js)"><\/script>/g)]
+    .map((m) => m[1])
+    .filter((f) => f !== 'app.js');
+}
+const FILES = scriptFiles();
 
 // edit.js が読み込み時に graph-canvas へ listener を付けるので、DOM の最小の代役を置く
 function stubElement() {
