@@ -522,16 +522,7 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reload store
 		store, err := m.storage.LoadStore()
 		if err == nil {
-			m.store = store
-			m.contexts = store.ActiveWithRetention(m.doneRetentionDays)
-			m.maxItem = len(m.contexts)
-			if m.cursor >= m.maxItem {
-				m.cursor = m.maxItem - 1
-			}
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.views = m.live.views(store.Contexts)
+			m.applyStore(store)
 		}
 		m.message = ""
 		return m, tickCmd()
@@ -620,17 +611,10 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Delete/remove context
 			ctx := m.selectedContext()
 			if ctx != nil {
-				m.store.Remove(ctx.Name)
-				if err := m.storage.SaveStore(m.store); err == nil {
-					m.contexts = m.store.ActiveWithRetention(m.doneRetentionDays)
-					m.maxItem = len(m.contexts)
-					if m.cursor >= m.maxItem {
-						m.cursor = m.maxItem - 1
-					}
-					if m.cursor < 0 {
-						m.cursor = 0
-					}
-					m.message = "🗑 Removed: " + ctx.Name
+				name := ctx.Name
+				if saved, _, err := removeContexts(m.storage, name); err == nil {
+					m.applyStore(saved)
+					m.message = "🗑 Removed: " + name
 				}
 			}
 			return m, nil
@@ -646,24 +630,32 @@ func (m *kanbanModel) moveSelectedTo(status model.Status, msg string) (tea.Model
 		return m, nil
 	}
 
-	// Find and update in store
-	storeCtx := m.store.FindByName(ctx.Name)
-	if storeCtx != nil {
-		storeCtx.Status = status
-		storeCtx.LastSeen = time.Now() // Update LastSeen when status changes
-		if err := m.storage.SaveStore(m.store); err == nil {
-			m.contexts = m.store.ActiveWithRetention(m.doneRetentionDays)
-			m.maxItem = len(m.contexts)
-			if m.cursor >= m.maxItem {
-				m.cursor = m.maxItem - 1
-			}
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.message = msg
-		}
+	// m.store は直近の tick（最大 2 秒前）に読んだもの。丸ごと保存すると、その間に hook や
+	// ダッシュボードが書いた agent_state / タスク紐付けを巻き戻すので、ロック内で status だけ変える
+	saved, err := updateContext(m.storage, ctx.Name, func(c *model.Context) error {
+		c.Status = status
+		c.LastSeen = time.Now() // Update LastSeen when status changes
+		return nil
+	})
+	if err == nil {
+		m.applyStore(saved)
+		m.message = msg
 	}
 	return m, nil
+}
+
+// applyStore は保存後の store を表示に取り込み、cursor を範囲内に収める。
+func (m *kanbanModel) applyStore(store *model.Store) {
+	m.store = store
+	m.contexts = store.ActiveWithRetention(m.doneRetentionDays)
+	m.maxItem = len(m.contexts)
+	if m.cursor >= m.maxItem {
+		m.cursor = m.maxItem - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.views = m.live.views(store.Contexts)
 }
 
 func (m kanbanModel) calcMaxVisible() int {

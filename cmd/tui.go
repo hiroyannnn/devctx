@@ -233,8 +233,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Delete):
 			if item, ok := m.list.SelectedItem().(contextItem); ok {
-				m.store.Remove(item.ctx.Name)
-				m.storage.SaveStore(m.store)
+				if saved, _, err := removeContexts(m.storage, item.ctx.Name); err == nil {
+					m.store = saved
+				}
 				return m.refreshList()
 			}
 		}
@@ -247,10 +248,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 	if item, ok := m.list.SelectedItem().(contextItem); ok {
-		ctx := m.store.FindByName(item.ctx.Name)
-		if ctx != nil {
+		// 起動時に読んだ m.store を丸ごと保存すると、その後に hook やダッシュボードが
+		// 書いた agent_state / タスク紐付けを巻き戻すので、ロック内で status だけ変える
+		saved, err := updateContext(m.storage, item.ctx.Name, func(ctx *model.Context) error {
 			ctx.Status = status
-			m.storage.SaveStore(m.store)
+			return nil
+		})
+		if err == nil {
+			m.store = saved
 			return m.refreshList()
 		}
 	}

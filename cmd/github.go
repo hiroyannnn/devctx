@@ -49,22 +49,20 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 
 		// Handle --all flag for session name refresh
 		if syncAll {
-			updated := 0
-			for i := range store.Contexts {
-				ctx := &store.Contexts[i]
-				if needsSessionNameRefresh(*ctx) {
+			updates := map[string]linkUpdate{}
+			for _, ctx := range store.Contexts {
+				if needsSessionNameRefresh(ctx) {
 					if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
-						ctx.SessionName = sessionName
+						updates[ctx.Name] = linkUpdate{SessionName: sessionName}
 						fmt.Printf("✓ [%s] %s\n", ctx.Name, sessionName)
-						updated++
 					}
 				}
 			}
-			if updated > 0 {
-				if err := s.SaveStore(store); err != nil {
+			if len(updates) > 0 {
+				if err := applyLinkUpdates(s, updates); err != nil {
 					return err
 				}
-				fmt.Printf("\n✓ Updated %d context(s)\n", updated)
+				fmt.Printf("\n✓ Updated %d context(s)\n", len(updates))
 			} else {
 				fmt.Println("No contexts need session name updates")
 			}
@@ -89,9 +87,11 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		// Get PR for current branch
 		fmt.Printf("Syncing GitHub info for [%s] (branch: %s)...\n", name, ctx.Branch)
 
+		// gh の問い合わせ中に hook が書いた値を巻き戻さないよう、取れた値だけ最後にロック内で当てる
+		var update linkUpdate
 		pr, err := getPRForBranch(ctx.Branch, ctx.Worktree)
 		if err == nil && pr != nil {
-			ctx.PRURL = pr.URL
+			update.PRURL = pr.URL
 			fmt.Printf("✓ Found PR #%d: %s\n", pr.Number, pr.Title)
 			fmt.Printf("  %s\n", pr.URL)
 		} else {
@@ -103,7 +103,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		if issueNum != "" {
 			issue, err := getIssue(issueNum, ctx.Worktree)
 			if err == nil && issue != nil {
-				ctx.IssueURL = issue.URL
+				update.IssueURL = issue.URL
 				fmt.Printf("✓ Linked Issue #%s: %s\n", issueNum, issue.Title)
 				fmt.Printf("  %s\n", issue.URL)
 			}
@@ -112,12 +112,12 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		// Refresh session name from transcript if available
 		if needsSessionNameRefresh(*ctx) {
 			if sessionName := extractSessionName(ctx.TranscriptPath); sessionName != "" {
-				ctx.SessionName = sessionName
+				update.SessionName = sessionName
 				fmt.Printf("✓ Found session name: %s\n", sessionName)
 			}
 		}
 
-		if err := s.SaveStore(store); err != nil {
+		if err := applyLinkUpdates(s, map[string]linkUpdate{name: update}); err != nil {
 			return err
 		}
 
@@ -234,8 +234,7 @@ Uses 'gh pr create' with information from the context.`,
 		}
 
 		prURL := strings.TrimSpace(string(out))
-		ctx.PRURL = prURL
-		if err := s.SaveStore(store); err != nil {
+		if err := applyLinkUpdates(s, map[string]linkUpdate{name: {PRURL: prURL}}); err != nil {
 			return err
 		}
 

@@ -51,10 +51,6 @@ Examples:
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
-		if err != nil {
-			return err
-		}
 
 		worktree := roadmapInitWorktree
 		if worktree == "" {
@@ -73,17 +69,21 @@ Examples:
 			worktree = root
 		}
 
-		ctx, err := resolveContext(store, args, worktree)
+		var name string
+		err = s.UpdateStore(func(store *model.Store) error {
+			ctx, err := resolveContext(store, args, worktree)
+			if err != nil {
+				return err
+			}
+			ctx.InitialPrompt = roadmapInitPrompt
+			name = ctx.Name
+			return nil
+		})
 		if err != nil {
 			return err
 		}
 
-		ctx.InitialPrompt = roadmapInitPrompt
-		if err := s.SaveStore(store); err != nil {
-			return err
-		}
-
-		fmt.Printf("Set initial prompt for [%s]\n", ctx.Name)
+		fmt.Printf("Set initial prompt for [%s]\n", name)
 		fmt.Printf("  %s\n", roadmapInitPrompt)
 		return nil
 	},
@@ -477,25 +477,25 @@ phase detection for all sessions at once.`,
 			return nil
 		}
 
+		// gh を叩く scan はロックの外で行い、結果の phase だけをロック内で当てる
 		scanner := roadmap.NewScanner()
-		updated := 0
-		for i := range store.Contexts {
-			ctx := &store.Contexts[i]
-			if ctx.Status == model.StatusDone {
-				continue
-			}
-			oldPhase := ctx.Phase
-			scanner.RefreshPhase(ctx, roadmap.ScanModeFull)
-			if ctx.Phase != oldPhase {
-				updated++
-				fmt.Printf("  [%s] %s → %s\n", ctx.Name, oldPhase.Label(), ctx.Phase.Label())
-			} else {
-				fmt.Printf("  [%s] %s (unchanged)\n", ctx.Name, ctx.Phase.Label())
-			}
+		phases := make(map[string]model.Phase, len(contexts))
+		for i := range contexts {
+			phases[contexts[i].Name] = scanner.ScanContext(&contexts[i])
+		}
+		changes, err := applyPhaseResults(s, phases, time.Now())
+		if err != nil {
+			return err
 		}
 
-		if err := s.SaveStore(store); err != nil {
-			return err
+		updated := 0
+		for _, c := range changes {
+			if c.New != c.Old {
+				updated++
+				fmt.Printf("  [%s] %s → %s\n", c.Name, c.Old.Label(), c.New.Label())
+			} else {
+				fmt.Printf("  [%s] %s (unchanged)\n", c.Name, c.New.Label())
+			}
 		}
 
 		fmt.Printf("\nRefreshed %d contexts (%d changed)\n", len(contexts), updated)

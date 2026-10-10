@@ -92,15 +92,13 @@ Use --dry-run to preview what would be deleted.`,
 			}
 		}
 
-		// Remove contexts
-		removed := 0
-		for _, ctx := range toRemove {
-			if store.Remove(ctx.Name) {
-				removed++
-			}
+		// 確認待ちの間に hook が書いた他の context を巻き戻さないよう、ロック内で名前指定で消す
+		names := make([]string, len(toRemove))
+		for i, ctx := range toRemove {
+			names[i] = ctx.Name
 		}
-
-		if err := s.SaveStore(store); err != nil {
+		_, removed, err := removeContexts(s, names...)
+		if err != nil {
 			return err
 		}
 
