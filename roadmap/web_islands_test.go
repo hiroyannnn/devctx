@@ -117,7 +117,8 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 	body := dashboardSource(t)
 
 	for _, want := range []string{
-		"fetch('/api/islands/ops'",                        // 編集は専用 endpoint に JSON で送る
+		"postOp('/api/islands/ops', body)",                // 編集は専用 endpoint に JSON で送る
+		"await fetch(url, {",                              // island 編集とセッション紐付けが同じ送信経路を通る
 		"headers: { 'Content-Type': 'application/json' }", // Origin はブラウザが付ける。Content-Type だけ明示
 		"function editingActive()",                        // 編集中は refresh で再描画しない
 		"pendingData = ",                                  // 編集中に届いた更新は保留して、閉じたら反映する
@@ -168,8 +169,19 @@ func TestHandleIndex_WiresIslandEditing(t *testing.T) {
 		"タスクは親が必要です",                                                         // 親のない島のタスク付き削除は、確認ではなく理由を見せる
 		"function buildConfirmPanel(",                                        // 削除確認とコピーのフォールバックが共有する確認パネル
 		"_type: 'task'",                                                      // タスクは島と別の種別（メニュー・キー・ドラッグの分岐点）
-		"完了にする",                                                              // タスクのメニュー
-		"未完了に戻す",                                                             // タスクのメニュー
+		"/api/sessions/ops",                                                  // セッションのタスク紐付けは専用 endpoint（islands とは別の store を書く）
+		"function sessionMenuItems(",                                         // セッションの右クリックメニュー（タスクに付ける / 外す）
+		"function taskMenuItems(",                                            // 付ける先のタスク一覧（未完了が先）
+		"function taskOptions(",                                              // 候補は描画済みの islands から作る
+		"function runSessionOp(",                                             // 紐付け後は全体を取り直して描画する
+		"function linkedTaskNodeId(",                                         // タスクに紐付いたセッションの親を決める
+		"function sessionTaskLine(",                                          // 単一プロジェクト・消えたタスクのラベル行
+		"function sessionTaskName(",                                          // インスペクタの Task 欄
+		"linkedSessions.forEach(function(l) { edges.push(treeEdge(l.taskId, l.session.id)); });", // repo → session をタスク → session に置き換える
+		"_type: 'dag',",               // DAG ノードは島のタスク（_type 'task'）と別の種別
+		"openSessionMenu(node, x, y)", // セッション上の右クリック
+		"完了にする",                       // タスクのメニュー
+		"未完了に戻す",                      // タスクのメニュー
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard source does not contain %q", want)
@@ -216,7 +228,7 @@ func TestHandleIndex_WiresIslandsIntoMindMap(t *testing.T) {
 	}
 }
 
-// JS 側の marker 書式が model.TaskMarkerPrefix とずれると、次の PR のセッション紐づけが黙って外れる。
+// JS 側の marker 書式が model.TaskMarkerPrefix とずれると、セッションの紐づけが黙って外れる。
 func TestHandleIndex_TaskMarkerMatchesModel(t *testing.T) {
 	want := "var TASK_MARKER_PREFIX = '" + model.TaskMarkerPrefix + "';"
 	if !strings.Contains(dashboardSource(t), want) {

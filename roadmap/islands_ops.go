@@ -73,18 +73,26 @@ func plainError(status int, msg string) *opError {
 	return newOpError(status, map[string]any{"error": msg})
 }
 
+// decodeOpBody は ops 系 API 共通の本文デコード。サイズ上限と未知フィールド拒否をここ 1 箇所で持つ。
+// Why 未知フィールドを弾く: 黙って捨てると、UI と server のずれ（綴り違い等）に気づけない。
+func decodeOpBody(w http.ResponseWriter, r *http.Request, v any) *opError {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxOpsBodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return plainError(http.StatusRequestEntityTooLarge, "request body too large")
+		}
+		return plainError(http.StatusBadRequest, "malformed JSON body")
+	}
+	return nil
+}
+
 // decodeIslandOp は本文を islandOp にして、op の種別まで検査する。
 func decodeIslandOp(w http.ResponseWriter, r *http.Request) (islandOp, *opError) {
 	var req islandOp
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxOpsBodyBytes))
-	// 未知フィールドを黙って捨てると、UI と server のずれ（綴り違い等）に気づけない
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return req, plainError(http.StatusRequestEntityTooLarge, "request body too large")
-		}
-		return req, plainError(http.StatusBadRequest, "malformed JSON body")
+	if oe := decodeOpBody(w, r, &req); oe != nil {
+		return req, oe
 	}
 	switch req.Op {
 	case "add", "rename", "remove", "attach", "detach", "done":
@@ -133,6 +141,8 @@ func (s *Server) handleAPIIslandOps(w http.ResponseWriter, r *http.Request) {
 		writeOpError(w, plainError(http.StatusInternalServerError, "failed to update islands"))
 		return
 	}
+	// task_label を載せた /api/roadmap の応答キャッシュを捨てる（タスクの改名・削除を 5 秒待たずに見せる）
+	s.invalidateRoadmapCache()
 	resp := map[string]any{"ok": true, "islands": tree}
 	if ref != "" {
 		resp["ref"] = ref

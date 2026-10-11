@@ -203,3 +203,17 @@ func TestTracksPerSession(t *testing.T) {
 		t.Fatal("only codex is tracked per session")
 	}
 }
+
+// 再 register（新しいセッション）でタスクへの紐付けを消さない。新セッションの最初の marker までは前のリンクを見せ続ける。
+func TestUpsertRegistration_KeepsTaskLink(t *testing.T) {
+	store := &model.Store{Contexts: []model.Context{
+		{Name: "feat-x", Worktree: "/w/feat-x", SessionID: "c1", TaskRef: "island:t4", TaskLinkSession: "c1", TaskLinkSource: "marker", TaskLinkAt: registerNow},
+	}}
+	ctx, created := upsertRegistration(store, registration{Name: "feat-x", Worktree: "/w/feat-x", Provider: model.ProviderClaude, SessionID: "c2"}, registerNow.Add(time.Hour))
+	if created || ctx.SessionID != "c2" {
+		t.Fatalf("created=%v ctx=%+v", created, ctx)
+	}
+	if ctx.TaskRef != "island:t4" || ctx.TaskLinkSession != "c1" || ctx.TaskLinkSource != "marker" {
+		t.Fatalf("link must survive re-register: %+v", ctx)
+	}
+}

@@ -1,5 +1,23 @@
 // /api/roadmap-map・/api/roadmap-graph から vis 用の nodes / edges を組み立てる。
 
+// All Projects の 1 repo あたりの表示数を絞る。タスクに付いたセッションは枠に数えず常に残し、
+// 未リンクだけ先頭 maxSessions 件にする。
+// Why: 切り詰めは islandOverlay がセッションをタスクの下へ付け替える前に走るので、リンク済みが枠の外だと
+// 付け替え先のタスクの下から消えてしまう。hiddenCount（「+N more」）は隠した未リンクだけを数える。
+function limitSessions(sessions, maxSessions, islandsData) {
+  var visible = [];
+  var unlinkedShown = 0;
+  sessions.forEach(function(s) {
+    if (linkedTaskNodeId(s, islandsData)) {
+      visible.push(s);
+    } else if (unlinkedShown < maxSessions) {
+      visible.push(s);
+      unlinkedShown++;
+    }
+  });
+  return { visible: visible, hiddenCount: sessions.length - visible.length };
+}
+
 function buildMindMapData(groups) {
   var nodes = [];
   var edges = [];
@@ -58,12 +76,15 @@ function buildMindMapData(groups) {
 
     // In All Projects, limit sessions per project to keep the graph readable
     var maxSessions = isAllProjects ? 5 : Infinity;
-    var visibleSessions = group.sessions.slice(0, maxSessions);
-    var truncated = group.sessions.length > maxSessions;
+    var limited = limitSessions(group.sessions, maxSessions, cachedIslands);
+    var visibleSessions = limited.visible;
+    var truncated = limited.hiddenCount > 0;
 
     visibleSessions.forEach(function(session) {
       var sessionId = 'session:' + session.name;
       var label = session.name + '\n' + agentLine(session);
+      var taskLine = sessionTaskLine(session, isAllProjects, cachedIslands);
+      if (taskLine) label += '\n' + taskLine;
       if (session.current_focus) {
         var f = session.current_focus;
         if (f.length > 30) f = f.substring(0, 28) + '..';
@@ -97,7 +118,7 @@ function buildMindMapData(groups) {
 
     if (truncated && sessionParent) {
       var moreId = 'more:' + projectId;
-      var remaining = group.sessions.length - maxSessions;
+      var remaining = limited.hiddenCount;
       nodes.push({
         id: moreId,
         label: '+' + remaining + ' more...',
@@ -201,9 +222,9 @@ function buildSemanticGraph(graphData) {
     if (filteredSessions.length === 0) return;
 
     // "+N more" は表示切り詰めの前に、フィルタ後の件数で数える
-    var filteredCount = filteredSessions.length;
-    var truncated = filteredCount > maxSessions;
-    filteredSessions = filteredSessions.slice(0, maxSessions);
+    var limited = limitSessions(filteredSessions, maxSessions, cachedIslands);
+    var truncated = limited.hiddenCount > 0;
+    filteredSessions = limited.visible;
 
     // All Projects では常に repo ノードを置く（island の親子が繋がるのは repo ノード経由）
     var showProjectNode = isAllProjects || graphData.length > 1 || filteredSessions.length > 1;
@@ -220,6 +241,8 @@ function buildSemanticGraph(graphData) {
       // Session header node — Goal is integrated as subtitle, not a separate node
       var sessionNodeId = 'session:' + session.name;
       var sessionLabel = session.name + '\n' + agentLine(session);
+      var taskLine = sessionTaskLine(session, isAllProjects, cachedIslands);
+      if (taskLine) sessionLabel += '\n' + taskLine;
       if (session.goal) {
         var goalText = session.goal;
         if (goalText.length > 30) goalText = goalText.substring(0, 28) + '..';
@@ -296,7 +319,8 @@ function buildSemanticGraph(graphData) {
           borderDashes: (gn.type === 'rejected' || gn.status === 'rejected') ? [4, 4] : false,
           shadow: shadow,
           level: level,
-          _type: gn.type,
+          // Why 'dag': gn.type は 'task' になりうる。島のタスク（_type 'task'）と同じだと overlay が DAG ノードを島の木として扱う。種別は _data.type に残る
+          _type: 'dag',
           _data: gn
         });
       });
@@ -350,7 +374,7 @@ function buildSemanticGraph(graphData) {
 
     if (truncated && projectNodeId) {
       var moreId = 'more:' + projectNodeId;
-      var remaining = filteredCount - maxSessions;
+      var remaining = limited.hiddenCount;
       nodes.push({
         id: moreId,
         label: '+' + remaining + ' more...',
@@ -369,4 +393,4 @@ function buildSemanticGraph(graphData) {
 }
 
 // Node の単体テスト用。ブラウザでは module が無いので何も起きない。
-if (typeof module !== 'undefined') module.exports = { computeNodeDepth, connectOrphanNodes };
+if (typeof module !== 'undefined') module.exports = { limitSessions, computeNodeDepth, connectOrphanNodes };

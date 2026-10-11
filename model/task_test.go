@@ -386,3 +386,16 @@ func TestValidateReportsUnknownKindAndDoneOnNonTask(t *testing.T) {
 		t.Errorf("Validate = %v", err)
 	}
 }
+
+func TestHasTask(t *testing.T) {
+	s := newTree()
+	if _, err := s.AddTask("x", "island:hiring"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasTask("t1") {
+		t.Error("t1 is a task")
+	}
+	if s.HasTask("hiring") || s.HasTask("t9") {
+		t.Error("theme island / missing id are not tasks")
+	}
+}
