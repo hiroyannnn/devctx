@@ -83,6 +83,12 @@ func (s *Scanner) ScanContext(ctx *model.Context) model.Phase {
 	return s.scanWithMode(ctx, ScanModeFull)
 }
 
+// Scan は ctx を書き換えずに phase だけを返す。idle を既知の phase より優先しない規則
+// （RefreshPhase）は、保存側がロック内の最新 context に対して当てる。
+func (s *Scanner) Scan(ctx *model.Context, mode ScanMode) model.Phase {
+	return s.scanWithMode(ctx, mode)
+}
+
 func (s *Scanner) scanWithMode(ctx *model.Context, mode ScanMode) model.Phase {
 	if ctx.Worktree == "" || ctx.Branch == "" {
 		return model.PhaseIdle

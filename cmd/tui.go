@@ -233,9 +233,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Delete):
 			if item, ok := m.list.SelectedItem().(contextItem); ok {
-				if saved, _, err := removeContexts(m.storage, item.ctx.Name); err == nil {
-					m.store = saved
+				saved, _, err := removeContexts(m.storage, item.ctx.Name)
+				if err != nil {
+					return m.reloadWithError(err)
 				}
+				m.store = saved
 				return m.refreshList()
 			}
 		}
@@ -254,12 +256,23 @@ func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 			ctx.Status = status
 			return nil
 		})
-		if err == nil {
-			m.store = saved
-			return m.refreshList()
+		if err != nil {
+			return m.reloadWithError(err)
 		}
+		m.store = saved
+		return m.refreshList()
 	}
 	return m, nil
+}
+
+// reloadWithError は保存に失敗したとき、ディスクの store を読み直して画面に出し、理由を表示する。
+// tick は store を読み直さないので、ここで読み直さないと別プロセスが消した項目が残り続ける。
+func (m tuiModel) reloadWithError(err error) (tuiModel, tea.Cmd) {
+	if store, loadErr := m.storage.LoadStore(); loadErr == nil {
+		m.store = store
+	}
+	m, _ = m.refreshList()
+	return m, m.list.NewStatusMessage("❌ " + err.Error())
 }
 
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {

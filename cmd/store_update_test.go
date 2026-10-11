@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -167,7 +168,7 @@ func TestApplyPhaseResultsKeepsConcurrentAgentState(t *testing.T) {
 
 	// gh scan の最中に hook が書く
 	concurrentAgentState(t, s, "a", model.AgentNeedsInput)
-	changes, err := applyPhaseResults(s, map[string]model.Phase{"a": model.PhasePROpen, "gone": model.PhaseDone}, time.Now())
+	changes, err := applyPhaseResults(s, map[string]phaseScan{"a": {Phase: model.PhasePROpen}, "gone": {Phase: model.PhaseDone}}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +195,7 @@ func TestApplyPhaseResultsKeepsKnownPhaseWhenScanIsIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := applyPhaseResults(s, map[string]model.Phase{"a": model.PhaseIdle}, time.Now()); err != nil {
+	if _, err := applyPhaseResults(s, map[string]phaseScan{"a": {Phase: model.PhaseIdle}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if c := loadContext(t, s, "a"); c.Phase != model.PhasePushed {
@@ -268,5 +269,133 @@ func TestUpdateContextReturnsNotFound(t *testing.T) {
 	_, err := updateContext(s, "gone", func(*model.Context) error { return nil })
 	if err == nil {
 		t.Fatal("存在しない context で error にならない")
+	}
+}
+
+// reregister は scan / gh 問い合わせの最中に register が同名 context を別 branch・別セッションで登録し直す状況を再現する。
+func reregister(t *testing.T, s *storage.Storage, name string) {
+	t.Helper()
+	err := s.UpdateStore(func(store *model.Store) error {
+		c := store.FindByName(name)
+		c.Branch, c.SessionID, c.TranscriptPath = "feat/new", "s-new", "/tmp/new.jsonl"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyPhaseResultsSkipsWhenBranchChangedDuringScan(t *testing.T) {
+	s := newConcurrencyStorage(t)
+
+	reregister(t, s, "a")
+	if _, err := applyPhaseResults(s, map[string]phaseScan{"a": {Phase: model.PhaseDone, Branch: "feat/old"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if c := loadContext(t, s, "a"); c.Phase != "" {
+		t.Errorf("旧 branch の scan 結果が新しい context に当たった: %s", c.Phase)
+	}
+}
+
+func TestRefreshPhaseOutsideLockKeepsConcurrentPhaseWhenScanIsIdle(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	stale := *loadContext(t, s, "a")
+	stale.Phase = model.PhaseCommitted
+
+	// hook が読んだ後に roadmap refresh が新しい phase を書く
+	err := s.UpdateStore(func(store *model.Store) error {
+		store.FindByName("a").Phase = model.PhasePushed
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Worktree が空なので scan は git を起動せず idle を返す
+	if err := refreshPhaseOutsideLock(s, stale); err != nil {
+		t.Fatal(err)
+	}
+	if c := loadContext(t, s, "a"); c.Phase != model.PhasePushed {
+		t.Errorf("古いコピーの phase で巻き戻った: %s", c.Phase)
+	}
+}
+
+func TestApplyLinkUpdatesSkipsValuesFromReplacedSource(t *testing.T) {
+	s := newConcurrencyStorage(t)
+
+	reregister(t, s, "a")
+	err := applyLinkUpdates(s, map[string]linkUpdate{
+		"a": {Branch: "feat/old", PRURL: "https://github.com/o/r/pull/1", TranscriptPath: "/tmp/old.jsonl", SessionName: "old-slug"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := loadContext(t, s, "a"); c.PRURL != "" || c.SessionName != "" {
+		t.Errorf("再登録前の取得結果が新しい context に当たった: %+v", c)
+	}
+}
+
+func TestApplyLinkUpdatesDoesNotOverwriteFilledSessionName(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	err := s.UpdateStore(func(store *model.Store) error {
+		store.FindByName("a").SessionName = "latest"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyLinkUpdates(s, map[string]linkUpdate{"a": {SessionName: "stale"}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := loadContext(t, s, "a"); c.SessionName != "latest" {
+		t.Errorf("補完済みの session name を上書きした: %s", c.SessionName)
+	}
+}
+
+// removeConcurrently は画面が読んだ後に別プロセスが context を消す状況を再現する。
+func removeConcurrently(t *testing.T, s *storage.Storage, name string) {
+	t.Helper()
+	if _, _, err := removeContexts(s, name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTuiMoveOfConcurrentlyRemovedContextReloadsAndReports(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	stubSnapshot(t, agentview.Snapshot{})
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTuiModel(store, s)
+	name := m.list.SelectedItem().(contextItem).ctx.Name
+
+	removeConcurrently(t, s, name)
+	next, cmd := m.moveSelected(model.StatusReview)
+
+	tm := next.(tuiModel)
+	if tm.store.FindByName(name) != nil || len(tm.list.Items()) != 1 {
+		t.Errorf("消えた [%s] が画面に残っている", name)
+	}
+	if cmd == nil {
+		t.Error("失敗のステータスメッセージが出ていない")
+	}
+}
+
+func TestKanbanMoveOfConcurrentlyRemovedContextReloadsAndReports(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	stubSnapshot(t, agentview.Snapshot{})
+	m := newKanbanModel(s)
+	name := m.selectedContext().Name
+
+	removeConcurrently(t, s, name)
+	next, _ := m.moveSelectedTo(model.StatusBlocked, "moved")
+
+	km := next.(*kanbanModel)
+	if km.store.FindByName(name) != nil || len(km.contexts) != 1 {
+		t.Errorf("消えた [%s] が画面に残っている", name)
+	}
+	if !strings.HasPrefix(km.message, "❌") {
+		t.Errorf("失敗が表示されていない: %q", km.message)
 	}
 }

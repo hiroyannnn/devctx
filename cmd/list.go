@@ -612,7 +612,9 @@ func (m kanbanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ctx := m.selectedContext()
 			if ctx != nil {
 				name := ctx.Name
-				if saved, _, err := removeContexts(m.storage, name); err == nil {
+				if saved, _, err := removeContexts(m.storage, name); err != nil {
+					m.reloadWithError(err)
+				} else {
 					m.applyStore(saved)
 					m.message = "🗑 Removed: " + name
 				}
@@ -637,11 +639,21 @@ func (m *kanbanModel) moveSelectedTo(status model.Status, msg string) (tea.Model
 		c.LastSeen = time.Now() // Update LastSeen when status changes
 		return nil
 	})
-	if err == nil {
-		m.applyStore(saved)
-		m.message = msg
+	if err != nil {
+		m.reloadWithError(err)
+		return m, nil
 	}
+	m.applyStore(saved)
+	m.message = msg
 	return m, nil
+}
+
+// reloadWithError は保存に失敗したとき、次の tick を待たずにディスクの store を読み直し、理由を表示する。
+func (m *kanbanModel) reloadWithError(err error) {
+	if store, loadErr := m.storage.LoadStore(); loadErr == nil {
+		m.applyStore(store)
+	}
+	m.message = "❌ " + err.Error()
 }
 
 // applyStore は保存後の store を表示に取り込み、cursor を範囲内に収める。

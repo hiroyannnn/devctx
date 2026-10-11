@@ -63,15 +63,26 @@ type phaseChange struct {
 // applyPhaseResults はロックの外で取った scan 結果（name → phase）をロック内で当てる。
 // gh を叩く scan は数十秒かかりうるので、ロックを握ったまま scan はしない。
 // 結果は store の並び順で返す（refresh の表示順を変えないため）。
-func applyPhaseResults(s *storage.Storage, phases map[string]model.Phase, checkedAt time.Time) ([]phaseChange, error) {
+// phaseScan はロック外で取った scan 結果と、そのとき見た取得元。
+// scan 中に register が同名 context を別 worktree / branch で登録し直したら、結果は当てない。
+type phaseScan struct {
+	Phase            model.Phase
+	Worktree, Branch string
+}
+
+func applyPhaseResults(s *storage.Storage, phases map[string]phaseScan, checkedAt time.Time) ([]phaseChange, error) {
 	var changes []phaseChange
 	err := s.UpdateStore(func(store *model.Store) error {
 		for i := range store.Contexts {
 			ctx := &store.Contexts[i]
-			phase, ok := phases[ctx.Name]
+			scan, ok := phases[ctx.Name]
 			if !ok {
 				continue
 			}
+			if ctx.Worktree != scan.Worktree || ctx.Branch != scan.Branch {
+				continue
+			}
+			phase := scan.Phase
 			old := ctx.Phase
 			// Scanner.RefreshPhase と同じ規則: idle は「判定できなかった」とみなし、既知の phase を消さない
 			if phase != model.PhaseIdle || ctx.Phase == "" {
@@ -104,9 +115,12 @@ func applyMove(s *storage.Storage, name string, target model.Status, checklist m
 	return err
 }
 
-// linkUpdate は GitHub / transcript から取った値。空のフィールドは触らない。
+// linkUpdate は GitHub / transcript から取った値と、そのとき見た取得元。空のフィールドは触らない。
+// PR / Issue は Branch、SessionName は TranscriptPath が最新の context と一致するときだけ当てる
+// （問い合わせ中に register が別セッションで登録し直した場合に、古い値を混ぜないため）。
 type linkUpdate struct {
 	PRURL, IssueURL, SessionName string
+	Branch, TranscriptPath       string
 }
 
 // applyLinkUpdates は gh の問い合わせ後に、取れた値だけをロック内で当てる。
@@ -116,19 +130,24 @@ func applyLinkUpdates(s *storage.Storage, updates map[string]linkUpdate) error {
 		changed := false
 		for name, u := range updates {
 			ctx := store.FindByName(name)
-			if ctx == nil || u == (linkUpdate{}) {
+			if ctx == nil {
 				continue
 			}
-			if u.PRURL != "" {
-				ctx.PRURL = u.PRURL
+			if ctx.Branch == u.Branch {
+				if u.PRURL != "" {
+					ctx.PRURL = u.PRURL
+					changed = true
+				}
+				if u.IssueURL != "" {
+					ctx.IssueURL = u.IssueURL
+					changed = true
+				}
 			}
-			if u.IssueURL != "" {
-				ctx.IssueURL = u.IssueURL
-			}
-			if u.SessionName != "" {
+			// 補完済みなら上書きしない（needsSessionNameRefresh と同じく空のときだけ埋める）
+			if u.SessionName != "" && ctx.SessionName == "" && ctx.TranscriptPath == u.TranscriptPath {
 				ctx.SessionName = u.SessionName
+				changed = true
 			}
-			changed = true
 		}
 		if !changed {
 			return storage.ErrSkipSave

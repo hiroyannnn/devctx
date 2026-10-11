@@ -479,9 +479,10 @@ phase detection for all sessions at once.`,
 
 		// gh を叩く scan はロックの外で行い、結果の phase だけをロック内で当てる
 		scanner := roadmap.NewScanner()
-		phases := make(map[string]model.Phase, len(contexts))
+		phases := make(map[string]phaseScan, len(contexts))
 		for i := range contexts {
-			phases[contexts[i].Name] = scanner.ScanContext(&contexts[i])
+			c := &contexts[i]
+			phases[c.Name] = phaseScan{Phase: scanner.ScanContext(c), Worktree: c.Worktree, Branch: c.Branch}
 		}
 		changes, err := applyPhaseResults(s, phases, time.Now())
 		if err != nil {
