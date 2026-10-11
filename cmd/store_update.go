@@ -116,11 +116,11 @@ func applyMove(s *storage.Storage, name string, target model.Status, checklist m
 }
 
 // linkUpdate は GitHub / transcript から取った値と、そのとき見た取得元。空のフィールドは触らない。
-// PR / Issue は Branch、SessionName は TranscriptPath が最新の context と一致するときだけ当てる
+// PR / Issue は Worktree と Branch（branch 名は main など repo をまたいで重なる）、SessionName は TranscriptPath が最新の context と一致するときだけ当てる
 // （問い合わせ中に register が別セッションで登録し直した場合に、古い値を混ぜないため）。
 type linkUpdate struct {
-	PRURL, IssueURL, SessionName string
-	Branch, TranscriptPath       string
+	PRURL, IssueURL, SessionName     string
+	Worktree, Branch, TranscriptPath string
 }
 
 // applyLinkUpdates は gh の問い合わせ後に、取れた値だけをロック内で当てる。
@@ -133,7 +133,7 @@ func applyLinkUpdates(s *storage.Storage, updates map[string]linkUpdate) error {
 			if ctx == nil {
 				continue
 			}
-			if ctx.Branch == u.Branch {
+			if ctx.Worktree == u.Worktree && ctx.Branch == u.Branch {
 				if u.PRURL != "" {
 					ctx.PRURL = u.PRURL
 					changed = true

@@ -199,8 +199,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiTickMsg:
-		m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
-		return m, tuiTickCmd()
+		m, cmd := m.refreshList()
+		return m, tea.Batch(cmd, tuiTickCmd())
 
 	case tea.KeyMsg:
 		// Don't handle keys if filtering
@@ -271,13 +271,15 @@ func (m tuiModel) reloadWithError(err error) (tuiModel, tea.Cmd) {
 	if store, loadErr := m.storage.LoadStore(); loadErr == nil {
 		m.store = store
 	}
-	m, _ = m.refreshList()
-	return m, m.list.NewStatusMessage("❌ " + err.Error())
+	m, cmd := m.refreshList()
+	return m, tea.Batch(cmd, m.list.NewStatusMessage("❌ "+err.Error()))
 }
 
+// refreshList は SetItems の Cmd を返す。フィルタ中の SetItems は絞り込み結果を消して
+// 再計算を Cmd で返すので、捨てるとフィルタ中の一覧が空になる。
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {
-	m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
-	return m, nil
+	cmd := m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
+	return m, cmd
 }
 
 func (m tuiModel) View() string {

@@ -88,7 +88,7 @@ Use --all to refresh session names for all contexts from their transcripts.`,
 		fmt.Printf("Syncing GitHub info for [%s] (branch: %s)...\n", name, ctx.Branch)
 
 		// gh の問い合わせ中に hook が書いた値を巻き戻さないよう、取れた値だけ最後にロック内で当てる
-		update := linkUpdate{Branch: ctx.Branch, TranscriptPath: ctx.TranscriptPath}
+		update := linkUpdate{Worktree: ctx.Worktree, Branch: ctx.Branch, TranscriptPath: ctx.TranscriptPath}
 		pr, err := getPRForBranch(ctx.Branch, ctx.Worktree)
 		if err == nil && pr != nil {
 			update.PRURL = pr.URL
@@ -234,7 +234,7 @@ Uses 'gh pr create' with information from the context.`,
 		}
 
 		prURL := strings.TrimSpace(string(out))
-		if err := applyLinkUpdates(s, map[string]linkUpdate{name: {PRURL: prURL, Branch: ctx.Branch}}); err != nil {
+		if err := applyLinkUpdates(s, map[string]linkUpdate{name: {PRURL: prURL, Worktree: ctx.Worktree, Branch: ctx.Branch}}); err != nil {
 			return err
 		}
 

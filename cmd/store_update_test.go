@@ -399,3 +399,71 @@ func TestKanbanMoveOfConcurrentlyRemovedContextReloadsAndReports(t *testing.T) {
 		t.Errorf("失敗が表示されていない: %q", km.message)
 	}
 }
+
+func TestApplyLinkUpdatesSkipsWhenWorktreeChangedWithSameBranch(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	err := s.UpdateStore(func(store *model.Store) error {
+		c := store.FindByName("a")
+		c.Worktree, c.Branch = "/repo-new", "main"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = applyLinkUpdates(s, map[string]linkUpdate{
+		"a": {Worktree: "/repo-old", Branch: "main", PRURL: "https://github.com/o/old/pull/1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := loadContext(t, s, "a"); c.PRURL != "" {
+		t.Errorf("別 worktree で取った PR URL が当たった: %s", c.PRURL)
+	}
+}
+
+// drain は cmd を実行し、返ったメッセージ（Batch は展開）を model に流し込む。
+func drain(t *testing.T, m tuiModel, cmd tea.Cmd) tuiModel {
+	t.Helper()
+	queue := []tea.Cmd{cmd}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
+		}
+		switch msg := c().(type) {
+		case tea.BatchMsg:
+			queue = append(queue, msg...)
+		case tuiTickMsg, nil:
+		default:
+			next, _ := m.Update(msg)
+			m = next.(tuiModel)
+		}
+	}
+	return m
+}
+
+func TestTuiKeepsFilteredItemsAfterMove(t *testing.T) {
+	s := newConcurrencyStorage(t)
+	stubSnapshot(t, agentview.Snapshot{})
+	store, err := s.LoadStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTuiModel(store, s)
+	// "/" → "a" → enter でフィルタを確定する
+	for _, k := range []tea.KeyMsg{keyRunes("/"), keyRunes("a"), {Type: tea.KeyEnter}} {
+		next, cmd := m.Update(k)
+		m = drain(t, next.(tuiModel), cmd)
+	}
+	if len(m.list.VisibleItems()) == 0 {
+		t.Fatal("前提: フィルタ後に項目が見えていない")
+	}
+
+	next, cmd := m.moveSelected(model.StatusReview)
+	m = drain(t, next.(tuiModel), cmd)
+	if len(m.list.VisibleItems()) == 0 {
+		t.Error("移動後にフィルタ中の一覧が空になった")
+	}
+}
