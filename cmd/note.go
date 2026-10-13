@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -38,8 +39,7 @@ Examples:
 		clearNote, _ := cmd.Flags().GetBool("clear")
 
 		if clearNote {
-			ctx.Note = ""
-			if err := s.SaveStore(store); err != nil {
+			if err := setNote(s, name, ""); err != nil {
 				return err
 			}
 			fmt.Printf("✓ Cleared note for [%s]\n", name)
@@ -58,13 +58,20 @@ Examples:
 
 		// Set note
 		note := strings.Join(args[1:], " ")
-		ctx.Note = note
-		if err := s.SaveStore(store); err != nil {
+		if err := setNote(s, name, note); err != nil {
 			return err
 		}
 		fmt.Printf("✓ Note set for [%s]: %s\n", name, note)
 		return nil
 	},
+}
+
+func setNote(s *storage.Storage, name, note string) error {
+	_, err := updateContext(s, name, func(ctx *model.Context) error {
+		ctx.Note = note
+		return nil
+	})
+	return err
 }
 
 func init() {

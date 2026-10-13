@@ -19,25 +19,22 @@ var archiveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
+
+		alreadyDone := false
+		_, err = updateContext(s, name, func(ctx *model.Context) error {
+			if ctx.Status == model.StatusDone {
+				alreadyDone = true
+				return storage.ErrSkipSave
+			}
+			ctx.Status = model.StatusDone
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-
-		ctx := store.FindByName(name)
-		if ctx == nil {
-			return fmt.Errorf("context [%s] not found", name)
-		}
-
-		if ctx.Status == model.StatusDone {
+		if alreadyDone {
 			fmt.Printf("Context [%s] is already archived\n", name)
 			return nil
-		}
-
-		ctx.Status = model.StatusDone
-
-		if err := s.SaveStore(store); err != nil {
-			return err
 		}
 
 		fmt.Printf("✓ Archived [%s]\n", name)
@@ -57,17 +54,12 @@ var removeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		store, err := s.LoadStore()
+		_, removed, err := removeContexts(s, name)
 		if err != nil {
 			return err
 		}
-
-		if !store.Remove(name) {
+		if removed == 0 {
 			return fmt.Errorf("context [%s] not found", name)
-		}
-
-		if err := s.SaveStore(store); err != nil {
-			return err
 		}
 
 		fmt.Printf("✓ Removed [%s]\n", name)

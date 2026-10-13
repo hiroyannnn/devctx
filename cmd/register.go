@@ -280,16 +280,16 @@ func detectRepoRoot(dir string) string {
 // refreshPhaseOutsideLock は git を使う phase 判定を contexts.yaml のロック外で行い、
 // 結果の Phase / PhaseCheckedAt だけを短いロックで書き戻す。
 // Why not UpdateStore の中で判定する: git の起動（最大数回）の間、高頻度の hook（touch）が待たされる。
+// 「idle なら既知の phase を残す」判定はロック内の最新 context に当てる。手元のコピーで判定すると、
+// 読んだ後に roadmap refresh が書いた phase を古い値で巻き戻すため。
 func refreshPhaseOutsideLock(s *storage.Storage, ctx model.Context) error {
-	roadmap.NewScanner().RefreshPhase(&ctx, roadmap.ScanModeFast)
-	return s.UpdateStore(func(store *model.Store) error {
-		stored := store.FindByName(ctx.Name)
-		if stored == nil {
-			return storage.ErrSkipSave
-		}
-		stored.Phase, stored.PhaseCheckedAt = ctx.Phase, ctx.PhaseCheckedAt
-		return nil
-	})
+	scan := phaseScan{
+		Phase:    roadmap.NewScanner().Scan(&ctx, roadmap.ScanModeFast),
+		Worktree: ctx.Worktree,
+		Branch:   ctx.Branch,
+	}
+	_, err := applyPhaseResults(s, map[string]phaseScan{ctx.Name: scan}, time.Now())
+	return err
 }
 
 func collectAndSaveMilestones(s *storage.Storage, ctx *model.Context) {

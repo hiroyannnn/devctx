@@ -199,8 +199,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tuiTickMsg:
-		m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
-		return m, tuiTickCmd()
+		m, cmd := m.refreshList()
+		return m, tea.Batch(cmd, tuiTickCmd())
 
 	case tea.KeyMsg:
 		// Don't handle keys if filtering
@@ -233,8 +233,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Delete):
 			if item, ok := m.list.SelectedItem().(contextItem); ok {
-				m.store.Remove(item.ctx.Name)
-				m.storage.SaveStore(m.store)
+				saved, _, err := removeContexts(m.storage, item.ctx.Name)
+				if err != nil {
+					return m.reloadWithError(err)
+				}
+				m.store = saved
 				return m.refreshList()
 			}
 		}
@@ -247,19 +250,36 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) moveSelected(status model.Status) (tea.Model, tea.Cmd) {
 	if item, ok := m.list.SelectedItem().(contextItem); ok {
-		ctx := m.store.FindByName(item.ctx.Name)
-		if ctx != nil {
+		// 起動時に読んだ m.store を丸ごと保存すると、その後に hook やダッシュボードが
+		// 書いた agent_state / タスク紐付けを巻き戻すので、ロック内で status だけ変える
+		saved, err := updateContext(m.storage, item.ctx.Name, func(ctx *model.Context) error {
 			ctx.Status = status
-			m.storage.SaveStore(m.store)
-			return m.refreshList()
+			return nil
+		})
+		if err != nil {
+			return m.reloadWithError(err)
 		}
+		m.store = saved
+		return m.refreshList()
 	}
 	return m, nil
 }
 
+// reloadWithError は保存に失敗したとき、ディスクの store を読み直して画面に出し、理由を表示する。
+// tick は store を読み直さないので、ここで読み直さないと別プロセスが消した項目が残り続ける。
+func (m tuiModel) reloadWithError(err error) (tuiModel, tea.Cmd) {
+	if store, loadErr := m.storage.LoadStore(); loadErr == nil {
+		m.store = store
+	}
+	m, cmd := m.refreshList()
+	return m, tea.Batch(cmd, m.list.NewStatusMessage("❌ "+err.Error()))
+}
+
+// refreshList は SetItems の Cmd を返す。フィルタ中の SetItems は絞り込み結果を消して
+// 再計算を Cmd で返すので、捨てるとフィルタ中の一覧が空になる。
 func (m tuiModel) refreshList() (tuiModel, tea.Cmd) {
-	m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
-	return m, nil
+	cmd := m.list.SetItems(buildItems(m.store, m.live.views(m.store.Contexts)))
+	return m, cmd
 }
 
 func (m tuiModel) View() string {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hiroyannnn/devctx/model"
 	"github.com/hiroyannnn/devctx/storage"
 	"github.com/spf13/cobra"
 )
@@ -38,9 +39,12 @@ Examples:
 		clearLinks, _ := cmd.Flags().GetBool("clear")
 
 		if clearLinks {
-			ctx.IssueURL = ""
-			ctx.PRURL = ""
-			if err := s.SaveStore(store); err != nil {
+			_, err := updateContext(s, name, func(ctx *model.Context) error {
+				ctx.IssueURL = ""
+				ctx.PRURL = ""
+				return nil
+			})
+			if err != nil {
 				return err
 			}
 			fmt.Printf("✓ Cleared links for [%s]\n", name)
@@ -65,21 +69,26 @@ Examples:
 		url := args[1]
 
 		// Detect if it's an issue or PR
-		if strings.Contains(url, "/pull/") || strings.Contains(url, "/pulls/") {
-			ctx.PRURL = url
-			fmt.Printf("✓ Linked PR to [%s]: %s\n", name, url)
+		isPR := strings.Contains(url, "/pull/") || strings.Contains(url, "/pulls/")
+		label := "Linked" // Default to issue
+		if isPR {
+			label = "Linked PR"
 		} else if strings.Contains(url, "/issues/") || strings.Contains(url, "/issue/") {
-			ctx.IssueURL = url
-			fmt.Printf("✓ Linked Issue to [%s]: %s\n", name, url)
-		} else {
-			// Default to issue
-			ctx.IssueURL = url
-			fmt.Printf("✓ Linked to [%s]: %s\n", name, url)
+			label = "Linked Issue"
 		}
 
-		if err := s.SaveStore(store); err != nil {
+		_, err = updateContext(s, name, func(ctx *model.Context) error {
+			if isPR {
+				ctx.PRURL = url
+			} else {
+				ctx.IssueURL = url
+			}
+			return nil
+		})
+		if err != nil {
 			return err
 		}
+		fmt.Printf("✓ %s to [%s]: %s\n", label, name, url)
 
 		return nil
 	},

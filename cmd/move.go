@@ -55,6 +55,8 @@ If the target status has a checklist, you'll be prompted to confirm each item.`,
 
 		// Get target status config for checklist
 		targetStatusConfig := findStatusConfig(config, targetStatus)
+		// 対話の回答は読んだ store に書かず手元に貯め、保存時にロック内で当てる
+		answers := map[string]bool{}
 		if targetStatusConfig != nil && len(targetStatusConfig.Checklist) > 0 && !skipChecklist {
 			fmt.Printf("Moving [%s] to %s\n", name, targetStatus)
 			fmt.Println("Please confirm checklist items:")
@@ -69,7 +71,7 @@ If the target status has a checklist, you'll be prompted to confirm each item.`,
 				}
 
 				response := promptYesNo(fmt.Sprintf("  %s executed?", item))
-				ctx.Checklist[item] = response
+				answers[item] = response
 				if !response {
 					pendingItems++
 				}
@@ -86,10 +88,7 @@ If the target status has a checklist, you'll be prompted to confirm each item.`,
 
 		// Update status
 		oldStatus := ctx.Status
-		ctx.Status = targetStatus
-		ctx.LastSeen = time.Now()
-
-		if err := s.SaveStore(store); err != nil {
+		if err := applyMove(s, name, targetStatus, answers, time.Now()); err != nil {
 			return err
 		}
 
